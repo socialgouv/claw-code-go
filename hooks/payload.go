@@ -13,10 +13,11 @@ func BuildPayload(event HookEvent, toolName, toolInput string, toolOutput *strin
 		"tool_input_json": toolInput,
 	}
 
-	// Parse tool_input as JSON; use null if invalid.
+	// Parse tool_input as JSON; fall back to {"raw": toolInput} if invalid,
+	// matching Rust parse_tool_input() behavior.
 	var parsed interface{}
 	if err := json.Unmarshal([]byte(toolInput), &parsed); err != nil {
-		payload["tool_input"] = nil
+		payload["tool_input"] = map[string]interface{}{"raw": toolInput}
 	} else {
 		payload["tool_input"] = parsed
 	}

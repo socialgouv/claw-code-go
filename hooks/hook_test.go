@@ -82,8 +82,13 @@ func TestBuildPayloadInvalidJSON(t *testing.T) {
 	if err := json.Unmarshal(payload, &m); err != nil {
 		t.Fatal(err)
 	}
-	if m["tool_input"] != nil {
-		t.Errorf("expected nil for invalid JSON tool_input, got %v", m["tool_input"])
+	// Rust falls back to {"raw": toolInput} for invalid JSON, not null.
+	ti, ok := m["tool_input"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map for invalid JSON tool_input fallback, got %T: %v", m["tool_input"], m["tool_input"])
+	}
+	if ti["raw"] != "not json" {
+		t.Errorf("expected raw fallback with original string, got %v", ti["raw"])
 	}
 	if m["tool_input_json"] != "not json" {
 		t.Errorf("expected raw string, got %v", m["tool_input_json"])

@@ -39,21 +39,21 @@ func MetadataForModel(model string) *ProviderMetadata {
 			Provider:       ProviderXai,
 			AuthEnvVar:     "XAI_API_KEY",
 			BaseURLEnvVar:  "XAI_BASE_URL",
-			DefaultBaseURL: "https://api.x.ai",
+			DefaultBaseURL: "https://api.x.ai/v1",
 		}
 	case strings.HasPrefix(lower, "openai/") || strings.HasPrefix(lower, "gpt-"):
 		return &ProviderMetadata{
 			Provider:       ProviderOpenAI,
 			AuthEnvVar:     "OPENAI_API_KEY",
 			BaseURLEnvVar:  "OPENAI_BASE_URL",
-			DefaultBaseURL: "https://api.openai.com",
+			DefaultBaseURL: "https://api.openai.com/v1",
 		}
 	case strings.HasPrefix(lower, "qwen/") || strings.HasPrefix(lower, "qwen-"):
 		return &ProviderMetadata{
 			Provider:       ProviderOpenAI,
 			AuthEnvVar:     "DASHSCOPE_API_KEY",
 			BaseURLEnvVar:  "DASHSCOPE_BASE_URL",
-			DefaultBaseURL: "https://dashscope.aliyuncs.com",
+			DefaultBaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		}
 	}
 	return nil

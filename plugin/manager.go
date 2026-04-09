@@ -35,17 +35,44 @@ type UpdateOutcome struct {
 	InstallPath string
 }
 
+// PluginInstallSource identifies where a plugin was installed from.
+// Serialized as a tagged union matching Rust's serde(tag="type") layout.
+type PluginInstallSource struct {
+	Type string `json:"type"`           // "local_path" or "git_url"
+	Path string `json:"path,omitempty"` // for local_path
+	URL  string `json:"url,omitempty"`  // for git_url
+}
+
+// LocalPathSource creates an install source for a local directory.
+func LocalPathSource(path string) PluginInstallSource {
+	return PluginInstallSource{Type: "local_path", Path: path}
+}
+
+// GitURLSource creates an install source for a git repository.
+func GitURLSource(url string) PluginInstallSource {
+	return PluginInstallSource{Type: "git_url", URL: url}
+}
+
+// SourcePath returns the filesystem path for local_path sources,
+// or empty string for git_url sources.
+func (s PluginInstallSource) SourcePath() string {
+	if s.Type == "local_path" {
+		return s.Path
+	}
+	return ""
+}
+
 // InstalledPluginRecord persists info about an installed plugin.
 type InstalledPluginRecord struct {
-	Kind          PluginKind `json:"kind"`
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	Version       string     `json:"version"`
-	Description   string     `json:"description"`
-	InstallPath   string     `json:"install_path"`
-	Source        string     `json:"source"`
-	InstalledAtMs int64      `json:"installed_at_unix_ms"`
-	UpdatedAtMs   int64      `json:"updated_at_unix_ms"`
+	Kind          PluginKind          `json:"kind"`
+	ID            string              `json:"id"`
+	Name          string              `json:"name"`
+	Version       string              `json:"version"`
+	Description   string              `json:"description"`
+	InstallPath   string              `json:"install_path"`
+	Source        PluginInstallSource `json:"source"`
+	InstalledAtMs int64               `json:"installed_at_unix_ms"`
+	UpdatedAtMs   int64               `json:"updated_at_unix_ms"`
 }
 
 // InstalledPluginRegistry persists all installed plugin records.
@@ -151,13 +178,18 @@ func (m *PluginManager) discoverInDir(dir string, kind PluginKind, source string
 
 		manifest, err := LoadManifest(manifestPath)
 		if err != nil {
-			failures = append(failures, LoadFailure{
-				PluginRoot: pluginRoot,
-				Kind:       kind,
-				Source:     source,
-				Err:        err,
-			})
-			continue
+			// Fallback: try .claude-plugin/plugin.json (packaged convention)
+			altPath := filepath.Join(pluginRoot, ".claude-plugin", "plugin.json")
+			manifest, err = LoadManifest(altPath)
+			if err != nil {
+				failures = append(failures, LoadFailure{
+					PluginRoot: pluginRoot,
+					Kind:       kind,
+					Source:     source,
+					Err:        err,
+				})
+				continue
+			}
 		}
 
 		id := manifest.Name
@@ -234,7 +266,7 @@ func (m *PluginManager) Install(source string) (*InstallOutcome, error) {
 		Version:       manifest.Version,
 		Description:   manifest.Description,
 		InstallPath:   installDir,
-		Source:        source,
+		Source:        LocalPathSource(source),
 		InstalledAtMs: now,
 		UpdatedAtMs:   now,
 	}
@@ -303,7 +335,14 @@ func (m *PluginManager) Update(pluginID string) (*UpdateOutcome, error) {
 	}
 
 	// Re-read manifest from the original source.
-	manifestPath := filepath.Join(record.Source, "plugin.json")
+	sourcePath := record.Source.SourcePath()
+	if sourcePath == "" {
+		return nil, &PluginError{
+			Kind:    ErrIO,
+			Message: fmt.Sprintf("plugin %q has a non-local source; update from git is not yet supported", pluginID),
+		}
+	}
+	manifestPath := filepath.Join(sourcePath, "plugin.json")
 	manifest, err := LoadManifest(manifestPath)
 	if err != nil {
 		return nil, err
@@ -319,7 +358,7 @@ func (m *PluginManager) Update(pluginID string) (*UpdateOutcome, error) {
 			Cause:   err,
 		}
 	}
-	if err := copyDir(record.Source, record.InstallPath); err != nil {
+	if err := copyDir(sourcePath, record.InstallPath); err != nil {
 		return nil, &PluginError{
 			Kind:    ErrIO,
 			Message: fmt.Sprintf("failed to copy updated plugin to %s", record.InstallPath),
@@ -390,7 +429,7 @@ func (m *PluginManager) SyncBundledPlugins() error {
 				Version:       manifest.Version,
 				Description:   manifest.Description,
 				InstallPath:   pluginDir,
-				Source:        pluginDir,
+				Source:        LocalPathSource(pluginDir),
 				InstalledAtMs: now,
 				UpdatedAtMs:   now,
 			}

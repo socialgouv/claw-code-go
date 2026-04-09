@@ -44,12 +44,12 @@ func TestMetadataForModel(t *testing.T) {
 	}{
 		{"claude-sonnet-4-6", false, ProviderAnthropic, "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
 		{"claude-opus-4-6", false, ProviderAnthropic, "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
-		{"grok-3", false, ProviderXai, "XAI_API_KEY", "https://api.x.ai"},
-		{"grok-3-mini", false, ProviderXai, "XAI_API_KEY", "https://api.x.ai"},
-		{"openai/gpt-4", false, ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com"},
-		{"gpt-4o", false, ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com"},
-		{"qwen/qwen-max", false, ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com"},
-		{"qwen-turbo", false, ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com"},
+		{"grok-3", false, ProviderXai, "XAI_API_KEY", "https://api.x.ai/v1"},
+		{"grok-3-mini", false, ProviderXai, "XAI_API_KEY", "https://api.x.ai/v1"},
+		{"openai/gpt-4", false, ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
+		{"gpt-4o", false, ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
+		{"qwen/qwen-max", false, ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-turbo", false, ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 		{"unknown-model", true, "", "", ""},
 	}
 	for _, tt := range tests {

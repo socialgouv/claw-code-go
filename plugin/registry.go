@@ -64,31 +64,37 @@ func (r *PluginRegistry) Summaries() []PluginSummary {
 	return summaries
 }
 
-// AggregatedHooks merges all enabled plugins' hooks.
-func (r *PluginRegistry) AggregatedHooks() PluginHooks {
+// AggregatedHooks merges all enabled plugins' hooks. Each enabled plugin is
+// validated first; returns an error if any validation fails (matching Rust).
+func (r *PluginRegistry) AggregatedHooks() (PluginHooks, error) {
 	var agg PluginHooks
 	for _, rp := range r.plugins {
 		if !rp.Enabled {
 			continue
+		}
+		if err := rp.Plugin.Validate(); err != nil {
+			return PluginHooks{}, err
 		}
 		h := rp.Plugin.Hooks()
 		agg.PreToolUse = append(agg.PreToolUse, h.PreToolUse...)
 		agg.PostToolUse = append(agg.PostToolUse, h.PostToolUse...)
 		agg.PostToolUseFailure = append(agg.PostToolUseFailure, h.PostToolUseFailure...)
 	}
-	return agg
+	return agg, nil
 }
 
-// AggregatedTools collects all enabled plugins' tools and detects name conflicts.
-// Returns tools and conflict warning messages.
-func (r *PluginRegistry) AggregatedTools() ([]PluginTool, []string) {
+// AggregatedTools collects all enabled plugins' tools. Returns an error
+// immediately on the first tool name conflict, matching Rust behavior.
+func (r *PluginRegistry) AggregatedTools() ([]PluginTool, error) {
 	var tools []PluginTool
-	var warnings []string
 	seen := make(map[string]string) // tool name -> plugin ID
 
 	for _, rp := range r.plugins {
 		if !rp.Enabled {
 			continue
+		}
+		if err := rp.Plugin.Validate(); err != nil {
+			return nil, err
 		}
 		meta := rp.Plugin.Metadata()
 
@@ -112,10 +118,10 @@ func (r *PluginRegistry) AggregatedTools() ([]PluginTool, []string) {
 
 		for _, td := range toolDefs {
 			if prevPlugin, exists := seen[td.Name]; exists {
-				warnings = append(warnings, fmt.Sprintf(
-					"tool name conflict: %q provided by both %q and %q",
-					td.Name, prevPlugin, meta.ID,
-				))
+				return nil, &PluginError{
+					Kind:    ErrInvalidManifest,
+					Message: fmt.Sprintf("plugin tool %q is defined by both %q and %q", td.Name, prevPlugin, meta.ID),
+				}
 			}
 			seen[td.Name] = meta.ID
 
@@ -136,7 +142,7 @@ func (r *PluginRegistry) AggregatedTools() ([]PluginTool, []string) {
 		}
 	}
 
-	return tools, warnings
+	return tools, nil
 }
 
 // Initialize initializes all enabled plugins.

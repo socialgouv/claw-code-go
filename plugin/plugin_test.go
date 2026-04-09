@@ -475,7 +475,10 @@ func TestRegistryAggregatedHooks(t *testing.T) {
 		makeBuiltin("c", false, PluginHooks{PreToolUse: []string{"cmd4"}}, nil), // disabled
 	})
 
-	h := reg.AggregatedHooks()
+	h, err := reg.AggregatedHooks()
+	if err != nil {
+		t.Fatalf("AggregatedHooks: %v", err)
+	}
 	if len(h.PreToolUse) != 2 {
 		t.Errorf("PreToolUse len = %d, want 2", len(h.PreToolUse))
 	}
@@ -495,12 +498,35 @@ func TestRegistryAggregatedToolsConflict(t *testing.T) {
 		}),
 	})
 
-	tools, warnings := reg.AggregatedTools()
-	if len(tools) != 3 {
-		t.Errorf("tools len = %d, want 3", len(tools))
+	_, err := reg.AggregatedTools()
+	if err == nil {
+		t.Fatal("expected error on tool name conflict")
 	}
-	if len(warnings) != 1 {
-		t.Errorf("warnings len = %d, want 1", len(warnings))
+	pe, ok := err.(*PluginError)
+	if !ok {
+		t.Fatalf("expected *PluginError, got %T", err)
+	}
+	if pe.Kind != ErrInvalidManifest {
+		t.Errorf("Kind = %q, want %q", pe.Kind, ErrInvalidManifest)
+	}
+}
+
+func TestRegistryAggregatedToolsNoConflict(t *testing.T) {
+	reg := NewPluginRegistry([]RegisteredPlugin{
+		makeBuiltin("a", true, PluginHooks{}, []PluginToolDefinition{
+			{Name: "tool-a", Description: "from a"},
+		}),
+		makeBuiltin("b", true, PluginHooks{}, []PluginToolDefinition{
+			{Name: "tool-b", Description: "from b"},
+		}),
+	})
+
+	tools, err := reg.AggregatedTools()
+	if err != nil {
+		t.Fatalf("AggregatedTools: %v", err)
+	}
+	if len(tools) != 2 {
+		t.Errorf("tools len = %d, want 2", len(tools))
 	}
 }
 
@@ -514,12 +540,12 @@ func TestRegistryAggregatedToolsDisabledSkipped(t *testing.T) {
 		}),
 	})
 
-	tools, warnings := reg.AggregatedTools()
+	tools, err := reg.AggregatedTools()
+	if err != nil {
+		t.Fatalf("AggregatedTools: %v", err)
+	}
 	if len(tools) != 1 {
 		t.Errorf("tools len = %d, want 1", len(tools))
-	}
-	if len(warnings) != 0 {
-		t.Errorf("warnings len = %d, want 0", len(warnings))
 	}
 }
 
@@ -584,7 +610,7 @@ func TestInstalledPluginRegistryRoundTrip(t *testing.T) {
 				Version:       "2.0.0",
 				Description:   "A plugin",
 				InstallPath:   "/path/to/plugin",
-				Source:        "/source",
+				Source:        LocalPathSource("/source"),
 				InstalledAtMs: 1000,
 				UpdatedAtMs:   2000,
 			},
@@ -613,6 +639,52 @@ func TestInstalledPluginRegistryRoundTrip(t *testing.T) {
 	}
 	if p.InstalledAtMs != 1000 {
 		t.Errorf("InstalledAtMs = %d", p.InstalledAtMs)
+	}
+	if p.Source.Type != "local_path" {
+		t.Errorf("Source.Type = %q, want local_path", p.Source.Type)
+	}
+	if p.Source.Path != "/source" {
+		t.Errorf("Source.Path = %q, want /source", p.Source.Path)
+	}
+}
+
+func TestPluginInstallSourceJSON(t *testing.T) {
+	// Test local_path round-trip
+	local := LocalPathSource("/home/user/plugin")
+	data, err := json.Marshal(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded PluginInstallSource
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Type != "local_path" || decoded.Path != "/home/user/plugin" {
+		t.Errorf("local round-trip: %+v", decoded)
+	}
+
+	// Test git_url round-trip
+	git := GitURLSource("https://github.com/example/plugin.git")
+	data, err = json.Marshal(git)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Type != "git_url" || decoded.URL != "https://github.com/example/plugin.git" {
+		t.Errorf("git round-trip: %+v", decoded)
+	}
+}
+
+func TestPluginInstallSourcePath(t *testing.T) {
+	local := LocalPathSource("/path")
+	if local.SourcePath() != "/path" {
+		t.Errorf("SourcePath() = %q", local.SourcePath())
+	}
+	git := GitURLSource("https://example.com")
+	if git.SourcePath() != "" {
+		t.Errorf("SourcePath() = %q, want empty for git_url", git.SourcePath())
 	}
 }
 
@@ -953,6 +1025,38 @@ func TestPluginManagerSyncBundled(t *testing.T) {
 	}
 	if mgr2.registry.Plugins["bravo"].Version != "2.0.0" {
 		t.Errorf("bravo version after reload = %q", mgr2.registry.Plugins["bravo"].Version)
+	}
+}
+
+func TestPluginManagerDiscoverClaudePluginFallback(t *testing.T) {
+	dir := t.TempDir()
+	bundledRoot := filepath.Join(dir, "bundled")
+	pluginDir := filepath.Join(bundledRoot, "packaged-plugin")
+	claudeDir := filepath.Join(pluginDir, ".claude-plugin")
+	os.MkdirAll(claudeDir, 0o755)
+	os.WriteFile(filepath.Join(claudeDir, "plugin.json"), []byte(`{
+		"name": "packaged",
+		"version": "1.0.0",
+		"description": "uses .claude-plugin path"
+	}`), 0o644)
+
+	mgr, err := NewPluginManager(PluginManagerConfig{
+		ConfigHome:  filepath.Join(dir, "config"),
+		BundledRoot: bundledRoot,
+	})
+	if err != nil {
+		t.Fatalf("NewPluginManager: %v", err)
+	}
+
+	plugins, failures := mgr.DiscoverPlugins()
+	if len(failures) != 0 {
+		t.Errorf("failures: %v", failures)
+	}
+	if len(plugins) != 1 {
+		t.Fatalf("plugins len = %d, want 1", len(plugins))
+	}
+	if plugins[0].Plugin.Metadata().Name != "packaged" {
+		t.Errorf("Name = %q", plugins[0].Plugin.Metadata().Name)
 	}
 }
 

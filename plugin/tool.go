@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // PluginTool is a runnable tool from a plugin.
@@ -53,5 +54,5 @@ func (t *PluginTool) Execute(input json.RawMessage) (string, error) {
 		}
 	}
 
-	return stdout.String(), nil
+	return strings.TrimSpace(stdout.String()), nil
 }
