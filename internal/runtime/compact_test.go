@@ -15,8 +15,11 @@ func TestFormatCompactSummaryStripsAnalysisTags(t *testing.T) {
 	if !strings.Contains(result, "The actual summary content") {
 		t.Error("summary content should be preserved")
 	}
-	if !strings.Contains(result, "<compacted_context>") {
-		t.Error("should be wrapped in compacted_context tags")
+	if strings.Contains(result, "<compacted_context>") {
+		t.Error("should NOT be wrapped in compacted_context tags")
+	}
+	if !strings.Contains(result, "Summary:") {
+		t.Error("should contain Summary: prefix")
 	}
 }
 
@@ -34,16 +37,18 @@ func TestFormatCompactSummaryExtractsSummaryTag(t *testing.T) {
 	if !strings.Contains(result, "Extracted content") {
 		t.Error("should extract summary tag content")
 	}
-	// Should NOT contain the preamble/epilogue outside summary tags.
-	if strings.Contains(result, "preamble") || strings.Contains(result, "epilogue") {
-		t.Error("should only contain summary tag content")
+	if !strings.Contains(result, "Summary:") {
+		t.Error("should contain Summary: prefix")
+	}
+	if strings.Contains(result, "<compacted_context>") {
+		t.Error("should NOT be wrapped in compacted_context tags")
 	}
 }
 
 func TestGetContinuationMessageSuppressFollowUp(t *testing.T) {
 	msg := GetContinuationMessage("summary text", true, false)
-	if msg.Role != "user" {
-		t.Errorf("Role = %q, want 'user'", msg.Role)
+	if msg.Role != "system" {
+		t.Errorf("Role = %q, want 'system'", msg.Role)
 	}
 	text := msg.Content[0].Text
 	if !strings.Contains(text, "do not acknowledge the summary") {
@@ -75,8 +80,20 @@ func TestMergeCompactSummaries(t *testing.T) {
 	if !strings.Contains(result, "first summary") || !strings.Contains(result, "second summary") {
 		t.Error("should contain both summaries")
 	}
-	if !strings.Contains(result, "---") {
-		t.Error("should contain separator")
+	if !strings.Contains(result, "Previously compacted context:") {
+		t.Error("should contain 'Previously compacted context:' section")
+	}
+	if !strings.Contains(result, "Newly compacted context:") {
+		t.Error("should contain 'Newly compacted context:' section")
+	}
+}
+
+func TestCollapseBlankLines(t *testing.T) {
+	input := "line1\n\n\n\nline2\n\n\n\n\nline3"
+	result := collapseBlankLines(input)
+	expected := "line1\n\nline2\n\nline3"
+	if result != expected {
+		t.Errorf("collapseBlankLines = %q, want %q", result, expected)
 	}
 }
 

@@ -29,6 +29,23 @@ type Session struct {
 	TotalInputTokens  int `json:"total_input_tokens,omitempty"`
 	TotalOutputTokens int `json:"total_output_tokens,omitempty"`
 	TotalTurns        int `json:"total_turns,omitempty"`
+
+	// PromptHistory records user prompts for continuity.
+	PromptHistory []PromptHistoryEntry `json:"prompt_history,omitempty"`
+	// Fork tracks parent session relationship.
+	Fork *SessionFork `json:"fork,omitempty"`
+}
+
+// PromptHistoryEntry records a user prompt.
+type PromptHistoryEntry struct {
+	TimestampMs int64  `json:"timestamp_ms"`
+	Text        string `json:"text"`
+}
+
+// SessionFork tracks parent session relationship for forked sessions.
+type SessionFork struct {
+	ParentSessionID string `json:"parent_session_id"`
+	BranchName      string `json:"branch_name,omitempty"`
 }
 
 // NewSession creates a new session with a unique ID based on timestamp.

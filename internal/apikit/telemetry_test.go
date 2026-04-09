@@ -630,3 +630,137 @@ func TestClientIdentityUserAgent(t *testing.T) {
 		t.Errorf("unexpected user agent: %s", ci.UserAgent())
 	}
 }
+
+func TestNopSinkSatisfiesInterface(t *testing.T) {
+	var sink TelemetrySink = NopTelemetrySink{}
+	sink.Record(TelemetryEvent{Type: EventTypeAnalytics})
+	// No panic, no side effects — just verifying interface satisfaction.
+}
+
+func TestMemorySinkReset(t *testing.T) {
+	sink := &MemoryTelemetrySink{}
+	sink.Record(TelemetryEvent{Type: EventTypeAnalytics})
+	sink.Record(TelemetryEvent{Type: EventTypeHTTPRequestStarted})
+	if len(sink.Events()) != 2 {
+		t.Fatalf("expected 2 events before reset, got %d", len(sink.Events()))
+	}
+	sink.Reset()
+	if len(sink.Events()) != 0 {
+		t.Errorf("expected 0 events after reset, got %d", len(sink.Events()))
+	}
+}
+
+func TestTelemetryEventGoldenFixtures(t *testing.T) {
+	goldenDir := "../../testdata/golden"
+
+	tests := []struct {
+		name  string
+		file  string
+		event TelemetryEvent
+	}{
+		{
+			name: "analytics",
+			file: "telemetry_event_analytics.json",
+			event: TelemetryEvent{
+				Type: EventTypeAnalytics,
+				Analytics: &AnalyticsEvent{
+					Namespace:  "cli",
+					Action:     "turn_completed",
+					Properties: map[string]any{"model": "claude-sonnet"},
+				},
+			},
+		},
+		{
+			name: "http_started",
+			file: "telemetry_event_http_started.json",
+			event: TelemetryEvent{
+				Type:      EventTypeHTTPRequestStarted,
+				SessionID: "sess-1",
+				Attempt:   1,
+				Method:    "POST",
+				Path:      "/v1/messages",
+			},
+		},
+		{
+			name: "http_succeeded",
+			file: "telemetry_event_http_succeeded.json",
+			event: TelemetryEvent{
+				Type:      EventTypeHTTPRequestSucceeded,
+				SessionID: "sess-1",
+				Attempt:   1,
+				Method:    "POST",
+				Path:      "/v1/messages",
+				Status:    200,
+				RequestID: "req-abc",
+			},
+		},
+		{
+			name: "http_failed",
+			file: "telemetry_event_http_failed.json",
+			event: TelemetryEvent{
+				Type:      EventTypeHTTPRequestFailed,
+				SessionID: "sess-1",
+				Attempt:   2,
+				Method:    "POST",
+				Path:      "/v1/messages",
+				Error:     "timeout",
+				Retryable: true,
+			},
+		},
+		{
+			name: "session_trace",
+			file: "telemetry_event_session_trace.json",
+			event: TelemetryEvent{
+				Type: EventTypeSessionTrace,
+				SessionTrace: &SessionTraceRecord{
+					SessionID:   "sess-1",
+					Sequence:    0,
+					Name:        "http_request_started",
+					TimestampMs: 1234567890,
+					Attributes:  map[string]any{"method": "POST"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			goldenPath := filepath.Join(goldenDir, tt.file)
+			golden, err := os.ReadFile(goldenPath)
+			if err != nil {
+				t.Fatalf("read golden file %s: %v", goldenPath, err)
+			}
+
+			// Marshal event and compare with golden fixture
+			got, err := json.Marshal(tt.event)
+			if err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+
+			// Normalize both for comparison (unmarshal to map then re-marshal sorted)
+			var gotMap, wantMap map[string]any
+			if err := json.Unmarshal(got, &gotMap); err != nil {
+				t.Fatalf("unmarshal got: %v", err)
+			}
+			if err := json.Unmarshal(golden, &wantMap); err != nil {
+				t.Fatalf("unmarshal golden: %v", err)
+			}
+
+			gotNorm, _ := json.Marshal(gotMap)
+			wantNorm, _ := json.Marshal(wantMap)
+
+			if string(gotNorm) != string(wantNorm) {
+				t.Errorf("golden mismatch:\ngot:  %s\nwant: %s", gotNorm, wantNorm)
+			}
+
+			// Also verify round-trip
+			var decoded TelemetryEvent
+			if err := json.Unmarshal(golden, &decoded); err != nil {
+				t.Fatalf("unmarshal golden to TelemetryEvent: %v", err)
+			}
+			if decoded.Type != tt.event.Type {
+				t.Errorf("type mismatch: got %s, want %s", decoded.Type, tt.event.Type)
+			}
+		})
+	}
+}

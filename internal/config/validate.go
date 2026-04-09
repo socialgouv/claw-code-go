@@ -118,6 +118,32 @@ var permissionsFields = []fieldSpec{
 	{"ask", "array"},
 }
 
+var pluginsFields = []fieldSpec{
+	{"enabled", "object"},
+	{"externalDirectories", "array"},
+	{"installRoot", "string"},
+	{"registryPath", "string"},
+	{"bundledRoot", "string"},
+	{"maxOutputTokens", "number"},
+}
+
+var sandboxFields = []fieldSpec{
+	{"enabled", "boolean"},
+	{"namespaceRestrictions", "boolean"},
+	{"networkIsolation", "boolean"},
+	{"filesystemMode", "string"},
+	{"allowedMounts", "array"},
+}
+
+var oauthFields = []fieldSpec{
+	{"clientId", "string"},
+	{"authorizeUrl", "string"},
+	{"tokenUrl", "string"},
+	{"callbackPort", "number"},
+	{"manualRedirectUrl", "string"},
+	{"scopes", "array"},
+}
+
 // Deprecated field mappings (old key → replacement).
 var deprecatedFields = map[string]string{
 	"permissionMode": "permissions.defaultMode",
@@ -182,6 +208,48 @@ func ValidateSettingsJSON(data []byte, filePath string) ValidationResult {
 		}
 	}
 
+	if pluginsRaw, ok := raw["plugins"]; ok {
+		var plugins map[string]json.RawMessage
+		if json.Unmarshal(pluginsRaw, &plugins) == nil {
+			validateObjectKeys(plugins, pluginsFields, "plugins.", filePath, data, &result)
+		} else {
+			result.Errors = append(result.Errors, ConfigDiagnostic{
+				Path:  filePath,
+				Field: "plugins",
+				Line:  findKeyLine(data, "plugins"),
+				Kind:  WrongTypeDiag{Expected: "object", Got: jsonTypeName(pluginsRaw)},
+			})
+		}
+	}
+
+	if sandboxRaw, ok := raw["sandbox"]; ok {
+		var sandbox map[string]json.RawMessage
+		if json.Unmarshal(sandboxRaw, &sandbox) == nil {
+			validateObjectKeys(sandbox, sandboxFields, "sandbox.", filePath, data, &result)
+		} else {
+			result.Errors = append(result.Errors, ConfigDiagnostic{
+				Path:  filePath,
+				Field: "sandbox",
+				Line:  findKeyLine(data, "sandbox"),
+				Kind:  WrongTypeDiag{Expected: "object", Got: jsonTypeName(sandboxRaw)},
+			})
+		}
+	}
+
+	if oauthRaw, ok := raw["oauth"]; ok {
+		var oauth map[string]json.RawMessage
+		if json.Unmarshal(oauthRaw, &oauth) == nil {
+			validateObjectKeys(oauth, oauthFields, "oauth.", filePath, data, &result)
+		} else {
+			result.Errors = append(result.Errors, ConfigDiagnostic{
+				Path:  filePath,
+				Field: "oauth",
+				Line:  findKeyLine(data, "oauth"),
+				Kind:  WrongTypeDiag{Expected: "object", Got: jsonTypeName(oauthRaw)},
+			})
+		}
+	}
+
 	// Type-check top-level fields.
 	for _, spec := range topLevelFields {
 		val, ok := raw[spec.name]
@@ -226,6 +294,10 @@ func validateObjectKeys(obj map[string]json.RawMessage, known []fieldSpec, prefi
 		if knownSet[key] {
 			continue
 		}
+		// Skip deprecated fields (handled separately).
+		if _, isDeprecated := deprecatedFields[key]; isDeprecated && prefix == "" {
+			continue
+		}
 		diag := ConfigDiagnostic{
 			Path:  filePath,
 			Field: prefix + key,
@@ -233,7 +305,7 @@ func validateObjectKeys(obj map[string]json.RawMessage, known []fieldSpec, prefi
 		}
 		suggestion := suggestField(key, knownNames)
 		diag.Kind = UnknownKeyDiag{Suggestion: suggestion}
-		result.Warnings = append(result.Warnings, diag)
+		result.Errors = append(result.Errors, diag)
 	}
 }
 
@@ -243,10 +315,11 @@ func suggestField(input string, candidates []string) string {
 	if len(input) < 4 {
 		return ""
 	}
-	bestDist := 3 // only suggest if distance <= 2
+	inputLower := strings.ToLower(input)
+	bestDist := 4 // only suggest if distance <= 3
 	bestCandidate := ""
 	for _, c := range candidates {
-		d := levenshteinDistance(input, c)
+		d := levenshteinDistance(inputLower, strings.ToLower(c))
 		if d < bestDist {
 			bestDist = d
 			bestCandidate = c

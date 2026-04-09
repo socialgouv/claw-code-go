@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"claw-code-go/internal/api"
+	"claw-code-go/internal/apikit"
 	clawctx "claw-code-go/internal/context"
 	"claw-code-go/internal/mcp"
 	"claw-code-go/internal/permissions"
 	"claw-code-go/internal/tools"
 	"claw-code-go/internal/usage"
+	"claw-code-go/plugin"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,16 +20,19 @@ const systemPromptBase = `You are Claude Code, an AI assistant for software engi
 
 // ConversationLoop manages the agentic conversation loop with tool use.
 type ConversationLoop struct {
-	Client       api.APIClient // provider-agnostic client interface
-	Session      *Session
-	Tools        []api.Tool
-	Permissions  *Permissions
-	PermManager  *permissions.Manager // Phase 5 permission manager (may be nil)
-	Config       *Config
-	MCPRegistry  *mcp.Registry      // MCP server registry (may be nil)
-	Compaction   CompactionState    // Phase 6 token tracking and compaction state
-	CtxAssembler *clawctx.Assembler // Phase 12 context assembler (may be nil)
-	Usage        *usage.Tracker     // Phase 13 per-session token usage tracker
+	Client         api.APIClient // provider-agnostic client interface
+	Session        *Session
+	Tools          []api.Tool
+	Permissions    *Permissions
+	PermManager    *permissions.Manager // Phase 5 permission manager (may be nil)
+	Config         *Config
+	MCPRegistry    *mcp.Registry          // MCP server registry (may be nil)
+	Compaction     CompactionState        // Phase 6 token tracking and compaction state
+	CtxAssembler   *clawctx.Assembler     // Phase 12 context assembler (may be nil)
+	Usage          *usage.Tracker         // Phase 13 per-session token usage tracker
+	TelemetrySink  apikit.TelemetrySink   // Telemetry event sink (may be nil)
+	Tracer         *apikit.SessionTracer  // Session telemetry tracer (may be nil)
+	PluginRegistry *plugin.PluginRegistry // Plugin registry (may be nil)
 }
 
 // NewConversationLoop creates a new conversation loop with the given client.
@@ -121,14 +126,11 @@ func (loop *ConversationLoop) SendMessage(ctx context.Context, userText string) 
 
 	// Compact history if approaching the token budget (Phase 6).
 	if ShouldCompact(loop.Compaction.LastInputTokens, loop.Session.Messages, loop.Config) {
-		summary, err := CompactSession(ctx, loop.Client, loop.Config, loop.Session)
+		_, err := CompactSession(ctx, loop.Client, loop.Config, loop.Session)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[compact] warning: %v\n", err)
 		} else {
 			loop.Compaction.CompactionCount++
-			// Prepend a continuation marker to the retained recent messages.
-			contMsg := GetContinuationMessage(summary, true, true)
-			loop.Session.Messages = append([]api.Message{contMsg}, loop.Session.Messages...)
 		}
 	}
 
@@ -314,14 +316,11 @@ func (loop *ConversationLoop) SendMessageStreaming(ctx context.Context, userText
 
 	// Compact history if approaching the token budget (Phase 6).
 	if ShouldCompact(loop.Compaction.LastInputTokens, loop.Session.Messages, loop.Config) {
-		summary, err := CompactSession(ctx, loop.Client, loop.Config, loop.Session)
+		_, err := CompactSession(ctx, loop.Client, loop.Config, loop.Session)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[compact] warning: %v\n", err)
 		} else {
 			loop.Compaction.CompactionCount++
-			// Prepend a continuation marker to the retained recent messages.
-			contMsg := GetContinuationMessage(summary, true, true)
-			loop.Session.Messages = append([]api.Message{contMsg}, loop.Session.Messages...)
 		}
 	}
 

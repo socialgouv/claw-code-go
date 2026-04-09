@@ -220,10 +220,11 @@ type telemetryEventFlat struct {
 	Action     string         `json:"action,omitempty"`
 	Properties map[string]any `json:"properties,omitempty"`
 
-	// SessionTrace
-	Sequence    uint64 `json:"sequence,omitempty"`
-	Name        string `json:"name,omitempty"`
-	TimestampMs uint64 `json:"timestamp_ms,omitempty"`
+	// SessionTrace — no omitempty on numeric fields: sequence=0 and
+	// timestamp_ms=0 are valid values that must be emitted.
+	Sequence    *uint64 `json:"sequence,omitempty"`
+	Name        string  `json:"name,omitempty"`
+	TimestampMs *uint64 `json:"timestamp_ms,omitempty"`
 }
 
 // MarshalJSON produces a flat JSON object matching Rust's serde(tag="type")
@@ -243,9 +244,11 @@ func (e TelemetryEvent) MarshalJSON() ([]byte, error) {
 	case EventTypeSessionTrace:
 		if e.SessionTrace != nil {
 			flat.SessionID = e.SessionTrace.SessionID
-			flat.Sequence = e.SessionTrace.Sequence
+			seq := e.SessionTrace.Sequence
+			flat.Sequence = &seq
 			flat.Name = e.SessionTrace.Name
-			flat.TimestampMs = e.SessionTrace.TimestampMs
+			ts := e.SessionTrace.TimestampMs
+			flat.TimestampMs = &ts
 			flat.Attributes = e.SessionTrace.Attributes
 		}
 	default:
@@ -281,11 +284,18 @@ func (e *TelemetryEvent) UnmarshalJSON(data []byte) error {
 			Properties: flat.Properties,
 		}
 	case EventTypeSessionTrace:
+		var seq, ts uint64
+		if flat.Sequence != nil {
+			seq = *flat.Sequence
+		}
+		if flat.TimestampMs != nil {
+			ts = *flat.TimestampMs
+		}
 		e.SessionTrace = &SessionTraceRecord{
 			SessionID:   flat.SessionID,
-			Sequence:    flat.Sequence,
+			Sequence:    seq,
 			Name:        flat.Name,
-			TimestampMs: flat.TimestampMs,
+			TimestampMs: ts,
 			Attributes:  flat.Attributes,
 		}
 	default:

@@ -200,17 +200,22 @@ func FormatCompactSummary(summary string) string {
 	// Strip <analysis>...</analysis> tags.
 	cleaned := analysisTagRe.ReplaceAllString(summary, "")
 
-	// Extract <summary>...</summary> content if present.
+	// Replace <summary>...</summary> tags with "Summary:\n" prefix.
 	if matches := summaryTagRe.FindStringSubmatch(cleaned); len(matches) > 1 {
-		cleaned = strings.TrimSpace(matches[1])
-	} else {
-		cleaned = strings.TrimSpace(cleaned)
+		cleaned = summaryTagRe.ReplaceAllString(cleaned, "Summary:\n"+strings.TrimSpace(matches[1]))
 	}
 
-	return fmt.Sprintf(
-		"<compacted_context>\nThe following is a summary of earlier conversation history that has been compacted to save context space:\n\n%s\n</compacted_context>",
-		cleaned,
-	)
+	// Collapse multiple blank lines.
+	cleaned = collapseBlankLines(cleaned)
+
+	return strings.TrimSpace(cleaned)
+}
+
+// collapseBlankLines replaces runs of multiple blank lines with a single blank line.
+var multipleBlankLinesRe = regexp.MustCompile(`\n{3,}`)
+
+func collapseBlankLines(s string) string {
+	return multipleBlankLinesRe.ReplaceAllString(s, "\n\n")
 }
 
 // GetContinuationMessage creates a synthetic system message that announces the
@@ -235,15 +240,14 @@ func GetContinuationMessage(summary string, suppressFollowUp, recentPreserved bo
 	}
 
 	return api.Message{
-		Role: "user",
+		Role: "system",
 		Content: []api.ContentBlock{
 			{Type: "text", Text: sb.String()},
 		},
 	}
 }
 
-// MergeCompactSummaries merges two compaction summaries into one.
-// The previous summary is prepended to the new summary with a separator.
+// MergeCompactSummaries merges two compaction summaries into one with structured sections.
 func MergeCompactSummaries(previous, current string) string {
 	if previous == "" {
 		return current
@@ -251,5 +255,82 @@ func MergeCompactSummaries(previous, current string) string {
 	if current == "" {
 		return previous
 	}
-	return previous + "\n\n---\n\n" + current
+
+	prevHighlights := extractSummaryHighlights(previous)
+	newHighlights := extractSummaryHighlights(current)
+	newTimeline := extractSummaryTimeline(current)
+
+	var sb strings.Builder
+	sb.WriteString("<summary>\n")
+	sb.WriteString("Previously compacted context:\n")
+	for _, h := range prevHighlights {
+		sb.WriteString(h)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\nNewly compacted context:\n")
+	for _, h := range newHighlights {
+		sb.WriteString(h)
+		sb.WriteString("\n")
+	}
+	if len(newTimeline) > 0 {
+		sb.WriteString("\nKey timeline:\n")
+		for _, t := range newTimeline {
+			sb.WriteString(t)
+			sb.WriteString("\n")
+		}
+	}
+	sb.WriteString("</summary>")
+	return sb.String()
+}
+
+// extractSummaryHighlights extracts non-timeline content lines from a summary.
+func extractSummaryHighlights(summary string) []string {
+	var highlights []string
+	inTimeline := false
+	for _, line := range strings.Split(summary, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// Skip XML tags
+		if strings.HasPrefix(trimmed, "<summary>") || strings.HasPrefix(trimmed, "</summary>") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Key timeline:") {
+			inTimeline = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Previously compacted") || strings.HasPrefix(trimmed, "Newly compacted") {
+			inTimeline = false
+			continue
+		}
+		if !inTimeline {
+			highlights = append(highlights, line)
+		}
+	}
+	return highlights
+}
+
+// extractSummaryTimeline extracts timeline lines from a summary.
+func extractSummaryTimeline(summary string) []string {
+	var timeline []string
+	inTimeline := false
+	for _, line := range strings.Split(summary, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Key timeline:") {
+			inTimeline = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Previously compacted") || strings.HasPrefix(trimmed, "Newly compacted") || strings.HasPrefix(trimmed, "</summary>") {
+			inTimeline = false
+			continue
+		}
+		if inTimeline {
+			timeline = append(timeline, line)
+		}
+	}
+	return timeline
 }

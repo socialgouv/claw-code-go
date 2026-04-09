@@ -29,12 +29,12 @@ func TestValidateSettingsJSONEmpty(t *testing.T) {
 func TestValidateSettingsJSONUnknownKeyWithSuggestion(t *testing.T) {
 	data := []byte(`{"modle": "claude-sonnet-4-20250514"}`)
 	result := ValidateSettingsJSON(data, "settings.json")
-	if len(result.Warnings) == 0 {
-		t.Fatal("expected warning for unknown key 'modle'")
+	if len(result.Errors) == 0 {
+		t.Fatal("expected error for unknown key 'modle'")
 	}
 	found := false
-	for _, w := range result.Warnings {
-		ukd, ok := w.Kind.(UnknownKeyDiag)
+	for _, e := range result.Errors {
+		ukd, ok := e.Kind.(UnknownKeyDiag)
 		if ok && ukd.Suggestion == "model" {
 			found = true
 		}
@@ -48,11 +48,11 @@ func TestValidateSettingsJSONUnknownKeyShortNoSuggestion(t *testing.T) {
 	// Short keys (< 4 chars) should NOT get suggestions to avoid false positives.
 	data := []byte(`{"foo": "bar"}`)
 	result := ValidateSettingsJSON(data, "settings.json")
-	if len(result.Warnings) == 0 {
-		t.Fatal("expected warning for unknown key 'foo'")
+	if len(result.Errors) == 0 {
+		t.Fatal("expected error for unknown key 'foo'")
 	}
-	for _, w := range result.Warnings {
-		ukd, ok := w.Kind.(UnknownKeyDiag)
+	for _, e := range result.Errors {
+		ukd, ok := e.Kind.(UnknownKeyDiag)
 		if ok && ukd.Suggestion != "" {
 			t.Errorf("short key should not get suggestion, got %q", ukd.Suggestion)
 		}
@@ -102,13 +102,13 @@ func TestValidateSettingsJSONNestedHooksUnknownKey(t *testing.T) {
 	data := []byte(`{"hooks": {"PreToolUse": ["cmd1"], "BadHook": ["cmd2"]}}`)
 	result := ValidateSettingsJSON(data, "settings.json")
 	found := false
-	for _, w := range result.Warnings {
-		if strings.Contains(w.Field, "BadHook") {
+	for _, e := range result.Errors {
+		if strings.Contains(e.Field, "BadHook") {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected warning for unknown hook key 'BadHook'")
+		t.Error("expected error for unknown hook key 'BadHook'")
 	}
 }
 
@@ -153,5 +153,65 @@ func TestFormatDiagnostics(t *testing.T) {
 	out := FormatDiagnostics(result)
 	if !strings.Contains(out, "error:") || !strings.Contains(out, "warning:") {
 		t.Errorf("unexpected format: %s", out)
+	}
+}
+
+func TestValidateSettingsJSONNestedPluginsUnknownKey(t *testing.T) {
+	data := []byte(`{"plugins": {"enabled": {}, "badKey": "x"}}`)
+	result := ValidateSettingsJSON(data, "settings.json")
+	found := false
+	for _, e := range result.Errors {
+		if strings.Contains(e.Field, "plugins.badKey") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected error for unknown plugins key 'badKey'")
+	}
+}
+
+func TestValidateSettingsJSONNestedSandboxUnknownKey(t *testing.T) {
+	data := []byte(`{"sandbox": {"enabled": true, "badKey": "x"}}`)
+	result := ValidateSettingsJSON(data, "settings.json")
+	found := false
+	for _, e := range result.Errors {
+		if strings.Contains(e.Field, "sandbox.badKey") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected error for unknown sandbox key 'badKey'")
+	}
+}
+
+func TestValidateSettingsJSONNestedOAuthUnknownKey(t *testing.T) {
+	data := []byte(`{"oauth": {"clientId": "abc", "badKey": "x"}}`)
+	result := ValidateSettingsJSON(data, "settings.json")
+	found := false
+	for _, e := range result.Errors {
+		if strings.Contains(e.Field, "oauth.badKey") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected error for unknown oauth key 'badKey'")
+	}
+}
+
+func TestValidateSettingsJSONCaseInsensitiveSuggestion(t *testing.T) {
+	data := []byte(`{"Model": "claude-sonnet-4-20250514"}`)
+	result := ValidateSettingsJSON(data, "settings.json")
+	if len(result.Errors) == 0 {
+		t.Fatal("expected error for unknown key 'Model'")
+	}
+	found := false
+	for _, e := range result.Errors {
+		ukd, ok := e.Kind.(UnknownKeyDiag)
+		if ok && ukd.Suggestion == "model" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected case-insensitive suggestion 'model' for 'Model'")
 	}
 }

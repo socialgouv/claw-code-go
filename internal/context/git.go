@@ -14,15 +14,16 @@ type GitCommitEntry struct {
 
 // GitWorktreeInfo holds extended git worktree information.
 type GitWorktreeInfo struct {
-	Branch        string           // current branch name (empty if detached HEAD)
-	SHA           string           // current HEAD commit SHA
-	IsDetached    bool             // true if HEAD is detached
-	Modified      int              // number of modified/staged files
-	Untracked     int              // number of untracked files
-	Ahead         int              // commits ahead of upstream
-	Behind        int              // commits behind upstream
-	RecentCommits []GitCommitEntry // most recent commits
-	StagedFiles   []string         // files in the staging area
+	Branch          string           // current branch name (empty if detached HEAD)
+	SHA             string           // current HEAD commit SHA
+	IsDetached      bool             // true if HEAD is detached
+	Modified        int              // number of modified/staged files
+	Untracked       int              // number of untracked files
+	Ahead           int              // commits ahead of upstream
+	Behind          int              // commits behind upstream
+	RecentCommits   []GitCommitEntry // most recent commits
+	StagedFiles     []string         // files in the staging area
+	StatusPorcelain string           // raw porcelain output, cached to avoid duplicate calls
 }
 
 // CollectWorktreeInfo gathers detailed git worktree information for workDir.
@@ -47,7 +48,8 @@ func CollectWorktreeInfo(workDir string) *GitWorktreeInfo {
 	info.SHA = runGit(workDir, "rev-parse", "HEAD")
 
 	// Status counts.
-	status := runGit(workDir, "status", "--porcelain")
+	status := runGit(workDir, "--no-optional-locks", "status", "--porcelain")
+	info.StatusPorcelain = status
 	if status != "" {
 		for _, line := range strings.Split(status, "\n") {
 			if strings.TrimSpace(line) == "" {
@@ -62,7 +64,7 @@ func CollectWorktreeInfo(workDir string) *GitWorktreeInfo {
 	}
 
 	// Staged files.
-	staged := runGit(workDir, "diff", "--cached", "--name-only")
+	staged := runGit(workDir, "--no-optional-locks", "diff", "--cached", "--name-only")
 	if staged != "" {
 		info.StagedFiles = strings.Split(staged, "\n")
 	}
@@ -85,7 +87,7 @@ func CollectWorktreeInfo(workDir string) *GitWorktreeInfo {
 
 // RecentCommits returns the most recent count commits from workDir.
 func RecentCommits(workDir string, count int) []GitCommitEntry {
-	log := runGit(workDir, "log", fmt.Sprintf("--format=%%h %%s"), fmt.Sprintf("-n"), fmt.Sprintf("%d", count), "--no-decorate")
+	log := runGit(workDir, "--no-optional-locks", "log", fmt.Sprintf("--format=%%h %%s"), fmt.Sprintf("-n"), fmt.Sprintf("%d", count), "--no-decorate")
 	if log == "" {
 		return nil
 	}
@@ -125,7 +127,7 @@ func GitStatus(workDir string) string {
 	if info.Modified > 0 || info.Untracked > 0 {
 		fmt.Fprintf(&sb, "Modified: %d, Untracked: %d\n", info.Modified, info.Untracked)
 
-		status := runGit(workDir, "status", "--porcelain")
+		status := info.StatusPorcelain
 		if len(status) > 500 {
 			status = status[:500] + "..."
 		}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -169,6 +170,23 @@ func TestCollectWorktreeInfoStagedFiles(t *testing.T) {
 
 	if len(info.StagedFiles) != 1 || info.StagedFiles[0] != "staged.txt" {
 		t.Errorf("StagedFiles = %v, want [staged.txt]", info.StagedFiles)
+	}
+}
+
+func TestGitWorktreeInfoStatusPorcelainCached(t *testing.T) {
+	dir := initTestRepo(t)
+	// Create an untracked file so porcelain output is non-empty.
+	os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("new"), 0o644)
+
+	info := CollectWorktreeInfo(dir)
+	if info == nil {
+		t.Fatal("expected non-nil info")
+	}
+	if info.StatusPorcelain == "" {
+		t.Error("StatusPorcelain should be non-empty when there are changes")
+	}
+	if !strings.Contains(info.StatusPorcelain, "untracked.txt") {
+		t.Errorf("StatusPorcelain should contain untracked file, got: %s", info.StatusPorcelain)
 	}
 }
 

@@ -20,7 +20,7 @@ func TestPluginKindString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		if got := tt.kind.String(); got != tt.want {
-			t.Errorf("PluginKind(%d).String() = %q, want %q", tt.kind, got, tt.want)
+			t.Errorf("PluginKind(%s).String() = %q, want %q", tt.kind, got, tt.want)
 		}
 	}
 }
@@ -1397,7 +1397,7 @@ func TestPluginKindMarketplace(t *testing.T) {
 	}
 	for _, tt := range tests {
 		if got := tt.kind.Marketplace(); got != tt.want {
-			t.Errorf("PluginKind(%d).Marketplace() = %q, want %q", tt.kind, got, tt.want)
+			t.Errorf("PluginKind(%s).Marketplace() = %q, want %q", tt.kind, got, tt.want)
 		}
 	}
 }
@@ -1471,5 +1471,41 @@ func TestPluginManagerSyncBundledEmptyRoot(t *testing.T) {
 	// No BundledRoot set — should be a no-op.
 	if err := mgr.SyncBundledPlugins(); err != nil {
 		t.Fatalf("SyncBundledPlugins: %v", err)
+	}
+}
+
+func TestPluginManifestGoldenFixture(t *testing.T) {
+	goldenPath := "../testdata/golden/plugin_manifest.json"
+	m, err := LoadManifest(goldenPath)
+	if err != nil {
+		t.Fatalf("load golden manifest: %v", err)
+	}
+
+	if m.Name != "test-plugin" {
+		t.Errorf("name: got %q, want %q", m.Name, "test-plugin")
+	}
+	if m.Version != "1.0.0" {
+		t.Errorf("version: got %q, want %q", m.Version, "1.0.0")
+	}
+	if m.Description != "A test plugin" {
+		t.Errorf("description: got %q", m.Description)
+	}
+	if len(m.Permissions) != 2 {
+		t.Fatalf("permissions: got %d, want 2", len(m.Permissions))
+	}
+	if !m.DefaultEnabled {
+		t.Error("defaultEnabled should be true")
+	}
+	if len(m.Hooks.PreToolUse) != 1 || m.Hooks.PreToolUse[0] != "./guard.sh" {
+		t.Errorf("hooks.PreToolUse: got %v", m.Hooks.PreToolUse)
+	}
+	if len(m.Tools) != 1 {
+		t.Fatalf("tools: got %d, want 1", len(m.Tools))
+	}
+	if m.Tools[0].Name != "test-tool" {
+		t.Errorf("tool name: got %q", m.Tools[0].Name)
+	}
+	if m.Tools[0].RequiredPermission != ToolPermReadOnly {
+		t.Errorf("tool permission: got %q, want %q", m.Tools[0].RequiredPermission, ToolPermReadOnly)
 	}
 }

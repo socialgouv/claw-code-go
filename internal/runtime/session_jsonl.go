@@ -33,12 +33,13 @@ type jsonlRecord struct {
 
 // metaRecord holds session metadata (first line of JSONL).
 type metaRecord struct {
-	Type          string `json:"type"`
-	Version       int    `json:"version"`
-	SessionID     string `json:"session_id"`
-	CreatedAtMs   int64  `json:"created_at_ms"`
-	UpdatedAtMs   int64  `json:"updated_at_ms"`
-	WorkspaceRoot string `json:"workspace_root,omitempty"`
+	Type          string       `json:"type"`
+	Version       int          `json:"version"`
+	SessionID     string       `json:"session_id"`
+	CreatedAtMs   int64        `json:"created_at_ms"`
+	UpdatedAtMs   int64        `json:"updated_at_ms"`
+	WorkspaceRoot string       `json:"workspace_root,omitempty"`
+	Fork          *SessionFork `json:"fork,omitempty"`
 }
 
 // messageRecord holds a single conversation message.
@@ -74,6 +75,7 @@ func RenderJSONLSnapshot(s *Session) (string, error) {
 		SessionID:   s.ID,
 		CreatedAtMs: s.CreatedAt.UnixMilli(),
 		UpdatedAtMs: s.UpdatedAt.UnixMilli(),
+		Fork:        s.Fork,
 	}
 	if err := writeJSONLine(&sb, meta); err != nil {
 		return "", fmt.Errorf("render meta: %w", err)
@@ -89,6 +91,18 @@ func RenderJSONLSnapshot(s *Session) (string, error) {
 		}
 		if err := writeJSONLine(&sb, comp); err != nil {
 			return "", fmt.Errorf("render compaction: %w", err)
+		}
+	}
+
+	// Prompt history records.
+	for _, ph := range s.PromptHistory {
+		rec := promptHistoryRecord{
+			Type:        "prompt_history",
+			TimestampMs: ph.TimestampMs,
+			Text:        ph.Text,
+		}
+		if err := writeJSONLine(&sb, rec); err != nil {
+			return "", fmt.Errorf("render prompt_history: %w", err)
 		}
 	}
 
@@ -158,6 +172,7 @@ func ParseJSONL(data []byte) (*Session, error) {
 				s.ID = rec.SessionID
 				s.CreatedAt = time.UnixMilli(rec.CreatedAtMs)
 				s.UpdatedAt = time.UnixMilli(rec.UpdatedAtMs)
+				s.Fork = rec.Fork
 			}
 
 		case "message":
@@ -174,8 +189,13 @@ func ParseJSONL(data []byte) (*Session, error) {
 			}
 
 		case "prompt_history":
-			// Tracked but not stored in Session struct currently.
-			// Skip gracefully.
+			var rec promptHistoryRecord
+			if json.Unmarshal([]byte(line), &rec) == nil {
+				s.PromptHistory = append(s.PromptHistory, PromptHistoryEntry{
+					TimestampMs: rec.TimestampMs,
+					Text:        rec.Text,
+				})
+			}
 
 		default:
 			// Unknown record type — skip for forward compatibility.
@@ -288,6 +308,11 @@ func SaveSessionJSONL(dir string, s *Session) error {
 
 	path := filepath.Join(dir, s.ID+".jsonl")
 
+	// Rotate if current file exceeds threshold.
+	if _, err := RotateSessionFileIfNeeded(path); err != nil {
+		return fmt.Errorf("rotate session file: %w", err)
+	}
+
 	// Atomic write: write to temp file, then rename.
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(snapshot), 0o644); err != nil {
@@ -296,6 +321,11 @@ func SaveSessionJSONL(dir string, s *Session) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath) // cleanup on failure
 		return fmt.Errorf("rename session file: %w", err)
+	}
+
+	// Cleanup old rotated files.
+	if err := CleanupRotatedLogs(path, MaxRotatedFiles); err != nil {
+		return fmt.Errorf("cleanup rotated logs: %w", err)
 	}
 
 	return nil

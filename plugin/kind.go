@@ -6,45 +6,27 @@ import (
 )
 
 // PluginKind represents the source type of a plugin.
-type PluginKind int
+// Uses string constants (not iota) so values are stable JSON strings.
+type PluginKind string
 
 const (
-	KindBuiltin  PluginKind = iota // Hardcoded plugins
-	KindBundled                    // Pre-packaged with application
-	KindExternal                   // User-installed
+	KindBuiltin  PluginKind = "builtin"  // Hardcoded plugins
+	KindBundled  PluginKind = "bundled"  // Pre-packaged with application
+	KindExternal PluginKind = "external" // User-installed
 )
 
-var kindNames = map[PluginKind]string{
-	KindBuiltin:  "builtin",
-	KindBundled:  "bundled",
-	KindExternal: "external",
-}
-
-var kindFromString = map[string]PluginKind{
-	"builtin":  KindBuiltin,
-	"bundled":  KindBundled,
-	"external": KindExternal,
-}
-
 func (k PluginKind) String() string {
-	if s, ok := kindNames[k]; ok {
-		return s
-	}
-	return fmt.Sprintf("PluginKind(%d)", int(k))
+	return string(k)
 }
 
 // Marketplace returns the marketplace string used in plugin IDs.
 // Matches Rust's PluginKind::marketplace() → "builtin"/"bundled"/"external".
 func (k PluginKind) Marketplace() string {
-	return k.String()
+	return string(k)
 }
 
 func (k PluginKind) MarshalJSON() ([]byte, error) {
-	s, ok := kindNames[k]
-	if !ok {
-		return nil, fmt.Errorf("unknown PluginKind: %d", int(k))
-	}
-	return json.Marshal(s)
+	return json.Marshal(string(k))
 }
 
 func (k *PluginKind) UnmarshalJSON(data []byte) error {
@@ -52,12 +34,13 @@ func (k *PluginKind) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return err
 	}
-	v, ok := kindFromString[s]
-	if !ok {
+	switch PluginKind(s) {
+	case KindBuiltin, KindBundled, KindExternal:
+		*k = PluginKind(s)
+		return nil
+	default:
 		return fmt.Errorf("unknown PluginKind: %q", s)
 	}
-	*k = v
-	return nil
 }
 
 // PluginPermission is a manifest-level permission.

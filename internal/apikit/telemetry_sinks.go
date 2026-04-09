@@ -7,6 +7,12 @@ import (
 	"sync"
 )
 
+// NopTelemetrySink discards all events. Use when telemetry is disabled.
+type NopTelemetrySink struct{}
+
+// Record is a no-op.
+func (NopTelemetrySink) Record(TelemetryEvent) {}
+
 // MemoryTelemetrySink collects events in memory for testing.
 type MemoryTelemetrySink struct {
 	mu     sync.Mutex
@@ -18,6 +24,13 @@ func (s *MemoryTelemetrySink) Record(event TelemetryEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, event)
+}
+
+// Reset clears all recorded events.
+func (s *MemoryTelemetrySink) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = nil
 }
 
 // Events returns a copy of all recorded events.
