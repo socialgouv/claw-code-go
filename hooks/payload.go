@@ -25,11 +25,15 @@ func BuildPayload(event HookEvent, toolName, toolInput string, toolOutput *strin
 	if event == PostToolUseFailure {
 		if toolOutput != nil {
 			payload["tool_error"] = *toolOutput
+		} else {
+			payload["tool_error"] = nil // Rust serializes None as JSON null
 		}
 		payload["tool_result_is_error"] = true
 	} else {
 		if toolOutput != nil {
 			payload["tool_output"] = *toolOutput
+		} else {
+			payload["tool_output"] = nil // Rust serializes None as JSON null
 		}
 		payload["tool_result_is_error"] = isError
 	}

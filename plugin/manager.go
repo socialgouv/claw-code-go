@@ -193,9 +193,13 @@ func (m *PluginManager) discoverInDir(dir string, kind PluginKind, source string
 		}
 
 		id := manifest.Name
-		enabled := manifest.DefaultEnabled
+		var enabled bool
 		if e, ok := m.config.EnabledPlugins[id]; ok {
 			enabled = e
+		} else if kind == KindExternal {
+			enabled = false // Rust: external plugins default to disabled
+		} else {
+			enabled = manifest.DefaultEnabled // Builtin/Bundled: use manifest default
 		}
 
 		meta := PluginMetadata{
@@ -247,7 +251,13 @@ func (m *PluginManager) Install(source string) (*InstallOutcome, error) {
 		return nil, err
 	}
 
-	installDir := filepath.Join(m.config.InstallRoot, manifest.Name)
+	id := pluginID(manifest.Name, externalMarketplace)
+	installDir := filepath.Join(m.config.InstallRoot, sanitizePluginID(id))
+
+	// Remove existing installation if present.
+	if installDir != "" {
+		_ = os.RemoveAll(installDir)
+	}
 
 	// Copy plugin directory
 	if err := copyDir(source, installDir); err != nil {
@@ -261,7 +271,7 @@ func (m *PluginManager) Install(source string) (*InstallOutcome, error) {
 	now := time.Now().UnixMilli()
 	record := InstalledPluginRecord{
 		Kind:          KindExternal,
-		ID:            manifest.Name,
+		ID:            id,
 		Name:          manifest.Name,
 		Version:       manifest.Version,
 		Description:   manifest.Description,
@@ -270,14 +280,19 @@ func (m *PluginManager) Install(source string) (*InstallOutcome, error) {
 		InstalledAtMs: now,
 		UpdatedAtMs:   now,
 	}
-	m.registry.Plugins[manifest.Name] = record
+	m.registry.Plugins[id] = record
 
 	if err := m.saveRegistry(); err != nil {
 		return nil, err
 	}
 
+	// Auto-enable installed plugin (matching Rust behavior).
+	if err := m.Enable(id); err != nil {
+		return nil, err
+	}
+
 	return &InstallOutcome{
-		PluginID:    manifest.Name,
+		PluginID:    id,
 		Version:     manifest.Version,
 		InstallPath: installDir,
 	}, nil
@@ -501,6 +516,29 @@ func copyDir(src, dst string) error {
 
 		return copyFile(path, target)
 	})
+}
+
+const externalMarketplace = "external"
+
+// pluginID constructs a plugin ID in the format "name@marketplace".
+func pluginID(name, marketplace string) string {
+	return name + "@" + marketplace
+}
+
+// sanitizePluginID replaces filesystem-unsafe characters with hyphens,
+// matching Rust sanitize_plugin_id().
+func sanitizePluginID(id string) string {
+	var b strings.Builder
+	b.Grow(len(id))
+	for _, ch := range id {
+		switch ch {
+		case '/', '\\', '@', ':':
+			b.WriteByte('-')
+		default:
+			b.WriteRune(ch)
+		}
+	}
+	return b.String()
 }
 
 func copyFile(src, dst string) error {

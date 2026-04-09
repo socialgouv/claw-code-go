@@ -47,9 +47,18 @@ func (t *PluginTool) Execute(input json.RawMessage) (string, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		// Match Rust error format: "plugin tool `name` from `plugin_id` failed for `command`: stderr_or_status"
+		stderrStr := strings.TrimSpace(stderr.String())
+		if stderrStr == "" {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				stderrStr = fmt.Sprintf("exit status %d", exitErr.ExitCode())
+			} else {
+				stderrStr = err.Error()
+			}
+		}
 		return "", &PluginError{
 			Kind:    ErrCommandFailed,
-			Message: fmt.Sprintf("tool %q failed: %s", t.Definition.Name, stderr.String()),
+			Message: fmt.Sprintf("plugin tool `%s` from `%s` failed for `%s`: %s", t.Definition.Name, t.PluginID, t.Command, stderrStr),
 			Cause:   err,
 		}
 	}

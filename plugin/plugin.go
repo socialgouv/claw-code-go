@@ -148,7 +148,7 @@ func validatePaths(root string, tools []PluginToolManifest) error {
 
 func runLifecycleCommands(root string, commands []string) error {
 	for _, cmd := range commands {
-		c := exec.Command("sh", "-c", cmd)
+		c := exec.Command("sh", "-lc", cmd)
 		if root != "" {
 			c.Dir = root
 		}

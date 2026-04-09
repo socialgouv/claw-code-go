@@ -53,6 +53,12 @@ func ValidateManifest(m *PluginManifest, root string, kind PluginKind) []Validat
 				Message: "tool name is required",
 			})
 		}
+		if strings.TrimSpace(t.Description) == "" {
+			errs = append(errs, ValidationError{
+				Code:    "empty_entry_field",
+				Message: fmt.Sprintf("tool %q description is required", t.Name),
+			})
+		}
 		if strings.TrimSpace(t.Command) == "" {
 			errs = append(errs, ValidationError{
 				Code:    "empty_entry_field",
@@ -99,6 +105,56 @@ func ValidateManifest(m *PluginManifest, root string, kind PluginKind) []Validat
 					Code:    "missing_path",
 					Message: fmt.Sprintf("tool %q command path not found: %s", t.Name, cmdPath),
 				})
+			}
+		}
+	}
+
+	// Hook and lifecycle command path validation for Bundled/External plugins.
+	if (kind == KindBundled || kind == KindExternal) && root != "" {
+		// Validate hook command paths.
+		hookLists := map[string][]string{
+			"hook PreToolUse":         m.Hooks.PreToolUse,
+			"hook PostToolUse":        m.Hooks.PostToolUse,
+			"hook PostToolUseFailure": m.Hooks.PostToolUseFailure,
+		}
+		for label, commands := range hookLists {
+			for _, cmd := range commands {
+				if strings.TrimSpace(cmd) == "" {
+					continue
+				}
+				cmdPath := cmd
+				if !filepath.IsAbs(cmdPath) {
+					cmdPath = filepath.Join(root, cmdPath)
+				}
+				if _, err := os.Stat(cmdPath); err != nil {
+					errs = append(errs, ValidationError{
+						Code:    "missing_path",
+						Message: fmt.Sprintf("%s command path not found: %s", label, cmdPath),
+					})
+				}
+			}
+		}
+
+		// Validate lifecycle command paths.
+		lifecycleLists := map[string][]string{
+			"lifecycle Init":     m.Lifecycle.Init,
+			"lifecycle Shutdown": m.Lifecycle.Shutdown,
+		}
+		for label, commands := range lifecycleLists {
+			for _, cmd := range commands {
+				if strings.TrimSpace(cmd) == "" {
+					continue
+				}
+				cmdPath := cmd
+				if !filepath.IsAbs(cmdPath) {
+					cmdPath = filepath.Join(root, cmdPath)
+				}
+				if _, err := os.Stat(cmdPath); err != nil {
+					errs = append(errs, ValidationError{
+						Code:    "missing_path",
+						Message: fmt.Sprintf("%s command path not found: %s", label, cmdPath),
+					})
+				}
 			}
 		}
 	}

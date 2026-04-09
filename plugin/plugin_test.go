@@ -881,11 +881,23 @@ func TestPluginManagerInstallLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	if outcome.PluginID != "local-plugin" {
-		t.Errorf("PluginID = %q", outcome.PluginID)
+	expectedID := "local-plugin@external"
+	if outcome.PluginID != expectedID {
+		t.Errorf("PluginID = %q, want %q", outcome.PluginID, expectedID)
 	}
 	if outcome.Version != "0.1.0" {
 		t.Errorf("Version = %q", outcome.Version)
+	}
+
+	// Verify auto-enabled after install (matching Rust behavior).
+	if !mgr.config.EnabledPlugins[expectedID] {
+		t.Error("plugin should be auto-enabled after install")
+	}
+
+	// Verify install directory uses sanitized ID.
+	expectedDir := filepath.Join(configHome, "plugins", "installed", "local-plugin-external")
+	if outcome.InstallPath != expectedDir {
+		t.Errorf("InstallPath = %q, want %q", outcome.InstallPath, expectedDir)
 	}
 
 	// Verify registry persisted
@@ -895,7 +907,7 @@ func TestPluginManagerInstallLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPluginManager reload: %v", err)
 	}
-	if _, ok := mgr2.registry.Plugins["local-plugin"]; !ok {
+	if _, ok := mgr2.registry.Plugins[expectedID]; !ok {
 		t.Error("plugin not in registry after reload")
 	}
 }
@@ -923,10 +935,11 @@ func TestPluginManagerUninstall(t *testing.T) {
 	mgr, _ := NewPluginManager(PluginManagerConfig{ConfigHome: filepath.Join(dir, "config")})
 	mgr.Install(srcDir)
 
-	if err := mgr.Uninstall("rm-me"); err != nil {
+	rmID := "rm-me@external"
+	if err := mgr.Uninstall(rmID); err != nil {
 		t.Fatalf("Uninstall: %v", err)
 	}
-	if _, ok := mgr.registry.Plugins["rm-me"]; ok {
+	if _, ok := mgr.registry.Plugins[rmID]; ok {
 		t.Error("plugin should be removed from registry")
 	}
 }
@@ -1001,8 +1014,9 @@ func TestPluginManagerUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	if mgr.registry.Plugins["updatable"].Version != "1.0.0" {
-		t.Fatalf("expected version 1.0.0, got %s", mgr.registry.Plugins["updatable"].Version)
+	updateID := "updatable@external"
+	if mgr.registry.Plugins[updateID].Version != "1.0.0" {
+		t.Fatalf("expected version 1.0.0, got %s", mgr.registry.Plugins[updateID].Version)
 	}
 
 	// Update source to v2.
@@ -1012,7 +1026,7 @@ func TestPluginManagerUpdate(t *testing.T) {
 		"description": "v2"
 	}`), 0o644)
 
-	outcome, err := mgr.Update("updatable")
+	outcome, err := mgr.Update(updateID)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -1028,8 +1042,8 @@ func TestPluginManagerUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPluginManager reload: %v", err)
 	}
-	if mgr2.registry.Plugins["updatable"].Version != "2.0.0" {
-		t.Errorf("persisted version = %q, want 2.0.0", mgr2.registry.Plugins["updatable"].Version)
+	if mgr2.registry.Plugins[updateID].Version != "2.0.0" {
+		t.Errorf("persisted version = %q, want 2.0.0", mgr2.registry.Plugins[updateID].Version)
 	}
 }
 
@@ -1148,6 +1162,152 @@ func TestPluginManagerDiscoverClaudePluginFallback(t *testing.T) {
 	}
 	if plugins[0].Plugin.Metadata().Name != "packaged" {
 		t.Errorf("Name = %q", plugins[0].Plugin.Metadata().Name)
+	}
+}
+
+// --- FIX-5 tests: pluginID and sanitizePluginID ---
+
+func TestPluginIDFormat(t *testing.T) {
+	id := pluginID("my-plugin", "external")
+	if id != "my-plugin@external" {
+		t.Errorf("pluginID = %q, want my-plugin@external", id)
+	}
+}
+
+func TestSanitizePluginID(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"simple", "simple"},
+		{"my-plugin@external", "my-plugin-external"},
+		{"path/to\\plugin:v1", "path-to-plugin-v1"},
+		{"no@slash/back\\colon:", "no-slash-back-colon-"},
+	}
+	for _, tt := range tests {
+		got := sanitizePluginID(tt.input)
+		if got != tt.want {
+			t.Errorf("sanitizePluginID(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// --- FIX-6 test: external plugin enabled default ---
+
+func TestDiscoverExternalPluginDefaultDisabled(t *testing.T) {
+	dir := t.TempDir()
+	externalDir := filepath.Join(dir, "external")
+	pluginDir := filepath.Join(externalDir, "ext-plugin")
+	os.MkdirAll(pluginDir, 0o755)
+	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(`{
+		"name": "ext-plugin",
+		"version": "1.0.0",
+		"description": "external plugin",
+		"defaultEnabled": true
+	}`), 0o644)
+
+	mgr, err := NewPluginManager(PluginManagerConfig{
+		ConfigHome:   filepath.Join(dir, "config"),
+		ExternalDirs: []string{externalDir},
+	})
+	if err != nil {
+		t.Fatalf("NewPluginManager: %v", err)
+	}
+
+	plugins, _ := mgr.DiscoverPlugins()
+	if len(plugins) != 1 {
+		t.Fatalf("plugins len = %d", len(plugins))
+	}
+	// External plugins default to disabled regardless of defaultEnabled
+	if plugins[0].Enabled {
+		t.Error("external plugin should default to disabled, even with defaultEnabled=true")
+	}
+}
+
+// --- FIX-8 test: tool description validation ---
+
+func TestValidateToolDescriptionEmpty(t *testing.T) {
+	m := &PluginManifest{
+		Name:        "test",
+		Version:     "1.0.0",
+		Description: "test",
+		Tools: []PluginToolManifest{
+			{Name: "foo", Description: "", Command: "echo"},
+		},
+	}
+	errs := ValidateManifest(m, "", KindBuiltin)
+
+	found := false
+	for _, e := range errs {
+		if e.Code == "empty_entry_field" && e.Message == `tool "foo" description is required` {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected empty_entry_field error for empty tool description, got: %v", errs)
+	}
+}
+
+// --- FIX-10 test: hook and lifecycle path validation ---
+
+func TestValidateHookPathMissing(t *testing.T) {
+	m := &PluginManifest{
+		Name:        "test",
+		Version:     "1.0.0",
+		Description: "test",
+		Hooks: PluginHooks{
+			PreToolUse: []string{"nonexistent-hook-script.sh"},
+		},
+	}
+	errs := ValidateManifest(m, t.TempDir(), KindExternal)
+
+	found := false
+	for _, e := range errs {
+		if e.Code == "missing_path" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected missing_path error for non-existent hook command")
+	}
+}
+
+func TestValidateLifecyclePathMissing(t *testing.T) {
+	m := &PluginManifest{
+		Name:        "test",
+		Version:     "1.0.0",
+		Description: "test",
+		Lifecycle: PluginLifecycle{
+			Init: []string{"nonexistent-init.sh"},
+		},
+	}
+	errs := ValidateManifest(m, t.TempDir(), KindBundled)
+
+	found := false
+	for _, e := range errs {
+		if e.Code == "missing_path" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected missing_path error for non-existent lifecycle command")
+	}
+}
+
+func TestValidateHookPathNotCheckedForBuiltin(t *testing.T) {
+	m := &PluginManifest{
+		Name:        "test",
+		Version:     "1.0.0",
+		Description: "test",
+		Hooks: PluginHooks{
+			PreToolUse: []string{"nonexistent-hook.sh"},
+		},
+	}
+	errs := ValidateManifest(m, t.TempDir(), KindBuiltin)
+
+	for _, e := range errs {
+		if e.Code == "missing_path" {
+			t.Error("should not check hook paths for builtin plugins")
+		}
 	}
 }
 

@@ -31,9 +31,11 @@ func TestBuildPayloadPreToolUse(t *testing.T) {
 	if m["tool_input_json"] != `{"path":"README.md"}` {
 		t.Errorf("unexpected tool_input_json: %v", m["tool_input_json"])
 	}
-	// No tool_output for PreToolUse with nil
-	if _, exists := m["tool_output"]; exists {
-		t.Error("tool_output should not be present when nil")
+	// tool_output should be JSON null when toolOutput is nil (matching Rust None→null)
+	if v, exists := m["tool_output"]; !exists {
+		t.Error("tool_output key should be present (as null)")
+	} else if v != nil {
+		t.Errorf("expected tool_output=null, got %v", v)
 	}
 	if m["tool_result_is_error"] != false {
 		t.Errorf("expected false, got %v", m["tool_result_is_error"])
@@ -326,6 +328,66 @@ func TestHookEnvVarEncoding(t *testing.T) {
 	envFalse := buildEnv(false)
 	if envFalse["HOOK_TOOL_IS_ERROR"] != "0" {
 		t.Errorf("expected HOOK_TOOL_IS_ERROR='0' for isError=false, got %q", envFalse["HOOK_TOOL_IS_ERROR"])
+	}
+}
+
+// --- formatHookFailure tests ---
+
+func TestFormatHookFailureWithStdout(t *testing.T) {
+	msg := formatHookFailure("my-hook.sh", 1, "some output", "some error")
+	expected := "Hook `my-hook.sh` exited with status 1: some output"
+	if msg != expected {
+		t.Errorf("expected %q, got %q", expected, msg)
+	}
+}
+
+func TestFormatHookFailureWithStderrFallback(t *testing.T) {
+	msg := formatHookFailure("my-hook.sh", 3, "", "error details")
+	expected := "Hook `my-hook.sh` exited with status 3: error details"
+	if msg != expected {
+		t.Errorf("expected %q, got %q", expected, msg)
+	}
+}
+
+func TestFormatHookFailureNoOutput(t *testing.T) {
+	msg := formatHookFailure("my-hook.sh", 127, "", "")
+	expected := "Hook `my-hook.sh` exited with status 127"
+	if msg != expected {
+		t.Errorf("expected %q, got %q", expected, msg)
+	}
+}
+
+// --- Payload null key tests ---
+
+func TestBuildPayloadPreToolUseNullOutput(t *testing.T) {
+	payload := BuildPayload(PreToolUse, "Read", `{"path":"x"}`, nil, false)
+	var m map[string]interface{}
+	if err := json.Unmarshal(payload, &m); err != nil {
+		t.Fatal(err)
+	}
+	// tool_output should be present as JSON null
+	v, exists := m["tool_output"]
+	if !exists {
+		t.Fatal("tool_output key should exist (as null)")
+	}
+	if v != nil {
+		t.Errorf("expected null, got %v", v)
+	}
+}
+
+func TestBuildPayloadPostToolUseFailureNullError(t *testing.T) {
+	payload := BuildPayload(PostToolUseFailure, "Bash", `{}`, nil, false)
+	var m map[string]interface{}
+	if err := json.Unmarshal(payload, &m); err != nil {
+		t.Fatal(err)
+	}
+	// tool_error should be present as JSON null
+	v, exists := m["tool_error"]
+	if !exists {
+		t.Fatal("tool_error key should exist (as null)")
+	}
+	if v != nil {
+		t.Errorf("expected null, got %v", v)
 	}
 }
 

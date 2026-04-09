@@ -1,6 +1,9 @@
 package hooks
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // HookConfig holds the hook command lists per event type.
 type HookConfig struct {
@@ -140,7 +143,7 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 			}
 			return HookRunResult{
 				Cancelled: true,
-				Messages:  append(allMessages, fmt.Sprintf("%s hook %q cancelled", event, command)),
+				Messages:  append(allMessages, fmt.Sprintf("%s hook `%s` cancelled while handling `%s`", event, command, toolName)),
 			}
 		}
 
@@ -191,7 +194,7 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 			}
 			// Fallback message when no hook output provided (matching Rust with_fallback_message).
 			if len(allMessages) == 0 {
-				allMessages = append(allMessages, fmt.Sprintf("%s hook denied tool %q", event, toolName))
+				allMessages = append(allMessages, fmt.Sprintf("%s hook denied tool `%s`", event, toolName))
 			}
 			return HookRunResult{
 				Denied:             true,
@@ -200,8 +203,8 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 				PermissionReason:   permReason,
 				UpdatedInput:       updatedInput,
 			}
-		default:
-			// Non-zero (other than 2): failure, stop chain.
+		case result.ExitCode == -1:
+			// Signal-terminated process (matching Rust None exit code case).
 			if reporter != nil {
 				reporter.OnEvent(HookProgressEvent{
 					Kind:     "completed",
@@ -210,9 +213,30 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 					Command:  command,
 				})
 			}
-			// Fallback message when no hook output provided (matching Rust format_hook_failure).
 			if len(allMessages) == 0 {
-				allMessages = append(allMessages, fmt.Sprintf("%s hook %q failed with exit code %d", event, command, result.ExitCode))
+				allMessages = append(allMessages, fmt.Sprintf("%s hook `%s` terminated by signal while handling `%s`", event, command, toolName))
+			}
+			return HookRunResult{
+				Failed:             true,
+				Messages:           allMessages,
+				PermissionOverride: permOverride,
+				PermissionReason:   permReason,
+				UpdatedInput:       updatedInput,
+			}
+		default:
+			// Non-zero (other than 2 or -1): failure, stop chain.
+			if reporter != nil {
+				reporter.OnEvent(HookProgressEvent{
+					Kind:     "completed",
+					Event:    event,
+					ToolName: toolName,
+					Command:  command,
+				})
+			}
+			// Fallback message matching Rust format_hook_failure:
+			// "Hook `{command}` exited with status {code}: {stdout_or_stderr}"
+			if len(allMessages) == 0 {
+				allMessages = append(allMessages, formatHookFailure(command, result.ExitCode, result.Stdout, result.Stderr))
 			}
 			return HookRunResult{
 				Failed:             true,
@@ -240,4 +264,18 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 		PermissionReason:   permReason,
 		UpdatedInput:       updatedInput,
 	}
+}
+
+// formatHookFailure matches Rust's format_hook_failure:
+// "Hook `{command}` exited with status {code}: {stdout_or_stderr}"
+func formatHookFailure(command string, code int, stdout, stderr string) string {
+	msg := fmt.Sprintf("Hook `%s` exited with status %d", command, code)
+	stdout = strings.TrimSpace(stdout)
+	stderr = strings.TrimSpace(stderr)
+	if stdout != "" {
+		msg += ": " + stdout
+	} else if stderr != "" {
+		msg += ": " + stderr
+	}
+	return msg
 }
