@@ -788,3 +788,178 @@ func TestPluginManagerEnableDisable(t *testing.T) {
 		t.Error("foo should be disabled")
 	}
 }
+
+func TestPluginManagerEnableDisablePersistence(t *testing.T) {
+	configHome := filepath.Join(t.TempDir(), "config")
+
+	// Create first manager and enable a plugin.
+	mgr1, err := NewPluginManager(PluginManagerConfig{ConfigHome: configHome})
+	if err != nil {
+		t.Fatalf("NewPluginManager: %v", err)
+	}
+	if err := mgr1.Enable("my-plugin"); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if err := mgr1.Disable("other-plugin"); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+
+	// Create second manager from the same config — state should survive.
+	mgr2, err := NewPluginManager(PluginManagerConfig{ConfigHome: configHome})
+	if err != nil {
+		t.Fatalf("NewPluginManager reload: %v", err)
+	}
+	if !mgr2.config.EnabledPlugins["my-plugin"] {
+		t.Error("my-plugin should be enabled after reload")
+	}
+	if mgr2.config.EnabledPlugins["other-plugin"] {
+		t.Error("other-plugin should be disabled after reload")
+	}
+}
+
+func TestPluginManagerUpdate(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "source-plugin")
+	os.MkdirAll(srcDir, 0o755)
+	os.WriteFile(filepath.Join(srcDir, "plugin.json"), []byte(`{
+		"name": "updatable",
+		"version": "1.0.0",
+		"description": "v1"
+	}`), 0o644)
+
+	configHome := filepath.Join(dir, "config")
+	mgr, err := NewPluginManager(PluginManagerConfig{ConfigHome: configHome})
+	if err != nil {
+		t.Fatalf("NewPluginManager: %v", err)
+	}
+
+	// Install v1.
+	_, err = mgr.Install(srcDir)
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if mgr.registry.Plugins["updatable"].Version != "1.0.0" {
+		t.Fatalf("expected version 1.0.0, got %s", mgr.registry.Plugins["updatable"].Version)
+	}
+
+	// Update source to v2.
+	os.WriteFile(filepath.Join(srcDir, "plugin.json"), []byte(`{
+		"name": "updatable",
+		"version": "2.0.0",
+		"description": "v2"
+	}`), 0o644)
+
+	outcome, err := mgr.Update("updatable")
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if outcome.OldVersion != "1.0.0" {
+		t.Errorf("OldVersion = %q, want 1.0.0", outcome.OldVersion)
+	}
+	if outcome.NewVersion != "2.0.0" {
+		t.Errorf("NewVersion = %q, want 2.0.0", outcome.NewVersion)
+	}
+
+	// Verify registry was persisted.
+	mgr2, err := NewPluginManager(PluginManagerConfig{ConfigHome: configHome})
+	if err != nil {
+		t.Fatalf("NewPluginManager reload: %v", err)
+	}
+	if mgr2.registry.Plugins["updatable"].Version != "2.0.0" {
+		t.Errorf("persisted version = %q, want 2.0.0", mgr2.registry.Plugins["updatable"].Version)
+	}
+}
+
+func TestPluginManagerUpdateNotFound(t *testing.T) {
+	mgr, _ := NewPluginManager(PluginManagerConfig{ConfigHome: t.TempDir()})
+	_, err := mgr.Update("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for updating nonexistent plugin")
+	}
+}
+
+func TestPluginManagerSyncBundled(t *testing.T) {
+	dir := t.TempDir()
+	bundledRoot := filepath.Join(dir, "bundled")
+	configHome := filepath.Join(dir, "config")
+
+	// Create two bundled plugins.
+	for _, name := range []string{"alpha", "bravo"} {
+		pluginDir := filepath.Join(bundledRoot, name)
+		os.MkdirAll(pluginDir, 0o755)
+		os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(`{
+			"name": "`+name+`",
+			"version": "1.0.0",
+			"description": "bundled `+name+`"
+		}`), 0o644)
+	}
+
+	mgr, err := NewPluginManager(PluginManagerConfig{
+		ConfigHome:  configHome,
+		BundledRoot: bundledRoot,
+	})
+	if err != nil {
+		t.Fatalf("NewPluginManager: %v", err)
+	}
+
+	// Sync — both should be added.
+	if err := mgr.SyncBundledPlugins(); err != nil {
+		t.Fatalf("SyncBundledPlugins: %v", err)
+	}
+	if len(mgr.registry.Plugins) != 2 {
+		t.Fatalf("registry len = %d, want 2", len(mgr.registry.Plugins))
+	}
+	if mgr.registry.Plugins["alpha"].Version != "1.0.0" {
+		t.Errorf("alpha version = %q", mgr.registry.Plugins["alpha"].Version)
+	}
+
+	// Update bravo to v2.0.0 on disk.
+	os.WriteFile(filepath.Join(bundledRoot, "bravo", "plugin.json"), []byte(`{
+		"name": "bravo",
+		"version": "2.0.0",
+		"description": "bundled bravo v2"
+	}`), 0o644)
+
+	if err := mgr.SyncBundledPlugins(); err != nil {
+		t.Fatalf("SyncBundledPlugins v2: %v", err)
+	}
+	if mgr.registry.Plugins["bravo"].Version != "2.0.0" {
+		t.Errorf("bravo version after sync = %q, want 2.0.0", mgr.registry.Plugins["bravo"].Version)
+	}
+
+	// Remove alpha from disk.
+	os.RemoveAll(filepath.Join(bundledRoot, "alpha"))
+
+	if err := mgr.SyncBundledPlugins(); err != nil {
+		t.Fatalf("SyncBundledPlugins prune: %v", err)
+	}
+	if _, exists := mgr.registry.Plugins["alpha"]; exists {
+		t.Error("alpha should have been pruned from registry")
+	}
+	if _, exists := mgr.registry.Plugins["bravo"]; !exists {
+		t.Error("bravo should still be in registry")
+	}
+
+	// Verify registry was persisted.
+	mgr2, err := NewPluginManager(PluginManagerConfig{
+		ConfigHome:  configHome,
+		BundledRoot: bundledRoot,
+	})
+	if err != nil {
+		t.Fatalf("NewPluginManager reload: %v", err)
+	}
+	if _, exists := mgr2.registry.Plugins["alpha"]; exists {
+		t.Error("alpha should still be absent after reload")
+	}
+	if mgr2.registry.Plugins["bravo"].Version != "2.0.0" {
+		t.Errorf("bravo version after reload = %q", mgr2.registry.Plugins["bravo"].Version)
+	}
+}
+
+func TestPluginManagerSyncBundledEmptyRoot(t *testing.T) {
+	mgr, _ := NewPluginManager(PluginManagerConfig{ConfigHome: t.TempDir()})
+	// No BundledRoot set — should be a no-op.
+	if err := mgr.SyncBundledPlugins(); err != nil {
+		t.Fatalf("SyncBundledPlugins: %v", err)
+	}
+}

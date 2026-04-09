@@ -27,6 +27,14 @@ type InstallOutcome struct {
 	InstallPath string
 }
 
+// UpdateOutcome records a successful update.
+type UpdateOutcome struct {
+	PluginID    string
+	OldVersion  string
+	NewVersion  string
+	InstallPath string
+}
+
 // InstalledPluginRecord persists info about an installed plugin.
 type InstalledPluginRecord struct {
 	Kind          PluginKind `json:"kind"`
@@ -78,6 +86,18 @@ func NewPluginManager(config PluginManagerConfig) (*PluginManager, error) {
 		}
 		if m.registry.Plugins == nil {
 			m.registry.Plugins = make(map[string]InstalledPluginRecord)
+		}
+	}
+
+	// Load persisted enabled state if caller didn't provide explicit overrides.
+	if config.EnabledPlugins == nil {
+		m.config.EnabledPlugins = make(map[string]bool)
+		settingsPath := m.enabledStatePath()
+		if data, err := os.ReadFile(settingsPath); err == nil {
+			var saved map[string]bool
+			if err := json.Unmarshal(data, &saved); err == nil {
+				m.config.EnabledPlugins = saved
+			}
 		}
 	}
 
@@ -253,22 +273,161 @@ func (m *PluginManager) Uninstall(pluginID string) error {
 	return m.saveRegistry()
 }
 
-// Enable marks a plugin as enabled in the config.
+// Enable marks a plugin as enabled and persists the state.
 func (m *PluginManager) Enable(pluginID string) error {
 	if m.config.EnabledPlugins == nil {
 		m.config.EnabledPlugins = make(map[string]bool)
 	}
 	m.config.EnabledPlugins[pluginID] = true
-	return nil
+	return m.saveEnabledState()
 }
 
-// Disable marks a plugin as disabled in the config.
+// Disable marks a plugin as disabled and persists the state.
 func (m *PluginManager) Disable(pluginID string) error {
 	if m.config.EnabledPlugins == nil {
 		m.config.EnabledPlugins = make(map[string]bool)
 	}
 	m.config.EnabledPlugins[pluginID] = false
-	return nil
+	return m.saveEnabledState()
+}
+
+// Update re-reads a plugin's manifest from its original source, copies updated
+// files, and refreshes the registry record.
+func (m *PluginManager) Update(pluginID string) (*UpdateOutcome, error) {
+	record, ok := m.registry.Plugins[pluginID]
+	if !ok {
+		return nil, &PluginError{
+			Kind:    ErrNotFound,
+			Message: fmt.Sprintf("plugin %q is not installed", pluginID),
+		}
+	}
+
+	// Re-read manifest from the original source.
+	manifestPath := filepath.Join(record.Source, "plugin.json")
+	manifest, err := LoadManifest(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+
+	oldVersion := record.Version
+
+	// Replace the installed files.
+	if err := os.RemoveAll(record.InstallPath); err != nil {
+		return nil, &PluginError{
+			Kind:    ErrIO,
+			Message: fmt.Sprintf("failed to clean install path: %s", record.InstallPath),
+			Cause:   err,
+		}
+	}
+	if err := copyDir(record.Source, record.InstallPath); err != nil {
+		return nil, &PluginError{
+			Kind:    ErrIO,
+			Message: fmt.Sprintf("failed to copy updated plugin to %s", record.InstallPath),
+			Cause:   err,
+		}
+	}
+
+	// Update the registry record.
+	record.Version = manifest.Version
+	record.Description = manifest.Description
+	record.Name = manifest.Name
+	record.UpdatedAtMs = time.Now().UnixMilli()
+	m.registry.Plugins[pluginID] = record
+
+	if err := m.saveRegistry(); err != nil {
+		return nil, err
+	}
+
+	return &UpdateOutcome{
+		PluginID:    pluginID,
+		OldVersion:  oldVersion,
+		NewVersion:  manifest.Version,
+		InstallPath: record.InstallPath,
+	}, nil
+}
+
+// SyncBundledPlugins auto-installs new bundled plugins, updates version-changed
+// ones, and prunes bundled entries that no longer exist in BundledRoot.
+func (m *PluginManager) SyncBundledPlugins() error {
+	if m.config.BundledRoot == "" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(m.config.BundledRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return &PluginError{Kind: ErrIO, Message: "failed to read bundled root", Cause: err}
+	}
+
+	// Track which bundled plugin IDs we find on disk.
+	foundBundled := make(map[string]bool)
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pluginDir := filepath.Join(m.config.BundledRoot, entry.Name())
+		manifestPath := filepath.Join(pluginDir, "plugin.json")
+
+		manifest, err := LoadManifest(manifestPath)
+		if err != nil {
+			continue // skip invalid bundled plugins
+		}
+
+		id := manifest.Name
+		foundBundled[id] = true
+
+		existing, exists := m.registry.Plugins[id]
+		if !exists {
+			// New bundled plugin — add to registry.
+			now := time.Now().UnixMilli()
+			m.registry.Plugins[id] = InstalledPluginRecord{
+				Kind:          KindBundled,
+				ID:            id,
+				Name:          manifest.Name,
+				Version:       manifest.Version,
+				Description:   manifest.Description,
+				InstallPath:   pluginDir,
+				Source:        pluginDir,
+				InstalledAtMs: now,
+				UpdatedAtMs:   now,
+			}
+		} else if existing.Version != manifest.Version {
+			// Version changed — update record.
+			existing.Version = manifest.Version
+			existing.Description = manifest.Description
+			existing.UpdatedAtMs = time.Now().UnixMilli()
+			m.registry.Plugins[id] = existing
+		}
+	}
+
+	// Prune bundled entries that no longer exist on disk.
+	for id, record := range m.registry.Plugins {
+		if record.Kind == KindBundled && !foundBundled[id] {
+			delete(m.registry.Plugins, id)
+		}
+	}
+
+	return m.saveRegistry()
+}
+
+func (m *PluginManager) enabledStatePath() string {
+	return filepath.Join(m.config.ConfigHome, "plugins", "settings.json")
+}
+
+func (m *PluginManager) saveEnabledState() error {
+	p := m.enabledStatePath()
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return &PluginError{Kind: ErrIO, Message: "failed to create settings directory", Cause: err}
+	}
+	data, err := json.MarshalIndent(m.config.EnabledPlugins, "", "  ")
+	if err != nil {
+		return &PluginError{Kind: ErrJSON, Message: "failed to marshal enabled state", Cause: err}
+	}
+	return os.WriteFile(p, data, 0o644)
 }
 
 func (m *PluginManager) saveRegistry() error {

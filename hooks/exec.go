@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"sync/atomic"
 	"time"
@@ -42,11 +43,13 @@ func runShellCommand(command string, env map[string]string, stdin []byte, abort 
 	shell, args := shellArgs(command)
 	cmd := exec.Command(shell, args...)
 
-	// Set environment variables.
-	if len(env) > 0 {
-		for k, v := range env {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
+	// Inherit parent process environment, then add hook-specific vars.
+	// Rust's Command::env() adds to the inherited env; in Go, setting
+	// cmd.Env to a non-nil slice replaces it, so we must start from
+	// os.Environ() to preserve PATH, HOME, SHELL, etc.
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
 	// Provide stdin.

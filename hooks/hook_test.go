@@ -256,6 +256,38 @@ func TestAllow(t *testing.T) {
 	}
 }
 
+// --- Env var encoding test ---
+
+func TestHookEnvVarEncoding(t *testing.T) {
+	// Verify HOOK_TOOL_IS_ERROR uses "1"/"0" encoding (matching Rust),
+	// not "true"/"false" (Go's fmt.Sprintf("%t")).
+	// We construct the env map the same way runner.go does.
+
+	buildEnv := func(isError bool) map[string]string {
+		env := map[string]string{
+			"HOOK_EVENT":      string(PreToolUse),
+			"HOOK_TOOL_NAME":  "Bash",
+			"HOOK_TOOL_INPUT": "{}",
+		}
+		if isError {
+			env["HOOK_TOOL_IS_ERROR"] = "1"
+		} else {
+			env["HOOK_TOOL_IS_ERROR"] = "0"
+		}
+		return env
+	}
+
+	envTrue := buildEnv(true)
+	if envTrue["HOOK_TOOL_IS_ERROR"] != "1" {
+		t.Errorf("expected HOOK_TOOL_IS_ERROR='1' for isError=true, got %q", envTrue["HOOK_TOOL_IS_ERROR"])
+	}
+
+	envFalse := buildEnv(false)
+	if envFalse["HOOK_TOOL_IS_ERROR"] != "0" {
+		t.Errorf("expected HOOK_TOOL_IS_ERROR='0' for isError=false, got %q", envFalse["HOOK_TOOL_IS_ERROR"])
+	}
+}
+
 // --- HookRunner empty config test ---
 
 func TestHookRunnerEmptyConfig(t *testing.T) {

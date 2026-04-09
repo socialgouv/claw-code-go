@@ -1,7 +1,5 @@
 package hooks
 
-import "fmt"
-
 // HookConfig holds the hook command lists per event type.
 type HookConfig struct {
 	PreToolUse         []string
@@ -116,7 +114,11 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 		if toolOutput != nil {
 			env["HOOK_TOOL_OUTPUT"] = *toolOutput
 		}
-		env["HOOK_TOOL_IS_ERROR"] = fmt.Sprintf("%t", isError)
+		if isError {
+			env["HOOK_TOOL_IS_ERROR"] = "1"
+		} else {
+			env["HOOK_TOOL_IS_ERROR"] = "0"
+		}
 
 		// Build payload.
 		payload := BuildPayload(event, toolName, toolInput, toolOutput, isError)
