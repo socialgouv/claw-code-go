@@ -70,6 +70,188 @@ func TestJsonlSinkWritesValidJSONL(t *testing.T) {
 	}
 }
 
+func TestTelemetryEventFlatJSONLayoutAnalytics(t *testing.T) {
+	// Verify Analytics events serialize flat, matching Rust serde(tag="type")
+	event := TelemetryEvent{
+		Type: EventTypeAnalytics,
+		Analytics: &AnalyticsEvent{
+			Namespace:  "cli",
+			Action:     "turn_completed",
+			Properties: map[string]any{"ok": true},
+		},
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Parse into raw map to check layout
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	// Must have flat fields, NOT a nested "analytics" key
+	if _, nested := raw["analytics"]; nested {
+		t.Error("analytics event should be flat, not nested under 'analytics' key")
+	}
+	if raw["type"] != "analytics" {
+		t.Errorf("expected type=analytics, got %v", raw["type"])
+	}
+	if raw["namespace"] != "cli" {
+		t.Errorf("expected namespace=cli, got %v", raw["namespace"])
+	}
+	if raw["action"] != "turn_completed" {
+		t.Errorf("expected action=turn_completed, got %v", raw["action"])
+	}
+	props, ok := raw["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected properties map")
+	}
+	if props["ok"] != true {
+		t.Errorf("expected properties.ok=true, got %v", props["ok"])
+	}
+}
+
+func TestTelemetryEventFlatJSONLayoutSessionTrace(t *testing.T) {
+	// Verify SessionTrace events serialize flat, matching Rust serde(tag="type")
+	event := TelemetryEvent{
+		Type: EventTypeSessionTrace,
+		SessionTrace: &SessionTraceRecord{
+			SessionID:   "sess-1",
+			Sequence:    42,
+			Name:        "http_request_started",
+			TimestampMs: 1234567890,
+			Attributes:  map[string]any{"method": "POST"},
+		},
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	// Must have flat fields, NOT a nested "session_trace" key
+	if _, nested := raw["session_trace"]; nested {
+		t.Error("session_trace event should be flat, not nested under 'session_trace' key")
+	}
+	if raw["type"] != "session_trace" {
+		t.Errorf("expected type=session_trace, got %v", raw["type"])
+	}
+	if raw["session_id"] != "sess-1" {
+		t.Errorf("expected session_id=sess-1, got %v", raw["session_id"])
+	}
+	// JSON numbers are float64
+	if raw["sequence"] != float64(42) {
+		t.Errorf("expected sequence=42, got %v", raw["sequence"])
+	}
+	if raw["name"] != "http_request_started" {
+		t.Errorf("expected name=http_request_started, got %v", raw["name"])
+	}
+}
+
+func TestTelemetryEventFlatJSONLayoutHTTP(t *testing.T) {
+	// Verify HTTP events also serialize flat
+	event := TelemetryEvent{
+		Type:      EventTypeHTTPRequestStarted,
+		SessionID: "sess-2",
+		Attempt:   1,
+		Method:    "POST",
+		Path:      "/v1/messages",
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	if raw["type"] != "http_request_started" {
+		t.Errorf("expected type=http_request_started, got %v", raw["type"])
+	}
+	if raw["session_id"] != "sess-2" {
+		t.Errorf("expected session_id=sess-2, got %v", raw["session_id"])
+	}
+	if raw["method"] != "POST" {
+		t.Errorf("expected method=POST, got %v", raw["method"])
+	}
+}
+
+func TestTelemetryEventJSONRoundTrip(t *testing.T) {
+	// Verify Marshal → Unmarshal round-trip for all event types
+	events := []TelemetryEvent{
+		{
+			Type: EventTypeAnalytics,
+			Analytics: &AnalyticsEvent{
+				Namespace: "cli", Action: "start",
+				Properties: map[string]any{"model": "claude"},
+			},
+		},
+		{
+			Type: EventTypeSessionTrace,
+			SessionTrace: &SessionTraceRecord{
+				SessionID: "s1", Sequence: 7, Name: "trace",
+				TimestampMs: 9999, Attributes: map[string]any{"k": "v"},
+			},
+		},
+		{
+			Type:      EventTypeHTTPRequestSucceeded,
+			SessionID: "s2", Attempt: 3, Method: "POST",
+			Path: "/v1/messages", Status: 200, RequestID: "req-1",
+		},
+	}
+
+	for _, original := range events {
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", original.Type, err)
+		}
+		var decoded TelemetryEvent
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("unmarshal %s: %v", original.Type, err)
+		}
+		if decoded.Type != original.Type {
+			t.Errorf("type mismatch: %s != %s", decoded.Type, original.Type)
+		}
+		switch original.Type {
+		case EventTypeAnalytics:
+			if decoded.Analytics == nil {
+				t.Fatal("analytics should be reconstructed")
+			}
+			if decoded.Analytics.Namespace != original.Analytics.Namespace {
+				t.Error("analytics namespace mismatch")
+			}
+			if decoded.Analytics.Action != original.Analytics.Action {
+				t.Error("analytics action mismatch")
+			}
+		case EventTypeSessionTrace:
+			if decoded.SessionTrace == nil {
+				t.Fatal("session trace should be reconstructed")
+			}
+			if decoded.SessionTrace.SessionID != original.SessionTrace.SessionID {
+				t.Error("session trace session_id mismatch")
+			}
+			if decoded.SessionTrace.Sequence != original.SessionTrace.Sequence {
+				t.Error("session trace sequence mismatch")
+			}
+		case EventTypeHTTPRequestSucceeded:
+			if decoded.Status != original.Status {
+				t.Error("HTTP status mismatch")
+			}
+			if decoded.RequestID != original.RequestID {
+				t.Error("HTTP request_id mismatch")
+			}
+		}
+	}
+}
+
 func TestJsonlSinkCreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "deep", "telemetry.jsonl")

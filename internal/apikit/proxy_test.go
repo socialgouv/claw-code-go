@@ -134,6 +134,14 @@ func TestBuildHTTPClientSucceedsWithUnifiedProxy(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPClientOrDefaultReturnsClientAlways(t *testing.T) {
+	// Should always return a non-nil client, even when env vars are unset
+	client := BuildHTTPClientOrDefault()
+	if client == nil {
+		t.Error("BuildHTTPClientOrDefault should always return a non-nil client")
+	}
+}
+
 func TestNoProxyExclusion(t *testing.T) {
 	// Test the parsing and matching logic directly
 	list := parseNoProxy("localhost,127.0.0.1,.corp")

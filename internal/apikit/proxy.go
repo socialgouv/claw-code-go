@@ -43,6 +43,19 @@ func BuildHTTPClient() (*http.Client, error) {
 	return BuildHTTPClientWith(ProxyConfigFromEnv())
 }
 
+// BuildHTTPClientOrDefault is the infallible counterpart to BuildHTTPClient.
+// When the proxy configuration is malformed it falls back to a plain client
+// so that callers retain the previous behaviour and the failure surfaces on
+// the first outbound request instead of at construction time. Matches
+// Rust's build_http_client_or_default().
+func BuildHTTPClientOrDefault() *http.Client {
+	client, err := BuildHTTPClient()
+	if err != nil {
+		return &http.Client{}
+	}
+	return client
+}
+
 // BuildHTTPClientWith returns an *http.Client configured with the given proxy
 // settings. When no proxy is configured, the client uses Go's default
 // transport (which respects standard env vars itself, but we disable that
