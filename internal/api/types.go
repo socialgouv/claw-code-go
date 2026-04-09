@@ -93,8 +93,8 @@ const (
 
 // Delta represents the delta portion of a content_block_delta event.
 type Delta struct {
-	Type       string `json:"type"`        // "text_delta" or "input_json_delta"
-	Text       string `json:"text"`        // for text_delta
+	Type        string `json:"type"`         // "text_delta" or "input_json_delta"
+	Text        string `json:"text"`         // for text_delta
 	PartialJSON string `json:"partial_json"` // for input_json_delta
 }
 

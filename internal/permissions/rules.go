@@ -25,10 +25,10 @@ const (
 
 // Rule is a single permission entry that matches a tool (and optionally an input substring).
 type Rule struct {
-	Tool     string   `json:"tool"`     // exact tool name, or "*" for any tool
-	Pattern  string   `json:"pattern"`  // substring match on input summary (empty = match all)
-	Decision Decision `json:"-"`        // resolved from the JSON "decision" field
-	RawDecision string `json:"decision"` // "allow", "deny", "ask"
+	Tool        string   `json:"tool"`     // exact tool name, or "*" for any tool
+	Pattern     string   `json:"pattern"`  // substring match on input summary (empty = match all)
+	Decision    Decision `json:"-"`        // resolved from the JSON "decision" field
+	RawDecision string   `json:"decision"` // "allow", "deny", "ask"
 }
 
 // Ruleset is an ordered list of rules; the first match wins.

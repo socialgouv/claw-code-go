@@ -6,10 +6,10 @@ import "fmt"
 type PermissionMode int
 
 const (
-	ModeDefault          PermissionMode = iota // normal: consult ruleset, ask when needed
-	ModeAcceptEdits                            // auto-allow edit tools, ask for bash
-	ModeBypassPermissions                      // allow everything without asking
-	ModePlan                                   // deny all execution; describe only
+	ModeDefault           PermissionMode = iota // normal: consult ruleset, ask when needed
+	ModeAcceptEdits                             // auto-allow edit tools, ask for bash
+	ModeBypassPermissions                       // allow everything without asking
+	ModePlan                                    // deny all execution; describe only
 )
 
 // ParsePermissionMode converts a CLI string to a PermissionMode.

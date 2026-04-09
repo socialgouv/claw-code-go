@@ -84,8 +84,8 @@ type ResourcesCapability struct {
 
 // MCPTool describes a tool exposed by an MCP server.
 type MCPTool struct {
-	Name        string           `json:"name"`
-	Description string           `json:"description,omitempty"`
+	Name        string             `json:"name"`
+	Description string             `json:"description,omitempty"`
 	InputSchema MCPToolInputSchema `json:"inputSchema"`
 }
 

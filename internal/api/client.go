@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	defaultBaseURL        = "https://api.anthropic.com"
-	anthropicVersion      = "2023-06-01"
-	anthropicBetaHeader   = "anthropic-beta"
+	defaultBaseURL         = "https://api.anthropic.com"
+	anthropicVersion       = "2023-06-01"
+	anthropicBetaHeader    = "anthropic-beta"
 	anthropicVersionHeader = "anthropic-version"
 )
 

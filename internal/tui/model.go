@@ -68,16 +68,16 @@ var anthropicAuthMethods = []loginMethodEntry{
 type appState int
 
 const (
-	stateInput          appState = iota // waiting for user input
-	stateBusy                           // streaming response from API
-	statePicker                         // model selection overlay
-	stateHelp                           // help panel overlay
-	statePermission                     // waiting for permission decision
-	stateLoginProvider                  // /login: provider picker
-	stateLoginMethod                    // /login: auth-method picker (Anthropic)
-	stateLoginAPIKey                    // /login: API key text input
-	stateLoginOAuth                     // /login: waiting for OAuth browser flow
-	stateAskUser                        // agent has asked the user a question
+	stateInput         appState = iota // waiting for user input
+	stateBusy                          // streaming response from API
+	statePicker                        // model selection overlay
+	stateHelp                          // help panel overlay
+	statePermission                    // waiting for permission decision
+	stateLoginProvider                 // /login: provider picker
+	stateLoginMethod                   // /login: auth-method picker (Anthropic)
+	stateLoginAPIKey                   // /login: API key text input
+	stateLoginOAuth                    // /login: waiting for OAuth browser flow
+	stateAskUser                       // agent has asked the user a question
 )
 
 // Bubble Tea messages for async streaming events.
@@ -567,7 +567,7 @@ func (m Model) handleStatus() (tea.Model, tea.Cmd) {
 		fmt.Sprintf("Messages       : %d", m.loop.MessageCount()),
 		fmt.Sprintf("Tokens in/out  : %s / %s", formatNum(m.inputTokens), formatNum(m.outputTokens)),
 	}
-	m.viewBuf += statusStyle.Render(strings.Join(lines, "\n")+"\n\n")
+	m.viewBuf += statusStyle.Render(strings.Join(lines, "\n") + "\n\n")
 	m = m.refreshViewport()
 	return m, nil
 }
@@ -625,7 +625,7 @@ func (m Model) handleConfig(parts []string) (tea.Model, tea.Cmd) {
 			fmt.Sprintf("maxTokens      = %d", m.cfg.MaxTokens),
 			fmt.Sprintf("theme          = %s", m.cfg.Theme),
 		}
-		m.viewBuf += statusStyle.Render(strings.Join(lines, "\n")+"\n\n")
+		m.viewBuf += statusStyle.Render(strings.Join(lines, "\n") + "\n\n")
 		m = m.refreshViewport()
 		return m, nil
 	}

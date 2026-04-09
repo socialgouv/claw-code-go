@@ -114,9 +114,9 @@ type oaiChunk struct {
 }
 
 type oaiChoice struct {
-	Index        int       `json:"index"`
-	Delta        oaiDelta  `json:"delta"`
-	FinishReason *string   `json:"finish_reason"`
+	Index        int      `json:"index"`
+	Delta        oaiDelta `json:"delta"`
+	FinishReason *string  `json:"finish_reason"`
 }
 
 type oaiDelta struct {

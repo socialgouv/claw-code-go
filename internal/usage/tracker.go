@@ -16,9 +16,9 @@ type ModelPrice struct {
 // Prices are best-effort and may drift; token counts are always authoritative.
 var knownPrices = map[string]ModelPrice{
 	// Anthropic Claude 4.x
-	"claude-opus-4-6":            {InputPerMillion: 15.0, OutputPerMillion: 75.0},
-	"claude-sonnet-4-6":          {InputPerMillion: 3.0, OutputPerMillion: 15.0},
-	"claude-haiku-4-5-20251001":  {InputPerMillion: 0.80, OutputPerMillion: 4.0},
+	"claude-opus-4-6":           {InputPerMillion: 15.0, OutputPerMillion: 75.0},
+	"claude-sonnet-4-6":         {InputPerMillion: 3.0, OutputPerMillion: 15.0},
+	"claude-haiku-4-5-20251001": {InputPerMillion: 0.80, OutputPerMillion: 4.0},
 	// Anthropic Claude 3.x (legacy)
 	"claude-3-5-sonnet-20241022": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
 	"claude-3-5-haiku-20241022":  {InputPerMillion: 0.80, OutputPerMillion: 4.0},
@@ -31,12 +31,12 @@ var knownPrices = map[string]ModelPrice{
 
 // Tracker accumulates token usage across all turns in a session.
 type Tracker struct {
-	model        string
-	TotalInput   int
-	TotalOutput  int
-	CacheWrite   int // prompt cache write tokens (if reported)
-	CacheRead    int // prompt cache read tokens (if reported)
-	Turns        int // number of completed model turns
+	model       string
+	TotalInput  int
+	TotalOutput int
+	CacheWrite  int // prompt cache write tokens (if reported)
+	CacheRead   int // prompt cache read tokens (if reported)
+	Turns       int // number of completed model turns
 }
 
 // NewTracker creates a new Tracker for the given model ID.

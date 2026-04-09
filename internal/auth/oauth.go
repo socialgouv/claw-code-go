@@ -103,7 +103,7 @@ func StartOAuthFlow() (*TokenData, error) {
 	})
 
 	srv := &http.Server{Handler: mux}
-	go srv.Serve(listener) //nolint:errcheck
+	go srv.Serve(listener)                   //nolint:errcheck
 	defer srv.Shutdown(context.Background()) //nolint:errcheck
 
 	authURL := buildAuthURL(redirectURI, pkce.Challenge, state)
@@ -279,7 +279,7 @@ func (s *OAuthSession) Complete() (*TokenData, error) {
 	})
 
 	srv := &http.Server{Handler: mux}
-	go srv.Serve(s.listener) //nolint:errcheck
+	go srv.Serve(s.listener)                 //nolint:errcheck
 	defer srv.Shutdown(context.Background()) //nolint:errcheck
 
 	openBrowser(s.AuthURL)

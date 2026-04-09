@@ -18,16 +18,16 @@ const systemPromptBase = `You are Claude Code, an AI assistant for software engi
 
 // ConversationLoop manages the agentic conversation loop with tool use.
 type ConversationLoop struct {
-	Client          api.APIClient // provider-agnostic client interface
-	Session         *Session
-	Tools           []api.Tool
-	Permissions     *Permissions
-	PermManager     *permissions.Manager  // Phase 5 permission manager (may be nil)
-	Config          *Config
-	MCPRegistry     *mcp.Registry         // MCP server registry (may be nil)
-	Compaction      CompactionState        // Phase 6 token tracking and compaction state
-	CtxAssembler    *clawctx.Assembler    // Phase 12 context assembler (may be nil)
-	Usage           *usage.Tracker        // Phase 13 per-session token usage tracker
+	Client       api.APIClient // provider-agnostic client interface
+	Session      *Session
+	Tools        []api.Tool
+	Permissions  *Permissions
+	PermManager  *permissions.Manager // Phase 5 permission manager (may be nil)
+	Config       *Config
+	MCPRegistry  *mcp.Registry      // MCP server registry (may be nil)
+	Compaction   CompactionState    // Phase 6 token tracking and compaction state
+	CtxAssembler *clawctx.Assembler // Phase 12 context assembler (may be nil)
+	Usage        *usage.Tracker     // Phase 13 per-session token usage tracker
 }
 
 // NewConversationLoop creates a new conversation loop with the given client.
@@ -172,13 +172,13 @@ func (loop *ConversationLoop) runOneTurn(ctx context.Context) (string, error) {
 	}
 
 	var (
-		textBlocks    []api.ContentBlock
-		toolBlocks    []toolBlock
-		currentText   string
-		currentTool   *toolBlock
-		stopReason    string
-		blockIndex    int
-		blockTypeMap  = make(map[int]string) // index -> "text" or "tool_use"
+		textBlocks   []api.ContentBlock
+		toolBlocks   []toolBlock
+		currentText  string
+		currentTool  *toolBlock
+		stopReason   string
+		blockIndex   int
+		blockTypeMap = make(map[int]string) // index -> "text" or "tool_use"
 	)
 
 	_ = blockIndex // suppress unused warning
@@ -497,9 +497,9 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 				// Plan mode: describe without executing.
 				if loop.PermManager.Mode == permissions.ModePlan {
 					planResult := api.ContentBlock{
-						Type:    "tool_result",
+						Type:      "tool_result",
 						ToolUseID: tb.id,
-						Content: []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("[Plan: %s %s]", tb.name, summary)}},
+						Content:   []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("[Plan: %s %s]", tb.name, summary)}},
 					}
 					toolResults = append(toolResults, planResult)
 					continue
@@ -508,10 +508,10 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 				switch decision {
 				case permissions.DecisionDeny:
 					denied := api.ContentBlock{
-						Type:    "tool_result",
+						Type:      "tool_result",
 						ToolUseID: tb.id,
-						Content: []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("Permission denied for tool: %s", tb.name)}},
-						IsError: true,
+						Content:   []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("Permission denied for tool: %s", tb.name)}},
+						IsError:   true,
 					}
 					toolResults = append(toolResults, denied)
 					continue
@@ -539,10 +539,10 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 					switch userDecision {
 					case PermDecisionDeny:
 						denied := api.ContentBlock{
-							Type:    "tool_result",
+							Type:      "tool_result",
 							ToolUseID: tb.id,
-							Content: []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("Permission denied for tool: %s", tb.name)}},
-							IsError: true,
+							Content:   []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("Permission denied for tool: %s", tb.name)}},
+							IsError:   true,
 						}
 						toolResults = append(toolResults, denied)
 						continue

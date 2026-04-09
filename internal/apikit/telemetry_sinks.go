@@ -56,16 +56,24 @@ func (s *JsonlTelemetrySink) Path() string {
 	return s.path
 }
 
-// Record writes one JSON line and flushes.
-func (s *JsonlTelemetrySink) Record(event TelemetryEvent) {
+// RecordErr writes one JSON line and flushes, returning any error encountered.
+func (s *JsonlTelemetrySink) RecordErr(event TelemetryEvent) error {
 	line, err := json.Marshal(event)
 	if err != nil {
-		return
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, _ = s.file.Write(append(line, '\n'))
-	_ = s.file.Sync()
+	if _, err := s.file.Write(append(line, '\n')); err != nil {
+		return err
+	}
+	return s.file.Sync()
+}
+
+// Record writes one JSON line and flushes. Errors are silently discarded to
+// satisfy the TelemetrySink interface (matching Rust fire-and-forget behavior).
+func (s *JsonlTelemetrySink) Record(event TelemetryEvent) {
+	_ = s.RecordErr(event)
 }
 
 // Close closes the underlying file.

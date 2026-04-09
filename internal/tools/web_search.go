@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	braveSearchURL  = "https://api.search.brave.com/res/v1/web/search"
-	ddgLiteURL      = "https://lite.duckduckgo.com/lite/"
-	searchTimeout   = 15 * time.Second
+	braveSearchURL    = "https://api.search.brave.com/res/v1/web/search"
+	ddgLiteURL        = "https://lite.duckduckgo.com/lite/"
+	searchTimeout     = 15 * time.Second
 	defaultNumResults = 5
 )
 

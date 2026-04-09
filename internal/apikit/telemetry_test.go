@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -391,6 +392,186 @@ func TestConcurrentRecordIsSafe(t *testing.T) {
 		}
 		seqs[e.SessionTrace.Sequence] = true
 	}
+}
+
+func TestJsonlSinkRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "roundtrip.jsonl")
+
+	sink, err := NewJsonlTelemetrySink(path)
+	if err != nil {
+		t.Fatalf("failed to create sink: %v", err)
+	}
+
+	events := []TelemetryEvent{
+		{Type: EventTypeAnalytics, Analytics: &AnalyticsEvent{Namespace: "cli", Action: "start"}},
+		{Type: EventTypeHTTPRequestStarted, SessionID: "s1", Attempt: 1, Method: "POST", Path: "/v1/messages"},
+		{Type: EventTypeSessionTrace, SessionTrace: &SessionTraceRecord{SessionID: "s1", Sequence: 0, Name: "trace", TimestampMs: 100}},
+	}
+	for _, e := range events {
+		sink.Record(e)
+	}
+	sink.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+
+	lines := splitNonEmpty(string(data))
+	if len(lines) != len(events) {
+		t.Fatalf("expected %d lines, got %d", len(events), len(lines))
+	}
+	for i, line := range lines {
+		var decoded TelemetryEvent
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Fatalf("line %d: invalid JSON: %v", i, err)
+		}
+		if decoded.Type != events[i].Type {
+			t.Errorf("line %d: expected type %s, got %s", i, events[i].Type, decoded.Type)
+		}
+	}
+}
+
+func TestJsonlSinkConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "concurrent.jsonl")
+
+	sink, err := NewJsonlTelemetrySink(path)
+	if err != nil {
+		t.Fatalf("failed to create sink: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			sink.Record(TelemetryEvent{
+				Type:      EventTypeHTTPRequestStarted,
+				SessionID: "concurrent",
+				Attempt:   uint32(n),
+				Method:    "GET",
+				Path:      "/test",
+			})
+		}(i)
+	}
+	wg.Wait()
+	sink.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	lines := splitNonEmpty(string(data))
+	if len(lines) != 100 {
+		t.Errorf("expected 100 lines from concurrent writes, got %d", len(lines))
+	}
+	for i, line := range lines {
+		var decoded TelemetryEvent
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Errorf("line %d: invalid JSON: %v", i, err)
+		}
+	}
+}
+
+func TestSessionTracerClose(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tracer_close.jsonl")
+
+	sink, err := NewJsonlTelemetrySink(path)
+	if err != nil {
+		t.Fatalf("failed to create sink: %v", err)
+	}
+	tracer := NewSessionTracer("close-test", sink)
+	tracer.Record("before_close", nil)
+
+	if err := tracer.Close(); err != nil {
+		t.Errorf("expected nil error from Close, got %v", err)
+	}
+}
+
+func TestSessionTracerCloseNonCloser(t *testing.T) {
+	sink := &MemoryTelemetrySink{}
+	tracer := NewSessionTracer("no-closer", sink)
+	tracer.Record("event", nil)
+
+	if err := tracer.Close(); err != nil {
+		t.Errorf("expected nil error from Close on non-closer sink, got %v", err)
+	}
+}
+
+func TestJsonlSinkRecordErrReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "err_test.jsonl")
+
+	sink, err := NewJsonlTelemetrySink(path)
+	if err != nil {
+		t.Fatalf("failed to create sink: %v", err)
+	}
+
+	// Writing before close should succeed
+	if err := sink.RecordErr(TelemetryEvent{Type: EventTypeAnalytics, Analytics: &AnalyticsEvent{Namespace: "cli", Action: "ok"}}); err != nil {
+		t.Errorf("expected no error before close, got %v", err)
+	}
+
+	// Close the sink, then try to write
+	sink.Close()
+	err = sink.RecordErr(TelemetryEvent{Type: EventTypeAnalytics, Analytics: &AnalyticsEvent{Namespace: "cli", Action: "fail"}})
+	if err == nil {
+		t.Error("expected error writing to closed sink, got nil")
+	}
+}
+
+func TestTelemetryEventFlatJSONLayoutHTTPFailed(t *testing.T) {
+	event := TelemetryEvent{
+		Type:      EventTypeHTTPRequestFailed,
+		SessionID: "sess-fail",
+		Attempt:   2,
+		Method:    "POST",
+		Path:      "/v1/messages",
+		Error:     "connection reset",
+		Retryable: true,
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	if raw["type"] != "http_request_failed" {
+		t.Errorf("expected type=http_request_failed, got %v", raw["type"])
+	}
+	if raw["session_id"] != "sess-fail" {
+		t.Errorf("expected session_id=sess-fail, got %v", raw["session_id"])
+	}
+	if raw["error"] != "connection reset" {
+		t.Errorf("expected error='connection reset', got %v", raw["error"])
+	}
+	if raw["retryable"] != true {
+		t.Errorf("expected retryable=true, got %v", raw["retryable"])
+	}
+	if raw["method"] != "POST" {
+		t.Errorf("expected method=POST, got %v", raw["method"])
+	}
+	if raw["attempt"] != float64(2) {
+		t.Errorf("expected attempt=2, got %v", raw["attempt"])
+	}
+}
+
+// splitNonEmpty splits s by newline and returns non-empty strings.
+func splitNonEmpty(s string) []string {
+	var result []string
+	for _, line := range strings.Split(s, "\n") {
+		if line != "" {
+			result = append(result, line)
+		}
+	}
+	return result
 }
 
 func TestAnthropicRequestProfileHeaders(t *testing.T) {

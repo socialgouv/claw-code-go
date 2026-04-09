@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	defaultMaxBytes  = 50 * 1024 // 50 KB
-	webFetchTimeout  = 15 * time.Second
+	defaultMaxBytes = 50 * 1024 // 50 KB
+	webFetchTimeout = 15 * time.Second
 )
 
 var (

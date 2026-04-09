@@ -1,6 +1,7 @@
 package apikit
 
 import (
+	"io"
 	"sync/atomic"
 )
 
@@ -23,6 +24,15 @@ func NewSessionTracer(sessionID string, sink TelemetrySink) *SessionTracer {
 // SessionID returns the session identifier.
 func (t *SessionTracer) SessionID() string {
 	return t.sessionID
+}
+
+// Close closes the underlying sink if it implements io.Closer.
+// Returns nil if the sink does not support closing.
+func (t *SessionTracer) Close() error {
+	if c, ok := t.sink.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 // Record emits a named session trace event with attributes.
