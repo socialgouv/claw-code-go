@@ -2,6 +2,8 @@ package apikit
 
 import (
 	"encoding/json"
+	"math"
+	"strings"
 )
 
 // ModelTokenLimit holds the token limits for a known model.
@@ -27,10 +29,26 @@ func ModelTokenLimitForModel(model string) *ModelTokenLimit {
 }
 
 // ResolveModelAlias normalizes model names to their canonical form.
-// For now this is a pass-through; real alias resolution would map
-// e.g. "claude-3-7-sonnet-latest" → "claude-sonnet-4-6".
+// Matches the Rust resolve_model_alias() in providers/mod.rs:128-155.
 func ResolveModelAlias(model string) string {
-	return model
+	trimmed := strings.TrimSpace(model)
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "opus":
+		return "claude-opus-4-6"
+	case "sonnet":
+		return "claude-sonnet-4-6"
+	case "haiku":
+		return "claude-haiku-4-5-20251213"
+	case "grok", "grok-3":
+		return "grok-3"
+	case "grok-mini", "grok-3-mini":
+		return "grok-3-mini"
+	case "grok-2":
+		return "grok-2"
+	default:
+		return trimmed
+	}
 }
 
 // PreflightCheck validates that the estimated token usage fits within the
@@ -42,7 +60,7 @@ func PreflightCheck(model string, estimatedInputTokens, requestedOutputTokens ui
 		return nil
 	}
 
-	total := estimatedInputTokens + requestedOutputTokens
+	total := saturatingAddU32(estimatedInputTokens, requestedOutputTokens)
 	if total > limit.ContextWindowTokens {
 		return &ApiError{
 			Kind:                  ErrContextWindowExceeded,
@@ -54,6 +72,16 @@ func PreflightCheck(model string, estimatedInputTokens, requestedOutputTokens ui
 		}
 	}
 	return nil
+}
+
+// saturatingAddU32 adds two uint32 values, capping at math.MaxUint32 on overflow.
+// Matches Rust's u32::saturating_add().
+func saturatingAddU32(a, b uint32) uint32 {
+	sum := a + b
+	if sum < a { // overflow wrapped
+		return math.MaxUint32
+	}
+	return sum
 }
 
 // EstimateSerializedTokens estimates token count by serializing to JSON and

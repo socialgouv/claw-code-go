@@ -2,6 +2,7 @@ package apikit
 
 import (
 	"errors"
+	"math"
 	"testing"
 )
 
@@ -94,6 +95,71 @@ func TestPreflightCheckExactBoundary(t *testing.T) {
 	err = PreflightCheck("claude-opus-4-6", 168_001, 32_000) // 200_001
 	if err == nil {
 		t.Error("one over boundary should fail")
+	}
+}
+
+func TestResolveModelAlias(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"opus", "claude-opus-4-6"},
+		{"Sonnet", "claude-sonnet-4-6"},
+		{"HAIKU", "claude-haiku-4-5-20251213"},
+		{"grok", "grok-3"},
+		{"grok-3", "grok-3"},
+		{"grok-mini", "grok-3-mini"},
+		{"grok-3-mini", "grok-3-mini"},
+		{"grok-2", "grok-2"},
+		{"unknown-model", "unknown-model"},
+		{"  opus  ", "claude-opus-4-6"},
+		{"claude-opus-4-6", "claude-opus-4-6"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := ResolveModelAlias(tt.input)
+			if got != tt.expected {
+				t.Errorf("ResolveModelAlias(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPreflightCheckWithAlias(t *testing.T) {
+	// "opus" should resolve to claude-opus-4-6 (200k context window)
+	// 190k input + 32k output = 222k > 200k → should fail
+	err := PreflightCheck("opus", 190_000, 32_000)
+	if err == nil {
+		t.Fatal("expected ContextWindowExceeded for alias 'opus', got nil")
+	}
+	var apiErr *ApiError
+	if !errors.As(err, &apiErr) {
+		t.Fatal("expected ApiError")
+	}
+	if apiErr.Kind != ErrContextWindowExceeded {
+		t.Errorf("expected ErrContextWindowExceeded, got %d", apiErr.Kind)
+	}
+	if apiErr.Model != "claude-opus-4-6" {
+		t.Errorf("expected resolved model 'claude-opus-4-6', got %q", apiErr.Model)
+	}
+}
+
+func TestPreflightSaturatingOverflow(t *testing.T) {
+	// math.MaxUint32-50 + 100 would wrap to 49 without saturating add.
+	// With saturating add it should cap at MaxUint32, which exceeds any context window.
+	err := PreflightCheck("claude-opus-4-6", math.MaxUint32-50, 100)
+	if err == nil {
+		t.Fatal("expected ContextWindowExceeded on uint32 overflow, got nil")
+	}
+	var apiErr *ApiError
+	if !errors.As(err, &apiErr) {
+		t.Fatal("expected ApiError")
+	}
+	if apiErr.Kind != ErrContextWindowExceeded {
+		t.Errorf("expected ErrContextWindowExceeded, got %d", apiErr.Kind)
+	}
+	if apiErr.EstimatedTotalTokens != math.MaxUint32 {
+		t.Errorf("expected saturated total %d, got %d", uint32(math.MaxUint32), apiErr.EstimatedTotalTokens)
 	}
 }
 
