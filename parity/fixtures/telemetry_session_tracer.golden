@@ -1,0 +1,11 @@
+# SessionTracer dual-event emission golden fixture
+# Each HTTP lifecycle method emits 2 events: the typed event + a SessionTrace.
+# Sequence numbers are monotonically increasing starting from 0.
+
+# record_http_request_started(attempt=1, method=POST, path=/v1/messages, attrs={})
+event[0]: type=http_request_started session_id=session-123 attempt=1 method=POST path=/v1/messages
+event[1]: type=session_trace name=http_request_started sequence=0 attributes={method:POST,path:/v1/messages,attempt:1}
+
+# record_analytics(AnalyticsEvent{namespace=cli, action=prompt_sent, properties={model:claude-opus}})
+event[2]: type=analytics namespace=cli action=prompt_sent properties={model:claude-opus}
+event[3]: type=session_trace name=analytics sequence=1 attributes={namespace:cli,action:prompt_sent,model:claude-opus}

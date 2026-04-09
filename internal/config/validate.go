@@ -309,8 +309,10 @@ func validateObjectKeys(obj map[string]json.RawMessage, known []fieldSpec, prefi
 	}
 }
 
-// suggestField returns the closest known field name if edit distance <= 2
+// suggestField returns the closest known field name if edit distance <= 3
 // and the key length >= 4 (to avoid false positives on short keys).
+// The len < 4 guard is intentional: very short unknown keys (e.g., "id")
+// would produce spurious suggestions against unrelated longer field names.
 func suggestField(input string, candidates []string) string {
 	if len(input) < 4 {
 		return ""

@@ -1,0 +1,11 @@
+<summary>
+Conversation summary:
+- Previously compacted context:
+  - Scope: 3 earlier messages compacted (user=1, assistant=1, tool=1).
+  - Tools mentioned: bash.
+- Newly compacted context:
+  - Scope: 2 earlier messages compacted (user=1, assistant=1, tool=0).
+- Key timeline:
+  - user: follow-up request
+  - assistant: working on it
+</summary>

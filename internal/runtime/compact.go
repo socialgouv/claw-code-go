@@ -162,10 +162,9 @@ func CompactSession(ctx context.Context, client api.APIClient, cfg *Config, sess
 		return "", fmt.Errorf("compact: collect stream: %w", err)
 	}
 
-	// Format the summary by stripping analysis tags.
-	formattedSummary := FormatCompactSummary(summary)
-
-	// Merge with previous summary if exists.
+	// Merge with previous summary if exists (must happen BEFORE building
+	// the continuation message so the injected context includes all prior
+	// compacted material — matching Rust's compact_session).
 	mergedSummary := summary
 	if session.CompactionSummary != "" {
 		mergedSummary = MergeCompactSummaries(session.CompactionSummary, summary)
@@ -179,8 +178,9 @@ func CompactSession(ctx context.Context, client api.APIClient, cfg *Config, sess
 	recent := make([]api.Message, keepCount)
 	copy(recent, session.Messages[len(session.Messages)-keepCount:])
 
-	// Inject continuation message as synthetic system message.
-	continuationMsg := GetContinuationMessage(formattedSummary, true, keepCount > 0)
+	// Use the merged summary for the continuation message so that prior
+	// compacted context is preserved (GetContinuationMessage formats internally).
+	continuationMsg := GetContinuationMessage(mergedSummary, true, keepCount > 0)
 
 	// Build new message list: continuation + recent.
 	newMessages := make([]api.Message, 0, 1+len(recent))
@@ -221,21 +221,25 @@ func collapseBlankLines(s string) string {
 // GetContinuationMessage creates a synthetic system message that announces the
 // compaction event, suitable for prepending to the retained recent messages.
 //
+// The summary is normalized via FormatCompactSummary before injection (matching
+// Rust's get_compact_continuation_message which calls format_compact_summary
+// internally).
+//
 // When suppressFollowUp is true, the message includes an instruction to not
 // acknowledge the summary or ask follow-up questions.
 // When recentPreserved is true, a note about preserved recent messages is added.
 func GetContinuationMessage(summary string, suppressFollowUp, recentPreserved bool) api.Message {
 	var sb strings.Builder
 	sb.WriteString(compactContinuationPreamble)
-	sb.WriteString(summary)
-	sb.WriteString("\n\n")
+	sb.WriteString(FormatCompactSummary(summary))
 
 	if recentPreserved {
-		sb.WriteString(compactRecentMessagesNote)
 		sb.WriteString("\n\n")
+		sb.WriteString(compactRecentMessagesNote)
 	}
 
 	if suppressFollowUp {
+		sb.WriteString("\n")
 		sb.WriteString(compactDirectResumeInstruction)
 	}
 
@@ -247,7 +251,10 @@ func GetContinuationMessage(summary string, suppressFollowUp, recentPreserved bo
 	}
 }
 
-// MergeCompactSummaries merges two compaction summaries into one with structured sections.
+// MergeCompactSummaries merges two compaction summaries into one with structured
+// sections. The current summary is formatted via FormatCompactSummary before
+// extracting highlights and timeline, preventing raw <analysis> tags from
+// leaking into the merged output (matching Rust merge_compact_summaries).
 func MergeCompactSummaries(previous, current string) string {
 	if previous == "" {
 		return current
@@ -257,80 +264,89 @@ func MergeCompactSummaries(previous, current string) string {
 	}
 
 	prevHighlights := extractSummaryHighlights(previous)
-	newHighlights := extractSummaryHighlights(current)
-	newTimeline := extractSummaryTimeline(current)
+	newFormatted := FormatCompactSummary(current)
+	newHighlights := extractSummaryHighlights(newFormatted)
+	newTimeline := extractSummaryTimeline(newFormatted)
 
 	var sb strings.Builder
 	sb.WriteString("<summary>\n")
-	sb.WriteString("Previously compacted context:\n")
-	for _, h := range prevHighlights {
-		sb.WriteString(h)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("\nNewly compacted context:\n")
-	for _, h := range newHighlights {
-		sb.WriteString(h)
-		sb.WriteString("\n")
-	}
-	if len(newTimeline) > 0 {
-		sb.WriteString("\nKey timeline:\n")
-		for _, t := range newTimeline {
-			sb.WriteString(t)
+	sb.WriteString("Conversation summary:\n")
+
+	if len(prevHighlights) > 0 {
+		sb.WriteString("- Previously compacted context:\n")
+		for _, h := range prevHighlights {
+			sb.WriteString("  ")
+			sb.WriteString(h)
 			sb.WriteString("\n")
 		}
 	}
+
+	if len(newHighlights) > 0 {
+		sb.WriteString("- Newly compacted context:\n")
+		for _, h := range newHighlights {
+			sb.WriteString("  ")
+			sb.WriteString(h)
+			sb.WriteString("\n")
+		}
+	}
+
+	if len(newTimeline) > 0 {
+		sb.WriteString("- Key timeline:\n")
+		for _, h := range newTimeline {
+			sb.WriteString("  ")
+			sb.WriteString(h)
+			sb.WriteString("\n")
+		}
+	}
+
 	sb.WriteString("</summary>")
 	return sb.String()
 }
 
 // extractSummaryHighlights extracts non-timeline content lines from a summary.
+// The summary is formatted via FormatCompactSummary first (matching Rust which
+// calls format_compact_summary inside extract_summary_highlights).
 func extractSummaryHighlights(summary string) []string {
 	var highlights []string
 	inTimeline := false
-	for _, line := range strings.Split(summary, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
+	formatted := FormatCompactSummary(summary)
+	for _, line := range strings.Split(formatted, "\n") {
+		trimmed := strings.TrimRight(line, " \t\r")
+		if trimmed == "" || trimmed == "Summary:" || trimmed == "Conversation summary:" {
 			continue
 		}
-		// Skip XML tags
-		if strings.HasPrefix(trimmed, "<summary>") || strings.HasPrefix(trimmed, "</summary>") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "Key timeline:") {
+		if trimmed == "- Key timeline:" {
 			inTimeline = true
 			continue
 		}
-		if strings.HasPrefix(trimmed, "Previously compacted") || strings.HasPrefix(trimmed, "Newly compacted") {
-			inTimeline = false
+		if inTimeline {
 			continue
 		}
-		if !inTimeline {
-			highlights = append(highlights, line)
-		}
+		highlights = append(highlights, trimmed)
 	}
 	return highlights
 }
 
 // extractSummaryTimeline extracts timeline lines from a summary.
+// The summary is formatted via FormatCompactSummary first (matching Rust which
+// calls format_compact_summary inside extract_summary_timeline).
 func extractSummaryTimeline(summary string) []string {
 	var timeline []string
 	inTimeline := false
-	for _, line := range strings.Split(summary, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "Key timeline:") {
+	formatted := FormatCompactSummary(summary)
+	for _, line := range strings.Split(formatted, "\n") {
+		trimmed := strings.TrimRight(line, " \t\r")
+		if trimmed == "- Key timeline:" {
 			inTimeline = true
 			continue
 		}
-		if strings.HasPrefix(trimmed, "Previously compacted") || strings.HasPrefix(trimmed, "Newly compacted") || strings.HasPrefix(trimmed, "</summary>") {
-			inTimeline = false
+		if !inTimeline {
 			continue
 		}
-		if inTimeline {
-			timeline = append(timeline, line)
+		if trimmed == "" {
+			break
 		}
+		timeline = append(timeline, trimmed)
 	}
 	return timeline
 }

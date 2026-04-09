@@ -2,48 +2,109 @@ package permissions
 
 import "testing"
 
-func TestToolPermissionLevelOrdering(t *testing.T) {
-	if ReadOnly >= WorkspaceWrite {
+func TestPermissionModeOrdering(t *testing.T) {
+	// Verify the 5-mode ordering: ReadOnly < WorkspaceWrite < DangerFullAccess < Prompt < Allow
+	if ModeReadOnly >= ModeWorkspaceWrite {
 		t.Error("ReadOnly should be < WorkspaceWrite")
 	}
-	if WorkspaceWrite >= DangerFullAccess {
+	if ModeWorkspaceWrite >= ModeDangerFullAccess {
 		t.Error("WorkspaceWrite should be < DangerFullAccess")
 	}
+	if ModeDangerFullAccess >= ModePrompt {
+		t.Error("DangerFullAccess should be < Prompt")
+	}
+	if ModePrompt >= ModeAllow {
+		t.Error("Prompt should be < Allow")
+	}
 }
 
-func TestToolPermissionLevelString(t *testing.T) {
+func TestPermissionModeExplicitValues(t *testing.T) {
+	// Verify explicit int assignments (not iota) by checking values directly.
+	if ModeReadOnly != 0 {
+		t.Errorf("ModeReadOnly = %d, want 0", ModeReadOnly)
+	}
+	if ModeWorkspaceWrite != 1 {
+		t.Errorf("ModeWorkspaceWrite = %d, want 1", ModeWorkspaceWrite)
+	}
+	if ModeDangerFullAccess != 2 {
+		t.Errorf("ModeDangerFullAccess = %d, want 2", ModeDangerFullAccess)
+	}
+	if ModePrompt != 3 {
+		t.Errorf("ModePrompt = %d, want 3", ModePrompt)
+	}
+	if ModeAllow != 4 {
+		t.Errorf("ModeAllow = %d, want 4", ModeAllow)
+	}
+}
+
+func TestPermissionModeLegacyAliases(t *testing.T) {
+	// Verify CLI aliases map to the correct Rust-style modes.
+	if ModeDefault != ModePrompt {
+		t.Error("ModeDefault should equal ModePrompt")
+	}
+	if ModeAcceptEdits != ModeWorkspaceWrite {
+		t.Error("ModeAcceptEdits should equal ModeWorkspaceWrite")
+	}
+	if ModeBypassPermissions != ModeAllow {
+		t.Error("ModeBypassPermissions should equal ModeAllow")
+	}
+	if ModePlan != ModeReadOnly {
+		t.Error("ModePlan should equal ModeReadOnly")
+	}
+}
+
+func TestPermissionModeString(t *testing.T) {
 	tests := []struct {
-		level ToolPermissionLevel
-		want  string
+		mode PermissionMode
+		want string
 	}{
-		{ReadOnly, "read-only"},
-		{WorkspaceWrite, "workspace-write"},
-		{DangerFullAccess, "danger-full-access"},
+		{ModeReadOnly, "read-only"},
+		{ModeWorkspaceWrite, "workspace-write"},
+		{ModeDangerFullAccess, "danger-full-access"},
+		{ModePrompt, "prompt"},
+		{ModeAllow, "allow"},
 	}
 	for _, tt := range tests {
-		if got := tt.level.String(); got != tt.want {
-			t.Errorf("%d.String() = %q, want %q", tt.level, got, tt.want)
+		if got := tt.mode.String(); got != tt.want {
+			t.Errorf("%d.String() = %q, want %q", tt.mode, got, tt.want)
 		}
 	}
 }
 
-func TestParseToolPermissionLevel(t *testing.T) {
+func TestParsePermissionModeRoundTrip(t *testing.T) {
+	// Legacy CLI names
 	tests := []struct {
 		input string
-		want  ToolPermissionLevel
-		ok    bool
+		mode  PermissionMode
 	}{
-		{"read-only", ReadOnly, true},
-		{"workspace-write", WorkspaceWrite, true},
-		{"danger-full-access", DangerFullAccess, true},
-		{"bogus", ReadOnly, false},
+		{"default", ModePrompt},
+		{"accept-edits", ModeWorkspaceWrite},
+		{"bypass", ModeAllow},
+		{"plan", ModeReadOnly},
+		{"", ModePrompt},
+		// Rust-style names
+		{"read-only", ModeReadOnly},
+		{"workspace-write", ModeWorkspaceWrite},
+		{"danger-full-access", ModeDangerFullAccess},
+		{"prompt", ModePrompt},
+		{"allow", ModeAllow},
 	}
 	for _, tt := range tests {
-		got, ok := ParseToolPermissionLevel(tt.input)
-		if ok != tt.ok || got != tt.want {
-			t.Errorf("ParseToolPermissionLevel(%q) = (%v, %v), want (%v, %v)",
-				tt.input, got, ok, tt.want, tt.ok)
+		got, err := ParsePermissionMode(tt.input)
+		if err != nil {
+			t.Errorf("ParsePermissionMode(%q) error: %v", tt.input, err)
+			continue
 		}
+		if got != tt.mode {
+			t.Errorf("ParsePermissionMode(%q) = %v, want %v", tt.input, got, tt.mode)
+		}
+	}
+}
+
+func TestParsePermissionModeInvalid(t *testing.T) {
+	_, err := ParsePermissionMode("bogus")
+	if err == nil {
+		t.Error("expected error for invalid permission mode")
 	}
 }
 
@@ -94,14 +155,14 @@ type mockPrompter struct {
 	called bool
 }
 
-func (m *mockPrompter) Decide(req PermissionRequest) PermissionPromptDecision {
+func (m *mockPrompter) Decide(req *PermissionRequest) PermissionPromptDecision {
 	m.called = true
 	return PermissionPromptDecision{Allowed: true}
 }
 
 func TestPermissionPrompterMockable(t *testing.T) {
 	var p PermissionPrompter = &mockPrompter{}
-	result := p.Decide(PermissionRequest{
+	result := p.Decide(&PermissionRequest{
 		ToolName: "bash",
 		Input:    "echo hello",
 	})
@@ -117,8 +178,33 @@ func TestSetPrompter(t *testing.T) {
 	m := NewManager(ModeDefault, nil)
 	mp := &mockPrompter{}
 	m.SetPrompter(mp)
-	// Verify it was set (we can't directly check the field, but this shouldn't panic).
 	if m.prompter != mp {
 		t.Error("prompter should be set")
+	}
+}
+
+func TestSetPolicyDelegation(t *testing.T) {
+	m := NewManager(ModeDefault, nil)
+
+	// Without policy, bash should Ask in default mode.
+	d := m.Check("bash", "{}")
+	if d != DecisionAsk {
+		t.Errorf("expected Ask without policy, got %v", d)
+	}
+
+	// Set a policy with Allow mode; now bash should be allowed.
+	policy := NewPermissionPolicy(ModeAllow)
+	m.SetPolicy(policy)
+
+	d = m.Check("bash", "{}")
+	if d != DecisionAllow {
+		t.Errorf("expected Allow with Allow-mode policy, got %v", d)
+	}
+
+	// Clear policy; should fall back to legacy logic.
+	m.SetPolicy(nil)
+	d = m.Check("bash", "{}")
+	if d != DecisionAsk {
+		t.Errorf("expected Ask after clearing policy, got %v", d)
 	}
 }

@@ -1,0 +1,28 @@
+# Rust-vs-Go permission policy decision golden fixtures
+# Format: activeMode | toolRequirements | rules(allow,deny,ask) | toolName | input | expected_outcome | expected_reason_contains
+
+# Test 1: Active mode meets requirement → Allow
+WorkspaceWrite | read_file=ReadOnly,write_file=WorkspaceWrite | | read_file | {} | Allow |
+WorkspaceWrite | read_file=ReadOnly,write_file=WorkspaceWrite | | write_file | {} | Allow |
+
+# Test 2: ReadOnly denies escalations
+ReadOnly | write_file=WorkspaceWrite,bash=DangerFullAccess | | write_file | {} | Deny | requires workspace-write permission
+ReadOnly | write_file=WorkspaceWrite,bash=DangerFullAccess | | bash | {} | Deny | requires danger-full-access permission
+
+# Test 3: WorkspaceWrite→DangerFullAccess escalation prompts
+WorkspaceWrite | bash=DangerFullAccess | | bash | echo hi | Prompt |
+
+# Test 4: Allow rule permits git commands from ReadOnly
+ReadOnly | bash=DangerFullAccess | allow=bash(git:*),deny=bash(rm -rf:*) | bash | {"command":"git status"} | Allow |
+
+# Test 5: Deny rule blocks rm -rf
+ReadOnly | bash=DangerFullAccess | allow=bash(git:*),deny=bash(rm -rf:*) | bash | {"command":"rm -rf /tmp/x"} | Deny | denied by rule
+
+# Test 6: Ask rules force prompt even at DangerFullAccess
+DangerFullAccess | bash=DangerFullAccess | ask=bash(git:*) | bash | {"command":"git status"} | Prompt |
+
+# Test 7: Hook Allow + ask rule → still prompts
+ReadOnly | bash=DangerFullAccess | ask=bash(git:*) | bash | {"command":"git status"} | Prompt(hook=Allow) |
+
+# Test 8: Hook Deny short-circuits
+DangerFullAccess | bash=DangerFullAccess | | bash | {} | Deny(hook=Deny) | blocked by hook
