@@ -50,6 +50,21 @@ func (r *HookRunner) RunPostToolUseFailure(toolName, toolInput, toolError string
 	return r.RunPostToolUseFailureWithContext(toolName, toolInput, toolError, nil, nil)
 }
 
+// RunPreToolUseWithSignal runs PreToolUse hooks with an abort signal but no progress reporter.
+func (r *HookRunner) RunPreToolUseWithSignal(toolName, toolInput string, abort *HookAbortSignal) HookRunResult {
+	return r.RunPreToolUseWithContext(toolName, toolInput, abort, nil)
+}
+
+// RunPostToolUseWithSignal runs PostToolUse hooks with an abort signal but no progress reporter.
+func (r *HookRunner) RunPostToolUseWithSignal(toolName, toolInput, toolOutput string, isError bool, abort *HookAbortSignal) HookRunResult {
+	return r.RunPostToolUseWithContext(toolName, toolInput, toolOutput, isError, abort, nil)
+}
+
+// RunPostToolUseFailureWithSignal runs PostToolUseFailure hooks with an abort signal but no progress reporter.
+func (r *HookRunner) RunPostToolUseFailureWithSignal(toolName, toolInput, toolError string, abort *HookAbortSignal) HookRunResult {
+	return r.RunPostToolUseFailureWithContext(toolName, toolInput, toolError, abort, nil)
+}
+
 // RunPreToolUseWithContext runs PreToolUse hooks with abort signal and progress reporter.
 func (r *HookRunner) RunPreToolUseWithContext(toolName, toolInput string, abort *HookAbortSignal, reporter HookProgressReporter) HookRunResult {
 	return r.runHooks(PreToolUse, toolName, toolInput, nil, false, abort, reporter)

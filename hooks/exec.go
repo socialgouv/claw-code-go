@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -65,7 +66,7 @@ func runShellCommand(command string, env map[string]string, stdin []byte, abort 
 	if err := cmd.Start(); err != nil {
 		return commandExecution{
 			ExitCode:      1,
-			Stderr:        err.Error(),
+			Stderr:        strings.TrimSpace(err.Error()),
 			FailedToStart: true,
 		}
 	}
@@ -91,8 +92,8 @@ func runShellCommand(command string, env map[string]string, stdin []byte, abort 
 				}
 			}
 			return commandExecution{
-				Stdout:   stdout.String(),
-				Stderr:   stderr.String(),
+				Stdout:   strings.TrimSpace(stdout.String()),
+				Stderr:   strings.TrimSpace(stderr.String()),
 				ExitCode: exitCode,
 			}
 		case <-ticker.C:
@@ -100,8 +101,8 @@ func runShellCommand(command string, env map[string]string, stdin []byte, abort 
 				_ = cmd.Process.Kill()
 				<-done // wait for goroutine to finish
 				return commandExecution{
-					Stdout:    stdout.String(),
-					Stderr:    stderr.String(),
+					Stdout:    strings.TrimSpace(stdout.String()),
+					Stderr:    strings.TrimSpace(stderr.String()),
 					ExitCode:  -1,
 					Cancelled: true,
 				}

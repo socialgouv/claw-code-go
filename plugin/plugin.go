@@ -131,6 +131,10 @@ func validatePaths(root string, tools []PluginToolManifest) error {
 		if t.Command == "" {
 			continue
 		}
+		// Skip PATH-resolved shell commands (e.g. "python my_script.py").
+		if isLiteralCommand(t.Command) {
+			continue
+		}
 		cmdPath := t.Command
 		if !filepath.IsAbs(cmdPath) {
 			cmdPath = filepath.Join(root, cmdPath)
@@ -148,7 +152,8 @@ func validatePaths(root string, tools []PluginToolManifest) error {
 
 func runLifecycleCommands(root string, commands []string) error {
 	for _, cmd := range commands {
-		c := exec.Command("sh", "-lc", cmd)
+		shell, args := shellArgs(cmd)
+		c := exec.Command(shell, args...)
 		if root != "" {
 			c.Dir = root
 		}

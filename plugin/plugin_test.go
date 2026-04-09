@@ -1427,6 +1427,45 @@ func TestDiscoverPluginIDFormat(t *testing.T) {
 	}
 }
 
+// --- validatePaths tests (BUGFIX-2) ---
+
+func TestValidatePathsLiteralCommand(t *testing.T) {
+	// Literal commands (e.g. "python my_script.py") should be skipped by validatePaths.
+	tools := []PluginToolManifest{
+		{Name: "run-py", Command: "python my_script.py"},
+	}
+	err := validatePaths("/nonexistent/root", tools)
+	if err != nil {
+		t.Errorf("validatePaths should skip literal commands, got: %v", err)
+	}
+}
+
+func TestValidatePathsRelativePathMissing(t *testing.T) {
+	// Relative path starting with "./" should error if not found.
+	tools := []PluginToolManifest{
+		{Name: "run-sh", Command: "./nonexistent/script.sh"},
+	}
+	err := validatePaths(t.TempDir(), tools)
+	if err == nil {
+		t.Error("validatePaths should error for missing relative path")
+	}
+}
+
+func TestValidatePathsRelativePathExists(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tools := []PluginToolManifest{
+		{Name: "run-sh", Command: "./script.sh"},
+	}
+	err := validatePaths(dir, tools)
+	if err != nil {
+		t.Errorf("validatePaths should pass for existing relative path, got: %v", err)
+	}
+}
+
 func TestPluginManagerSyncBundledEmptyRoot(t *testing.T) {
 	mgr, _ := NewPluginManager(PluginManagerConfig{ConfigHome: t.TempDir()})
 	// No BundledRoot set — should be a no-op.

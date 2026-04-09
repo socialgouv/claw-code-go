@@ -7,8 +7,9 @@ type Manager struct {
 	Mode  PermissionMode
 	Rules *Ruleset
 
-	mu    sync.Mutex
-	cache map[string]Decision // keyed by tool name for ScopeAlways grants
+	mu       sync.Mutex
+	cache    map[string]Decision // keyed by tool name for ScopeAlways grants
+	prompter PermissionPrompter  // optional; set via SetPrompter()
 }
 
 // NewManager creates a Manager with the given mode and ruleset.
@@ -57,6 +58,33 @@ func (m *Manager) Check(tool, input string) Decision {
 	}
 
 	return DecisionAsk
+}
+
+// CheckWithHookOverride returns the Decision for the given tool and input,
+// applying a hook permission override if provided.
+//
+// Precedence order (draft contract for Batch 3):
+//
+//	hook override > explicit rule match > session cache > default mode
+//
+// Full precedence spec (adding policy engine, sandbox, plugin rules)
+// is deferred to Batch 4+.
+func (m *Manager) CheckWithHookOverride(tool, input string, override *HookPermissionOverride) Decision {
+	// Hook override takes highest precedence.
+	if override != nil {
+		return override.Decision
+	}
+	// Fall through to normal Check flow.
+	return m.Check(tool, input)
+}
+
+// SetPrompter sets the permission prompter for interactive decisions.
+// This is opt-in; existing callers that don't call SetPrompter are unaffected.
+// TODO: Wire into TUI integration in Batch 4+.
+func (m *Manager) SetPrompter(p PermissionPrompter) {
+	m.mu.Lock()
+	m.prompter = p
+	m.mu.Unlock()
 }
 
 // Remember stores a user decision in the session cache for ScopeAlways grants.

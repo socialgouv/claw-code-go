@@ -15,6 +15,30 @@ type Settings struct {
 	BlockedTools   []string `json:"blockedTools,omitempty"`
 	MaxTokens      int      `json:"maxTokens,omitempty"`
 	Theme          string   `json:"theme,omitempty"`
+
+	// Hooks holds hook command lists per event type.
+	Hooks *SettingsHooks `json:"hooks,omitempty"`
+
+	// FallbackModels configures the provider fallback chain.
+	FallbackModels *SettingsFallbackModels `json:"providerFallbacks,omitempty"`
+
+	// RawJSON preserves the original raw JSON bytes for feature extraction
+	// and validation. Not serialized back — use ExtractFeatureConfig() for
+	// typed access to all fields including those not in Settings struct.
+	RawJSON json.RawMessage `json:"-"`
+}
+
+// SettingsHooks mirrors the hooks block in settings.json.
+type SettingsHooks struct {
+	PreToolUse         []string `json:"PreToolUse,omitempty"`
+	PostToolUse        []string `json:"PostToolUse,omitempty"`
+	PostToolUseFailure []string `json:"PostToolUseFailure,omitempty"`
+}
+
+// SettingsFallbackModels mirrors the providerFallbacks block in settings.json.
+type SettingsFallbackModels struct {
+	Primary   string   `json:"primary,omitempty"`
+	Fallbacks []string `json:"fallbacks,omitempty"`
 }
 
 // Load returns merged settings from (in order of increasing precedence):
@@ -46,6 +70,7 @@ func Load() *Settings {
 		if err := json.Unmarshal(data, &patch); err != nil {
 			continue
 		}
+		patch.RawJSON = data
 		merge(s, &patch)
 	}
 
@@ -71,6 +96,15 @@ func merge(dst, src *Settings) {
 	}
 	if src.Theme != "" {
 		dst.Theme = src.Theme
+	}
+	if src.Hooks != nil {
+		dst.Hooks = src.Hooks
+	}
+	if src.FallbackModels != nil {
+		dst.FallbackModels = src.FallbackModels
+	}
+	if len(src.RawJSON) > 0 {
+		dst.RawJSON = src.RawJSON
 	}
 }
 

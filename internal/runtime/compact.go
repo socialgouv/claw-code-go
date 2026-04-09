@@ -3,10 +3,24 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"claw-code-go/internal/api"
 )
+
+// Compaction continuation constants (matching Rust compact.rs).
+const (
+	compactContinuationPreamble    = "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n"
+	compactRecentMessagesNote      = "Recent messages are preserved verbatim."
+	compactDirectResumeInstruction = "Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, and do not preface with continuation text."
+)
+
+// analysisTagRe strips <analysis>...</analysis> tags from summaries.
+var analysisTagRe = regexp.MustCompile(`(?s)<analysis>.*?</analysis>`)
+
+// summaryTagRe extracts content from <summary>...</summary> tags.
+var summaryTagRe = regexp.MustCompile(`(?s)<summary>(.*?)</summary>`)
 
 const (
 	// DefaultCompactionThreshold triggers compaction when input tokens reach
@@ -148,6 +162,15 @@ func CompactSession(ctx context.Context, client api.APIClient, cfg *Config, sess
 		return "", fmt.Errorf("compact: collect stream: %w", err)
 	}
 
+	// Format the summary by stripping analysis tags.
+	formattedSummary := FormatCompactSummary(summary)
+
+	// Merge with previous summary if exists.
+	mergedSummary := summary
+	if session.CompactionSummary != "" {
+		mergedSummary = MergeCompactSummaries(session.CompactionSummary, summary)
+	}
+
 	// Retain the most recent N messages verbatim.
 	keepCount := cfg.CompactionKeepRecent
 	if keepCount > len(session.Messages) {
@@ -156,33 +179,77 @@ func CompactSession(ctx context.Context, client api.APIClient, cfg *Config, sess
 	recent := make([]api.Message, keepCount)
 	copy(recent, session.Messages[len(session.Messages)-keepCount:])
 
-	session.CompactionSummary = summary
+	// Inject continuation message as synthetic system message.
+	continuationMsg := GetContinuationMessage(formattedSummary, true, keepCount > 0)
+
+	// Build new message list: continuation + recent.
+	newMessages := make([]api.Message, 0, 1+len(recent))
+	newMessages = append(newMessages, continuationMsg)
+	newMessages = append(newMessages, recent...)
+
+	session.CompactionSummary = mergedSummary
 	session.CompactionCount++
-	session.Messages = recent
+	session.Messages = newMessages
 
 	return summary, nil
 }
 
-// FormatCompactSummary wraps a compaction summary for injection into the system
-// prompt so the model is aware of earlier conversation context.
+// FormatCompactSummary cleans and formats a compaction summary for injection
+// into the system prompt. Strips <analysis> tags and extracts <summary> content.
 func FormatCompactSummary(summary string) string {
+	// Strip <analysis>...</analysis> tags.
+	cleaned := analysisTagRe.ReplaceAllString(summary, "")
+
+	// Extract <summary>...</summary> content if present.
+	if matches := summaryTagRe.FindStringSubmatch(cleaned); len(matches) > 1 {
+		cleaned = strings.TrimSpace(matches[1])
+	} else {
+		cleaned = strings.TrimSpace(cleaned)
+	}
+
 	return fmt.Sprintf(
 		"<compacted_context>\nThe following is a summary of earlier conversation history that has been compacted to save context space:\n\n%s\n</compacted_context>",
-		summary,
+		cleaned,
 	)
 }
 
-// GetContinuationMessage creates a synthetic user message that announces the
+// GetContinuationMessage creates a synthetic system message that announces the
 // compaction event, suitable for prepending to the retained recent messages.
-func GetContinuationMessage(summary string) api.Message {
-	text := fmt.Sprintf(
-		"[System: Conversation history was automatically compacted to stay within context limits.\n\nSummary of prior context:\n%s\n\nContinuing from here.]",
-		summary,
-	)
+//
+// When suppressFollowUp is true, the message includes an instruction to not
+// acknowledge the summary or ask follow-up questions.
+// When recentPreserved is true, a note about preserved recent messages is added.
+func GetContinuationMessage(summary string, suppressFollowUp, recentPreserved bool) api.Message {
+	var sb strings.Builder
+	sb.WriteString(compactContinuationPreamble)
+	sb.WriteString(summary)
+	sb.WriteString("\n\n")
+
+	if recentPreserved {
+		sb.WriteString(compactRecentMessagesNote)
+		sb.WriteString("\n\n")
+	}
+
+	if suppressFollowUp {
+		sb.WriteString(compactDirectResumeInstruction)
+	}
+
 	return api.Message{
 		Role: "user",
 		Content: []api.ContentBlock{
-			{Type: "text", Text: text},
+			{Type: "text", Text: sb.String()},
 		},
 	}
+}
+
+// MergeCompactSummaries merges two compaction summaries into one.
+// The previous summary is prepended to the new summary with a separator.
+func MergeCompactSummaries(previous, current string) string {
+	if previous == "" {
+		return current
+	}
+	if current == "" {
+		return previous
+	}
+	return previous + "\n\n---\n\n" + current
 }

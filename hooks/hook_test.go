@@ -411,6 +411,52 @@ func (m *mockReporter) OnEvent(event HookProgressEvent) {
 	m.events = append(m.events, event)
 }
 
+// --- TrimSpace tests (BUGFIX-1) ---
+
+func TestRunShellCommandTrimSpace(t *testing.T) {
+	// Verify that runShellCommand trims trailing whitespace from stdout/stderr.
+	result := runShellCommand("echo 'hello'", nil, nil, nil)
+	if result.Stdout != "hello" {
+		t.Errorf("expected trimmed stdout 'hello', got %q", result.Stdout)
+	}
+}
+
+func TestRunShellCommandTrimSpaceStderr(t *testing.T) {
+	result := runShellCommand("echo 'err msg' >&2 && exit 1", nil, nil, nil)
+	if result.Stderr != "err msg" {
+		t.Errorf("expected trimmed stderr 'err msg', got %q", result.Stderr)
+	}
+}
+
+// --- WithSignal convenience method tests (BUGFIX-4) ---
+
+func TestRunPreToolUseWithSignal(t *testing.T) {
+	// WithSignal with a pre-aborted signal and at least one hook should return Cancelled=true.
+	runner := NewHookRunner(HookConfig{PreToolUse: []string{"echo test"}})
+	sig := NewHookAbortSignal()
+	sig.Abort()
+	result := runner.RunPreToolUseWithSignal("Read", `{"path":"x"}`, sig)
+	if !result.Cancelled {
+		t.Error("RunPreToolUseWithSignal with pre-aborted signal should return Cancelled=true")
+	}
+}
+
+func TestRunPostToolUseWithSignal(t *testing.T) {
+	runner := NewHookRunner(HookConfig{})
+	result := runner.RunPostToolUseWithSignal("Read", `{}`, "output", false, nil)
+	if result.Denied || result.Failed || result.Cancelled {
+		t.Error("empty config should return Allow")
+	}
+}
+
+func TestRunPostToolUseFailureWithSignal(t *testing.T) {
+	runner := NewHookRunner(HookConfig{})
+	result := runner.RunPostToolUseFailureWithSignal("Read", `{}`, "error", nil)
+	if result.Denied || result.Failed || result.Cancelled {
+		t.Error("empty config should return Allow")
+	}
+}
+
 func TestHookProgressReporterInterface(t *testing.T) {
 	var reporter HookProgressReporter = &mockReporter{}
 	reporter.OnEvent(HookProgressEvent{

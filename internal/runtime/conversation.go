@@ -127,7 +127,7 @@ func (loop *ConversationLoop) SendMessage(ctx context.Context, userText string) 
 		} else {
 			loop.Compaction.CompactionCount++
 			// Prepend a continuation marker to the retained recent messages.
-			contMsg := GetContinuationMessage(summary)
+			contMsg := GetContinuationMessage(summary, true, true)
 			loop.Session.Messages = append([]api.Message{contMsg}, loop.Session.Messages...)
 		}
 	}
@@ -320,7 +320,7 @@ func (loop *ConversationLoop) SendMessageStreaming(ctx context.Context, userText
 		} else {
 			loop.Compaction.CompactionCount++
 			// Prepend a continuation marker to the retained recent messages.
-			contMsg := GetContinuationMessage(summary)
+			contMsg := GetContinuationMessage(summary, true, true)
 			loop.Session.Messages = append([]api.Message{contMsg}, loop.Session.Messages...)
 		}
 	}
