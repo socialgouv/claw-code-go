@@ -39,7 +39,12 @@ func (c RetryConfig) BackoffForAttempt(attempt uint32) (time.Duration, error) {
 	}
 	multiplier := uint32(1) << shift
 	delay := c.InitialBackoff * time.Duration(multiplier)
-	if delay > c.MaxBackoff {
+	// Guard against multiplication overflow for exotic configs with very
+	// large InitialBackoff values. Mirrors Rust's checked_mul fallback to
+	// max_backoff. With the default 1s base the max product is 2^31 s which
+	// fits comfortably in time.Duration (int64 nanos), but a caller-supplied
+	// base of e.g. 1h at attempt 20 would overflow.
+	if delay < 0 || delay > c.MaxBackoff {
 		delay = c.MaxBackoff
 	}
 	return delay, nil

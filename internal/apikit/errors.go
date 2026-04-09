@@ -169,7 +169,11 @@ func (e *ApiError) Unwrap() error {
 func (e *ApiError) IsRetryable() bool {
 	switch e.Kind {
 	case ErrHTTP:
-		// In Go we treat all transport-level errors as retryable
+		// Deliberate superset of Rust's is_connect() || is_timeout() || is_request()
+		// discrimination on reqwest::Error. In Go, net/http errors that reach
+		// ErrHTTP are almost always transport-level (connect refused, timeout,
+		// TLS handshake failure), so treating all of them as retryable is a safe
+		// simplification that avoids coupling to specific net/http error types.
 		return true
 	case ErrAPI:
 		return e.RetryableAPI
