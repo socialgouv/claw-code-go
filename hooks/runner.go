@@ -1,5 +1,7 @@
 package hooks
 
+import "fmt"
+
 // HookConfig holds the hook command lists per event type.
 type HookConfig struct {
 	PreToolUse         []string
@@ -91,7 +93,7 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 		if abort != nil && abort.IsAborted() {
 			return HookRunResult{
 				Cancelled: true,
-				Messages:  allMessages,
+				Messages:  append(allMessages, fmt.Sprintf("%s hook cancelled before execution", event)),
 			}
 		}
 
@@ -138,7 +140,7 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 			}
 			return HookRunResult{
 				Cancelled: true,
-				Messages:  allMessages,
+				Messages:  append(allMessages, fmt.Sprintf("%s hook %q cancelled", event, command)),
 			}
 		}
 
@@ -187,6 +189,10 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 					Command:  command,
 				})
 			}
+			// Fallback message when no hook output provided (matching Rust with_fallback_message).
+			if len(allMessages) == 0 {
+				allMessages = append(allMessages, fmt.Sprintf("%s hook denied tool %q", event, toolName))
+			}
 			return HookRunResult{
 				Denied:             true,
 				Messages:           allMessages,
@@ -203,6 +209,10 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 					ToolName: toolName,
 					Command:  command,
 				})
+			}
+			// Fallback message when no hook output provided (matching Rust format_hook_failure).
+			if len(allMessages) == 0 {
+				allMessages = append(allMessages, fmt.Sprintf("%s hook %q failed with exit code %d", event, command, result.ExitCode))
 			}
 			return HookRunResult{
 				Failed:             true,

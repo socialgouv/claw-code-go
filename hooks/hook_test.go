@@ -138,12 +138,48 @@ func TestParseHookOutputFullJSON(t *testing.T) {
 }
 
 func TestParseHookOutputPlainText(t *testing.T) {
+	// Rust hooks.rs:584-586: when JSON parse fails, push entire stdout as message.
 	result := parseHookOutput("just some plain text")
-	if len(result.Messages) != 0 {
-		t.Errorf("expected no messages, got %v", result.Messages)
+	if len(result.Messages) != 1 {
+		t.Fatalf("expected 1 message (stdout fallback), got %d: %v", len(result.Messages), result.Messages)
+	}
+	if result.Messages[0] != "just some plain text" {
+		t.Errorf("expected stdout as fallback message, got %q", result.Messages[0])
 	}
 	if result.Deny {
 		t.Error("should not be denied")
+	}
+}
+
+func TestParseHookOutputValidJSONNoMessageFields(t *testing.T) {
+	// Valid JSON with no systemMessage/reason/additionalContext — Rust pushes
+	// entire stdout as fallback when parsed.messages is empty.
+	input := `{"continue": true}`
+	result := parseHookOutput(input)
+	if len(result.Messages) != 1 {
+		t.Fatalf("expected 1 message (stdout fallback for empty messages), got %d: %v", len(result.Messages), result.Messages)
+	}
+	if result.Messages[0] != input {
+		t.Errorf("expected stdout as fallback, got %q", result.Messages[0])
+	}
+	if result.Deny {
+		t.Error("should not be denied")
+	}
+}
+
+func TestParseHookOutputEmptyStdout(t *testing.T) {
+	// Empty stdout should produce no messages, not a blank fallback.
+	result := parseHookOutput("")
+	if len(result.Messages) != 0 {
+		t.Errorf("expected 0 messages for empty stdout, got %d: %v", len(result.Messages), result.Messages)
+	}
+}
+
+func TestParseHookOutputWhitespaceOnlyStdout(t *testing.T) {
+	// Whitespace-only stdout should produce no messages.
+	result := parseHookOutput("   \n  ")
+	if len(result.Messages) != 0 {
+		t.Errorf("expected 0 messages for whitespace-only stdout, got %d: %v", len(result.Messages), result.Messages)
 	}
 }
 

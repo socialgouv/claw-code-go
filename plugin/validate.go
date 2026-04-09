@@ -115,6 +115,42 @@ func ValidateManifest(m *PluginManifest, root string, kind PluginKind) []Validat
 					})
 				}
 			}
+
+			// Reject unsupported hook names (matching Rust lib.rs:1651-1660).
+			if hooksRaw, ok := raw["hooks"]; ok {
+				var hooksMap map[string]json.RawMessage
+				if err := json.Unmarshal(hooksRaw, &hooksMap); err == nil {
+					for hookName := range hooksMap {
+						switch hookName {
+						case "PreToolUse", "PostToolUse", "PostToolUseFailure":
+							// valid
+						default:
+							errs = append(errs, ValidationError{
+								Code:    "unsupported_contract",
+								Message: fmt.Sprintf("unsupported hook name: %q; only PreToolUse, PostToolUse, PostToolUseFailure are supported", hookName),
+							})
+						}
+					}
+				}
+			}
+
+			// Reject string-array commands (Claude Code convention, not supported;
+			// matching Rust lib.rs:1643-1649).
+			if cmdsRaw, ok := raw["commands"]; ok {
+				var cmdsArr []json.RawMessage
+				if err := json.Unmarshal(cmdsRaw, &cmdsArr); err == nil {
+					for _, item := range cmdsArr {
+						var s string
+						if json.Unmarshal(item, &s) == nil {
+							errs = append(errs, ValidationError{
+								Code:    "unsupported_contract",
+								Message: "commands array contains string entries; only object commands are supported",
+							})
+							break
+						}
+					}
+				}
+			}
 		}
 	}
 

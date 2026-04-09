@@ -1,6 +1,9 @@
 package hooks
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // parsedHookOutput is the parsed JSON response from a hook command.
 type parsedHookOutput struct {
@@ -34,6 +37,10 @@ func parseHookOutput(stdout string) parsedHookOutput {
 
 	var raw hookOutputJSON
 	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
+		// Plain text fallback: push entire stdout as message (matching Rust hooks.rs:584-586).
+		if strings.TrimSpace(stdout) != "" {
+			result.Messages = append(result.Messages, stdout)
+		}
 		return result
 	}
 
@@ -76,6 +83,12 @@ func parseHookOutput(stdout string) parsedHookOutput {
 		if len(hso.UpdatedInput) > 0 && string(hso.UpdatedInput) != "null" {
 			result.UpdatedInput = string(hso.UpdatedInput)
 		}
+	}
+
+	// Fallback: if JSON was valid but no message fields were found, push
+	// the raw stdout as a message (matching Rust hooks.rs:584-586).
+	if len(result.Messages) == 0 && strings.TrimSpace(stdout) != "" {
+		result.Messages = append(result.Messages, stdout)
 	}
 
 	return result

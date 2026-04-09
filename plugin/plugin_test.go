@@ -389,6 +389,97 @@ func TestValidateUnsupportedContracts(t *testing.T) {
 	}
 }
 
+func TestValidateUnsupportedHookName(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{
+		"name": "test",
+		"version": "1.0.0",
+		"description": "test",
+		"hooks": {
+			"PreToolUse": ["cmd1"],
+			"OnError": ["cmd2"],
+			"BeforeAll": ["cmd3"]
+		}
+	}`
+	path := filepath.Join(dir, "plugin.json")
+	os.WriteFile(path, []byte(raw), 0o644)
+
+	m, err := LoadManifest(path)
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+
+	errs := ValidateManifest(m, "", KindBuiltin)
+
+	unsupportedCount := 0
+	for _, e := range errs {
+		if e.Code == "unsupported_contract" {
+			unsupportedCount++
+		}
+	}
+	// OnError and BeforeAll are unsupported; PreToolUse is valid.
+	if unsupportedCount != 2 {
+		t.Errorf("expected 2 unsupported_contract errors for invalid hook names, got %d: %v", unsupportedCount, errs)
+	}
+}
+
+func TestValidateStringCommands(t *testing.T) {
+	// Rust validates raw JSON before deserialization, so string commands are
+	// caught by the contract gap detector. In Go, LoadManifest would fail to
+	// unmarshal strings into PluginCommandManifest, so we construct the manifest
+	// manually with RawJSON set (mimicking the raw JSON path).
+	rawJSON := `{
+		"name": "test",
+		"version": "1.0.0",
+		"description": "test",
+		"commands": ["glob-pattern", "another"]
+	}`
+	m := &PluginManifest{
+		Name:        "test",
+		Version:     "1.0.0",
+		Description: "test",
+		RawJSON:     json.RawMessage(rawJSON),
+	}
+
+	errs := ValidateManifest(m, "", KindBuiltin)
+
+	found := false
+	for _, e := range errs {
+		if e.Code == "unsupported_contract" && e.Message == "commands array contains string entries; only object commands are supported" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected unsupported_contract error for string commands, got: %v", errs)
+	}
+}
+
+func TestValidateObjectCommandsAllowed(t *testing.T) {
+	// Object commands should NOT trigger the unsupported_contract error.
+	dir := t.TempDir()
+	raw := `{
+		"name": "test",
+		"version": "1.0.0",
+		"description": "test",
+		"commands": [{"name": "foo", "description": "a cmd", "command": "echo"}]
+	}`
+	path := filepath.Join(dir, "plugin.json")
+	os.WriteFile(path, []byte(raw), 0o644)
+
+	m, err := LoadManifest(path)
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+
+	errs := ValidateManifest(m, "", KindBuiltin)
+
+	for _, e := range errs {
+		if e.Code == "unsupported_contract" && e.Message == "commands array contains string entries; only object commands are supported" {
+			t.Errorf("object commands should not trigger string-command rejection, got: %v", e)
+		}
+	}
+}
+
 func TestValidateMissingToolPath(t *testing.T) {
 	m := &PluginManifest{
 		Name:        "test",
