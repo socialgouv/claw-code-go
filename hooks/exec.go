@@ -30,10 +30,11 @@ func (s *HookAbortSignal) IsAborted() bool {
 
 // commandExecution is the result of running a single shell command.
 type commandExecution struct {
-	Stdout    string
-	Stderr    string
-	ExitCode  int
-	Cancelled bool
+	Stdout        string
+	Stderr        string
+	ExitCode      int
+	Cancelled     bool
+	FailedToStart bool // true when cmd.Start() itself fails (process never ran)
 }
 
 // runShellCommand executes a command string with env vars and stdin payload.
@@ -63,8 +64,9 @@ func runShellCommand(command string, env map[string]string, stdin []byte, abort 
 
 	if err := cmd.Start(); err != nil {
 		return commandExecution{
-			ExitCode: 1,
-			Stderr:   err.Error(),
+			ExitCode:      1,
+			Stderr:        err.Error(),
+			FailedToStart: true,
 		}
 	}
 

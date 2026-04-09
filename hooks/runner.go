@@ -80,6 +80,10 @@ func (r *HookRunner) commandsForEvent(event HookEvent) []string {
 }
 
 // runHooks is the core execution loop for hook commands.
+//
+// Rust flow: run_command → parse stdout → with_fallback_message (per-command) →
+// merge_parsed_hook_output (extends result.messages). We replicate this by
+// applying fallback to parsed.Messages BEFORE accumulating into allMessages.
 func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolOutput *string, isError bool, abort *HookAbortSignal, reporter HookProgressReporter) HookRunResult {
 	commands := r.commandsForEvent(event)
 	if len(commands) == 0 {
@@ -91,15 +95,15 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 	var permReason string
 	var updatedInput string
 
-	for _, command := range commands {
-		// Check abort signal.
-		if abort != nil && abort.IsAborted() {
-			return HookRunResult{
-				Cancelled: true,
-				Messages:  append(allMessages, fmt.Sprintf("%s hook cancelled before execution", event)),
-			}
+	// Rust checks abort once before entering the loop (hooks.rs:324).
+	if abort != nil && abort.IsAborted() {
+		return HookRunResult{
+			Cancelled: true,
+			Messages:  []string{fmt.Sprintf("%s hook cancelled before execution", event)},
 		}
+	}
 
+	for _, command := range commands {
 		// Report started.
 		if reporter != nil {
 			reporter.OnEvent(HookProgressEvent{
@@ -131,7 +135,7 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 		// Execute command.
 		result := runShellCommand(command, env, payload, abort)
 
-		// Handle cancellation.
+		// Handle cancellation during execution (Rust hooks.rs:473-478).
 		if result.Cancelled {
 			if reporter != nil {
 				reporter.OnEvent(HookProgressEvent{
@@ -142,15 +146,38 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 				})
 			}
 			return HookRunResult{
-				Cancelled: true,
-				Messages:  append(allMessages, fmt.Sprintf("%s hook `%s` cancelled while handling `%s`", event, command, toolName)),
+				Cancelled:          true,
+				Messages:           append(allMessages, fmt.Sprintf("%s hook `%s` cancelled while handling `%s`", event, command, toolName)),
+				PermissionOverride: permOverride,
+				PermissionReason:   permReason,
+				UpdatedInput:       updatedInput,
 			}
 		}
 
-		// Parse response.
-		parsed := parseHookOutput(result.Stdout)
-		allMessages = append(allMessages, parsed.Messages...)
+		// Handle failed-to-start (Rust hooks.rs:479-488).
+		if result.FailedToStart {
+			if reporter != nil {
+				reporter.OnEvent(HookProgressEvent{
+					Kind:     "completed",
+					Event:    event,
+					ToolName: toolName,
+					Command:  command,
+				})
+			}
+			msg := fmt.Sprintf("%s hook `%s` failed to start for `%s`: %s", event, command, toolName, result.Stderr)
+			return HookRunResult{
+				Failed:             true,
+				Messages:           append(allMessages, msg),
+				PermissionOverride: permOverride,
+				PermissionReason:   permReason,
+				UpdatedInput:       updatedInput,
+			}
+		}
 
+		// Parse response from stdout.
+		parsed := parseHookOutput(result.Stdout)
+
+		// Merge permission fields (Rust merge_parsed_hook_output: override, not accumulate).
 		if parsed.PermissionOverride != nil {
 			permOverride = parsed.PermissionOverride
 		}
@@ -161,7 +188,10 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 			updatedInput = parsed.UpdatedInput
 		}
 
-		// Interpret exit code.
+		// Interpret exit code. Apply fallback to parsed.Messages (per-command)
+		// BEFORE accumulating into allMessages. This matches Rust's
+		// with_fallback_message being applied to the per-command ParsedHookOutput
+		// before merge_parsed_hook_output extends result.messages.
 		switch {
 		case result.ExitCode == 0 && parsed.Deny:
 			// JSON response requested denial.
@@ -173,6 +203,7 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 					Command:  command,
 				})
 			}
+			allMessages = append(allMessages, parsed.Messages...)
 			return HookRunResult{
 				Denied:             true,
 				Messages:           allMessages,
@@ -181,9 +212,14 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 				UpdatedInput:       updatedInput,
 			}
 		case result.ExitCode == 0:
-			// Success, continue chain.
+			// Success, continue chain. Accumulate messages.
+			allMessages = append(allMessages, parsed.Messages...)
 		case result.ExitCode == 2:
-			// Explicit denial.
+			// Explicit denial. Apply per-command fallback (Rust hooks.rs:450-455).
+			if len(parsed.Messages) == 0 {
+				parsed.Messages = append(parsed.Messages, fmt.Sprintf("%s hook denied tool `%s`", event, toolName))
+			}
+			allMessages = append(allMessages, parsed.Messages...)
 			if reporter != nil {
 				reporter.OnEvent(HookProgressEvent{
 					Kind:     "completed",
@@ -191,10 +227,6 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 					ToolName: toolName,
 					Command:  command,
 				})
-			}
-			// Fallback message when no hook output provided (matching Rust with_fallback_message).
-			if len(allMessages) == 0 {
-				allMessages = append(allMessages, fmt.Sprintf("%s hook denied tool `%s`", event, toolName))
 			}
 			return HookRunResult{
 				Denied:             true,
@@ -204,7 +236,11 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 				UpdatedInput:       updatedInput,
 			}
 		case result.ExitCode == -1:
-			// Signal-terminated process (matching Rust None exit code case).
+			// Signal-terminated process (Rust None exit code, hooks.rs:464-470).
+			if len(parsed.Messages) == 0 {
+				parsed.Messages = append(parsed.Messages, fmt.Sprintf("%s hook `%s` terminated by signal while handling `%s`", event, command, toolName))
+			}
+			allMessages = append(allMessages, parsed.Messages...)
 			if reporter != nil {
 				reporter.OnEvent(HookProgressEvent{
 					Kind:     "completed",
@@ -212,9 +248,6 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 					ToolName: toolName,
 					Command:  command,
 				})
-			}
-			if len(allMessages) == 0 {
-				allMessages = append(allMessages, fmt.Sprintf("%s hook `%s` terminated by signal while handling `%s`", event, command, toolName))
 			}
 			return HookRunResult{
 				Failed:             true,
@@ -224,7 +257,16 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 				UpdatedInput:       updatedInput,
 			}
 		default:
-			// Non-zero (other than 2 or -1): failure, stop chain.
+			// Non-zero (other than 2 or -1): failure (Rust hooks.rs:456-463).
+			// Rust passes parsed.primary_message() to format_hook_failure.
+			var primaryMsg string
+			if len(parsed.Messages) > 0 {
+				primaryMsg = parsed.Messages[0]
+			}
+			if len(parsed.Messages) == 0 {
+				parsed.Messages = append(parsed.Messages, formatHookFailure(command, result.ExitCode, primaryMsg, result.Stderr))
+			}
+			allMessages = append(allMessages, parsed.Messages...)
 			if reporter != nil {
 				reporter.OnEvent(HookProgressEvent{
 					Kind:     "completed",
@@ -232,11 +274,6 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 					ToolName: toolName,
 					Command:  command,
 				})
-			}
-			// Fallback message matching Rust format_hook_failure:
-			// "Hook `{command}` exited with status {code}: {stdout_or_stderr}"
-			if len(allMessages) == 0 {
-				allMessages = append(allMessages, formatHookFailure(command, result.ExitCode, result.Stdout, result.Stderr))
 			}
 			return HookRunResult{
 				Failed:             true,
@@ -247,7 +284,7 @@ func (r *HookRunner) runHooks(event HookEvent, toolName, toolInput string, toolO
 			}
 		}
 
-		// Report completed.
+		// Report completed (only reached for exit code 0, no deny).
 		if reporter != nil {
 			reporter.OnEvent(HookProgressEvent{
 				Kind:     "completed",

@@ -481,12 +481,13 @@ func TestValidateObjectCommandsAllowed(t *testing.T) {
 }
 
 func TestValidateMissingToolPath(t *testing.T) {
+	// Use a relative path (./...) so it's NOT treated as a literal shell command.
 	m := &PluginManifest{
 		Name:        "test",
 		Version:     "1.0.0",
 		Description: "test",
 		Tools: []PluginToolManifest{
-			{Name: "foo", Command: "nonexistent-binary-xyz"},
+			{Name: "foo", Description: "d", Command: "./nonexistent-binary-xyz"},
 		},
 	}
 	errs := ValidateManifest(m, t.TempDir(), KindExternal)
@@ -499,6 +500,25 @@ func TestValidateMissingToolPath(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected missing_path error for external plugin")
+	}
+}
+
+func TestValidateToolLiteralCommandSkipsPathCheck(t *testing.T) {
+	// Literal shell commands should not be path-validated.
+	m := &PluginManifest{
+		Name:        "test",
+		Version:     "1.0.0",
+		Description: "test",
+		Tools: []PluginToolManifest{
+			{Name: "foo", Description: "d", Command: "some-binary", InputSchema: []byte(`{}`)},
+		},
+	}
+	errs := ValidateManifest(m, t.TempDir(), KindExternal)
+
+	for _, e := range errs {
+		if e.Code == "missing_path" {
+			t.Errorf("literal command should not produce missing_path, got: %s", e.Message)
+		}
 	}
 }
 
@@ -854,6 +874,9 @@ func TestPluginManagerDiscoverBundled(t *testing.T) {
 	if plugins[0].Plugin.Metadata().Name != "my-bundled" {
 		t.Errorf("Name = %q", plugins[0].Plugin.Metadata().Name)
 	}
+	if plugins[0].Plugin.Metadata().ID != "my-bundled@bundled" {
+		t.Errorf("ID = %q, want %q", plugins[0].Plugin.Metadata().ID, "my-bundled@bundled")
+	}
 	if !plugins[0].Enabled {
 		t.Error("should be enabled by default")
 	}
@@ -1086,8 +1109,8 @@ func TestPluginManagerSyncBundled(t *testing.T) {
 	if len(mgr.registry.Plugins) != 2 {
 		t.Fatalf("registry len = %d, want 2", len(mgr.registry.Plugins))
 	}
-	if mgr.registry.Plugins["alpha"].Version != "1.0.0" {
-		t.Errorf("alpha version = %q", mgr.registry.Plugins["alpha"].Version)
+	if mgr.registry.Plugins["alpha@bundled"].Version != "1.0.0" {
+		t.Errorf("alpha version = %q", mgr.registry.Plugins["alpha@bundled"].Version)
 	}
 
 	// Update bravo to v2.0.0 on disk.
@@ -1100,8 +1123,8 @@ func TestPluginManagerSyncBundled(t *testing.T) {
 	if err := mgr.SyncBundledPlugins(); err != nil {
 		t.Fatalf("SyncBundledPlugins v2: %v", err)
 	}
-	if mgr.registry.Plugins["bravo"].Version != "2.0.0" {
-		t.Errorf("bravo version after sync = %q, want 2.0.0", mgr.registry.Plugins["bravo"].Version)
+	if mgr.registry.Plugins["bravo@bundled"].Version != "2.0.0" {
+		t.Errorf("bravo version after sync = %q, want 2.0.0", mgr.registry.Plugins["bravo@bundled"].Version)
 	}
 
 	// Remove alpha from disk.
@@ -1110,10 +1133,10 @@ func TestPluginManagerSyncBundled(t *testing.T) {
 	if err := mgr.SyncBundledPlugins(); err != nil {
 		t.Fatalf("SyncBundledPlugins prune: %v", err)
 	}
-	if _, exists := mgr.registry.Plugins["alpha"]; exists {
+	if _, exists := mgr.registry.Plugins["alpha@bundled"]; exists {
 		t.Error("alpha should have been pruned from registry")
 	}
-	if _, exists := mgr.registry.Plugins["bravo"]; !exists {
+	if _, exists := mgr.registry.Plugins["bravo@bundled"]; !exists {
 		t.Error("bravo should still be in registry")
 	}
 
@@ -1125,11 +1148,11 @@ func TestPluginManagerSyncBundled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPluginManager reload: %v", err)
 	}
-	if _, exists := mgr2.registry.Plugins["alpha"]; exists {
+	if _, exists := mgr2.registry.Plugins["alpha@bundled"]; exists {
 		t.Error("alpha should still be absent after reload")
 	}
-	if mgr2.registry.Plugins["bravo"].Version != "2.0.0" {
-		t.Errorf("bravo version after reload = %q", mgr2.registry.Plugins["bravo"].Version)
+	if mgr2.registry.Plugins["bravo@bundled"].Version != "2.0.0" {
+		t.Errorf("bravo version after reload = %q", mgr2.registry.Plugins["bravo@bundled"].Version)
 	}
 }
 
@@ -1221,6 +1244,10 @@ func TestDiscoverExternalPluginDefaultDisabled(t *testing.T) {
 	if plugins[0].Enabled {
 		t.Error("external plugin should default to disabled, even with defaultEnabled=true")
 	}
+	// Verify ID uses name@marketplace format
+	if plugins[0].Plugin.Metadata().ID != "ext-plugin@external" {
+		t.Errorf("ID = %q, want %q", plugins[0].Plugin.Metadata().ID, "ext-plugin@external")
+	}
 }
 
 // --- FIX-8 test: tool description validation ---
@@ -1255,7 +1282,7 @@ func TestValidateHookPathMissing(t *testing.T) {
 		Version:     "1.0.0",
 		Description: "test",
 		Hooks: PluginHooks{
-			PreToolUse: []string{"nonexistent-hook-script.sh"},
+			PreToolUse: []string{"./nonexistent-hook-script.sh"},
 		},
 	}
 	errs := ValidateManifest(m, t.TempDir(), KindExternal)
@@ -1267,7 +1294,7 @@ func TestValidateHookPathMissing(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("expected missing_path error for non-existent hook command")
+		t.Error("expected missing_path error for non-existent hook command path")
 	}
 }
 
@@ -1277,7 +1304,7 @@ func TestValidateLifecyclePathMissing(t *testing.T) {
 		Version:     "1.0.0",
 		Description: "test",
 		Lifecycle: PluginLifecycle{
-			Init: []string{"nonexistent-init.sh"},
+			Init: []string{"./nonexistent-init.sh"},
 		},
 	}
 	errs := ValidateManifest(m, t.TempDir(), KindBundled)
@@ -1289,7 +1316,7 @@ func TestValidateLifecyclePathMissing(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("expected missing_path error for non-existent lifecycle command")
+		t.Error("expected missing_path error for non-existent lifecycle command path")
 	}
 }
 
@@ -1299,7 +1326,7 @@ func TestValidateHookPathNotCheckedForBuiltin(t *testing.T) {
 		Version:     "1.0.0",
 		Description: "test",
 		Hooks: PluginHooks{
-			PreToolUse: []string{"nonexistent-hook.sh"},
+			PreToolUse: []string{"./nonexistent-hook.sh"},
 		},
 	}
 	errs := ValidateManifest(m, t.TempDir(), KindBuiltin)
@@ -1308,6 +1335,95 @@ func TestValidateHookPathNotCheckedForBuiltin(t *testing.T) {
 		if e.Code == "missing_path" {
 			t.Error("should not check hook paths for builtin plugins")
 		}
+	}
+}
+
+func TestValidateLiteralCommandSkipsPathCheck(t *testing.T) {
+	// Shell commands like "echo hello" should NOT be validated as paths.
+	m := &PluginManifest{
+		Name:        "test",
+		Version:     "1.0.0",
+		Description: "test",
+		Hooks: PluginHooks{
+			PreToolUse: []string{"echo hello"},
+		},
+		Lifecycle: PluginLifecycle{
+			Init: []string{"python -c 'print(1)'"},
+		},
+		Tools: []PluginToolManifest{
+			{Name: "tool1", Description: "d", Command: "my-cli-tool", InputSchema: []byte(`{}`)},
+		},
+	}
+	errs := ValidateManifest(m, t.TempDir(), KindExternal)
+
+	for _, e := range errs {
+		if e.Code == "missing_path" {
+			t.Errorf("literal shell commands should not produce missing_path errors, got: %s", e.Message)
+		}
+	}
+}
+
+func TestValidateRelativePathStillChecked(t *testing.T) {
+	// Commands starting with ./ or ../ should still be validated as paths.
+	m := &PluginManifest{
+		Name:        "test",
+		Version:     "1.0.0",
+		Description: "test",
+		Hooks: PluginHooks{
+			PreToolUse: []string{"./nonexistent.sh"},
+		},
+	}
+	errs := ValidateManifest(m, t.TempDir(), KindExternal)
+
+	found := false
+	for _, e := range errs {
+		if e.Code == "missing_path" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("relative path commands (./...) should still be validated")
+	}
+}
+
+func TestPluginKindMarketplace(t *testing.T) {
+	tests := []struct {
+		kind PluginKind
+		want string
+	}{
+		{KindBuiltin, "builtin"},
+		{KindBundled, "bundled"},
+		{KindExternal, "external"},
+	}
+	for _, tt := range tests {
+		if got := tt.kind.Marketplace(); got != tt.want {
+			t.Errorf("PluginKind(%d).Marketplace() = %q, want %q", tt.kind, got, tt.want)
+		}
+	}
+}
+
+func TestDiscoverPluginIDFormat(t *testing.T) {
+	// Verify discovered plugins use name@marketplace ID format.
+	dir := t.TempDir()
+	bundledRoot := filepath.Join(dir, "bundled")
+	pluginDir := filepath.Join(bundledRoot, "test-plugin")
+	os.MkdirAll(pluginDir, 0o755)
+	os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(`{
+		"name": "test-plugin",
+		"version": "1.0.0",
+		"description": "test"
+	}`), 0o644)
+
+	mgr, _ := NewPluginManager(PluginManagerConfig{
+		ConfigHome:  filepath.Join(dir, "config"),
+		BundledRoot: bundledRoot,
+	})
+	plugins, _ := mgr.DiscoverPlugins()
+	if len(plugins) != 1 {
+		t.Fatalf("expected 1 plugin, got %d", len(plugins))
+	}
+	if plugins[0].Plugin.Metadata().ID != "test-plugin@bundled" {
+		t.Errorf("ID = %q, want %q", plugins[0].Plugin.Metadata().ID, "test-plugin@bundled")
 	}
 }
 

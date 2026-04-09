@@ -192,7 +192,7 @@ func (m *PluginManager) discoverInDir(dir string, kind PluginKind, source string
 			}
 		}
 
-		id := manifest.Name
+		id := pluginID(manifest.Name, kind.Marketplace())
 		var enabled bool
 		if e, ok := m.config.EnabledPlugins[id]; ok {
 			enabled = e
@@ -430,7 +430,7 @@ func (m *PluginManager) SyncBundledPlugins() error {
 			continue // skip invalid bundled plugins
 		}
 
-		id := manifest.Name
+		id := pluginID(manifest.Name, KindBundled.Marketplace())
 		foundBundled[id] = true
 
 		existing, exists := m.registry.Plugins[id]

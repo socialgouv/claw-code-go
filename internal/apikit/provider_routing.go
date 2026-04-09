@@ -25,7 +25,8 @@ type ProviderMetadata struct {
 // MetadataForModel returns provider routing metadata based on model name prefix.
 // Returns nil if no prefix matches a known provider.
 func MetadataForModel(model string) *ProviderMetadata {
-	lower := strings.ToLower(model)
+	canonical := ResolveModelAlias(model)
+	lower := strings.ToLower(canonical)
 	switch {
 	case strings.HasPrefix(lower, "claude"):
 		return &ProviderMetadata{

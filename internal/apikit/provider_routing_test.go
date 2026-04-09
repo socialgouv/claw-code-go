@@ -50,6 +50,12 @@ func TestMetadataForModel(t *testing.T) {
 		{"gpt-4o", false, ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
 		{"qwen/qwen-max", false, ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 		{"qwen-turbo", false, ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		// Aliases should be resolved before prefix matching (FIX-R1).
+		{"opus", false, ProviderAnthropic, "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
+		{"sonnet", false, ProviderAnthropic, "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
+		{"haiku", false, ProviderAnthropic, "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
+		{"grok-mini", false, ProviderXai, "XAI_API_KEY", "https://api.x.ai/v1"},
+		{"grok", false, ProviderXai, "XAI_API_KEY", "https://api.x.ai/v1"},
 		{"unknown-model", true, "", "", ""},
 	}
 	for _, tt := range tests {

@@ -33,6 +33,12 @@ func (k PluginKind) String() string {
 	return fmt.Sprintf("PluginKind(%d)", int(k))
 }
 
+// Marketplace returns the marketplace string used in plugin IDs.
+// Matches Rust's PluginKind::marketplace() → "builtin"/"bundled"/"external".
+func (k PluginKind) Marketplace() string {
+	return k.String()
+}
+
 func (k PluginKind) MarshalJSON() ([]byte, error) {
 	s, ok := kindNames[k]
 	if !ok {

@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+// isLiteralCommand returns true if the entry is a shell command (not a path).
+// Rust skips path validation for commands that don't start with "./" or "../"
+// and aren't absolute paths — these are shell commands resolved via PATH.
+func isLiteralCommand(entry string) bool {
+	return !strings.HasPrefix(entry, "./") && !strings.HasPrefix(entry, "../") && !filepath.IsAbs(entry)
+}
+
 // ValidateManifest checks a manifest for errors.
 // Returns all validation errors found (does not stop at first).
 func ValidateManifest(m *PluginManifest, root string, kind PluginKind) []ValidationError {
@@ -94,8 +101,9 @@ func ValidateManifest(m *PluginManifest, root string, kind PluginKind) []Validat
 			})
 		}
 
-		// Path existence check for bundled/external
-		if (kind == KindBundled || kind == KindExternal) && root != "" && strings.TrimSpace(t.Command) != "" {
+		// Path existence check for bundled/external.
+		// Skip for literal commands (shell commands resolved via PATH).
+		if (kind == KindBundled || kind == KindExternal) && root != "" && strings.TrimSpace(t.Command) != "" && !isLiteralCommand(t.Command) {
 			cmdPath := t.Command
 			if !filepath.IsAbs(cmdPath) {
 				cmdPath = filepath.Join(root, cmdPath)
@@ -119,7 +127,7 @@ func ValidateManifest(m *PluginManifest, root string, kind PluginKind) []Validat
 		}
 		for label, commands := range hookLists {
 			for _, cmd := range commands {
-				if strings.TrimSpace(cmd) == "" {
+				if strings.TrimSpace(cmd) == "" || isLiteralCommand(cmd) {
 					continue
 				}
 				cmdPath := cmd
@@ -142,7 +150,7 @@ func ValidateManifest(m *PluginManifest, root string, kind PluginKind) []Validat
 		}
 		for label, commands := range lifecycleLists {
 			for _, cmd := range commands {
-				if strings.TrimSpace(cmd) == "" {
+				if strings.TrimSpace(cmd) == "" || isLiteralCommand(cmd) {
 					continue
 				}
 				cmdPath := cmd
