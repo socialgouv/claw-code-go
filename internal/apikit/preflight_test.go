@@ -3,6 +3,7 @@ package apikit
 import (
 	"errors"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -189,6 +190,50 @@ func TestMaxTokensForModelWithOverride(t *testing.T) {
 	if got != 64_000 {
 		t.Errorf("nil override on unknown: got %d, want 64000", got)
 	}
+}
+
+func TestPreflightMessageRequest(t *testing.T) {
+	t.Run("oversized request rejected", func(t *testing.T) {
+		// Build a large messages slice that will serialize to enough bytes
+		// to exceed claude-opus-4-6's 200k context window.
+		// 200k tokens ≈ 800k bytes of JSON. Build ~900k to be safe.
+		bigContent := strings.Repeat("x", 900_000)
+		messages := []map[string]string{
+			{"role": "user", "content": bigContent},
+		}
+		err := PreflightMessageRequest("claude-opus-4-6", messages, 32_000)
+		if err == nil {
+			t.Fatal("expected error for oversized request")
+		}
+		var apiErr *ApiError
+		if !errors.As(err, &apiErr) {
+			t.Fatal("expected ApiError")
+		}
+		if apiErr.Kind != ErrContextWindowExceeded {
+			t.Errorf("expected ErrContextWindowExceeded, got %d", apiErr.Kind)
+		}
+	})
+
+	t.Run("within limit passes", func(t *testing.T) {
+		messages := []map[string]string{
+			{"role": "user", "content": "Hello"},
+		}
+		err := PreflightMessageRequest("claude-opus-4-6", messages, 8096)
+		if err != nil {
+			t.Errorf("expected nil, got: %v", err)
+		}
+	})
+
+	t.Run("unknown model passes through", func(t *testing.T) {
+		bigContent := strings.Repeat("x", 900_000)
+		messages := []map[string]string{
+			{"role": "user", "content": bigContent},
+		}
+		err := PreflightMessageRequest("unknown-model-xyz", messages, 999_999)
+		if err != nil {
+			t.Errorf("unknown model should pass through, got: %v", err)
+		}
+	})
 }
 
 func TestEstimateSerializedTokens(t *testing.T) {

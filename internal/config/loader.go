@@ -132,7 +132,7 @@ func merge(dst, src *Settings) {
 // existing content to preserve unmanaged fields (e.g. mcpServers, rules).
 func WriteProject(s *Settings) error {
 	if err := os.MkdirAll(".claude", 0o755); err != nil {
-		return err
+		return NewConfigIOError("create_dir", ".claude", err)
 	}
 
 	// Read existing settings first to preserve unmanaged fields.
@@ -161,11 +161,15 @@ func WriteProject(s *Settings) error {
 		existing["theme"] = s.Theme
 	}
 
+	path := filepath.Join(".claude", "settings.json")
 	data, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {
-		return err
+		return NewConfigJSONError("marshal", err)
 	}
-	return os.WriteFile(filepath.Join(".claude", "settings.json"), data, 0o644)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return NewConfigIOError("write", path, err)
+	}
+	return nil
 }
 
 // InitProject creates .claude/settings.json with default values.
@@ -173,7 +177,7 @@ func WriteProject(s *Settings) error {
 func InitProject(model string) error {
 	path := filepath.Join(".claude", "settings.json")
 	if _, err := os.Stat(path); err == nil {
-		return os.ErrExist
+		return NewConfigError(ConfigErrInvalidConfig, "settings file already exists: "+path)
 	}
 	if model == "" {
 		model = "claude-sonnet-4-20250514"

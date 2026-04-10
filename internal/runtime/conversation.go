@@ -63,6 +63,28 @@ func NewConversationLoop(cfg *Config, client api.APIClient) *ConversationLoop {
 	}
 }
 
+// currentPermMode returns the active permission mode for the conversation.
+func (loop *ConversationLoop) currentPermMode() permissions.PermissionMode {
+	if loop.PermManager != nil {
+		return loop.PermManager.Mode
+	}
+	// Fall back to config string.
+	mode, err := permissions.ParsePermissionMode(loop.Config.PermissionMode)
+	if err != nil {
+		return permissions.ModePrompt
+	}
+	return mode
+}
+
+// workspaceRoot returns the workspace root directory.
+func (loop *ConversationLoop) workspaceRoot() string {
+	if loop.CtxAssembler != nil {
+		return loop.CtxAssembler.WorkDir
+	}
+	wd, _ := os.Getwd()
+	return wd
+}
+
 // SystemPrompt returns the rendered system prompt for diagnostic use.
 func (loop *ConversationLoop) SystemPrompt() string {
 	return loop.systemPrompt()
@@ -632,7 +654,7 @@ func (loop *ConversationLoop) ExecuteToolQuiet(name string, input map[string]any
 
 	switch name {
 	case "bash":
-		result, err = tools.ExecuteBash(input)
+		result, err = tools.ExecuteBash(input, loop.currentPermMode(), loop.workspaceRoot())
 	case "read_file":
 		result, err = tools.ExecuteReadFile(input)
 	case "write_file":
@@ -818,7 +840,7 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 
 	switch name {
 	case "bash":
-		result, err = tools.ExecuteBash(input)
+		result, err = tools.ExecuteBash(input, loop.currentPermMode(), loop.workspaceRoot())
 	case "read_file":
 		result, err = tools.ExecuteReadFile(input)
 	case "write_file":

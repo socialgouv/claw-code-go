@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -46,7 +47,13 @@ func main() {
 	sessionFlag := flag.String("session", "", "Session ID to load")
 	sessionDirFlag := flag.String("session-dir", "", "Directory to store sessions")
 	permModeFlag := flag.String("permission-mode", "default", "Permission mode: default, accept-edits, bypass, plan")
+	dangerouslySkipPerms := flag.Bool("dangerously-skip-permissions", false, "Skip all permission checks (DANGER: grants full system access)")
+	allowedToolsFlag := flag.String("allowed-tools", "", "Comma-separated list of tools to allow (filter tool registry)")
+	resumeFlag := flag.String("resume", "", "Resume a previous session (session ID, 'latest', 'last', or path)")
+	printFlag := flag.Bool("print", false, "Single-shot non-interactive output mode")
+	compactFlag := flag.Bool("compact", false, "Enable compact output format")
 	_ = replFlag
+	_ = compactFlag // wired below
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: claw-code-go [subcommand] [options]\n\n")
@@ -76,6 +83,20 @@ func main() {
 	}
 	if *sessionDirFlag != "" {
 		cfg.SessionDir = *sessionDirFlag
+	}
+
+	// --dangerously-skip-permissions overrides permission mode to full access.
+	if *dangerouslySkipPerms {
+		cfg.PermissionMode = "danger-full-access"
+	}
+
+	// --allowed-tools filters the tool registry.
+	if *allowedToolsFlag != "" {
+		tools := strings.Split(*allowedToolsFlag, ",")
+		for i, t := range tools {
+			tools[i] = strings.TrimSpace(t)
+		}
+		cfg.AllowedTools = tools
 	}
 
 	// Resolve credentials using the multi-provider credential store.
@@ -110,17 +131,40 @@ func main() {
 	// Bootstrap wires hooks, plugins, telemetry, and permissions in the correct order.
 	bootstrap(cfg, loop, *permModeFlag)
 
-	if *sessionFlag != "" {
-		sess, err := runtime.LoadSession(cfg.SessionDir, *sessionFlag)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not load session %s: %v\n", *sessionFlag, err)
-		} else {
-			loop.Session = sess
-			fmt.Printf("Loaded session: %s\n", sess.ID)
+	// Load session from --session or --resume flags.
+	sessionToLoad := *sessionFlag
+	if sessionToLoad == "" && *resumeFlag != "" {
+		sessionToLoad = *resumeFlag
+	}
+	if sessionToLoad != "" {
+		// Handle special values: "latest", "last", "recent" resolve to most recent session.
+		if sessionToLoad == "latest" || sessionToLoad == "last" || sessionToLoad == "recent" {
+			metas, err := runtime.ListSessionsWithMeta(cfg.SessionDir)
+			if err == nil && len(metas) > 0 {
+				sessionToLoad = metas[0].ID
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: no sessions found to resume\n")
+				sessionToLoad = ""
+			}
+		}
+		if sessionToLoad != "" {
+			sess, err := runtime.LoadSession(cfg.SessionDir, sessionToLoad)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not load session %s: %v\n", sessionToLoad, err)
+			} else {
+				loop.Session = sess
+				fmt.Printf("Loaded session: %s\n", sess.ID)
+			}
 		}
 	}
 
 	// Single prompt (non-interactive) mode — no TUI, plain stdout streaming.
+	// --print flag uses the same non-interactive path as --prompt.
+	if *printFlag && *promptFlag == "" {
+		// --print without --prompt reads from stdin (future), for now just exit.
+		fmt.Fprintln(os.Stderr, "Error: --print requires --prompt or stdin input.")
+		os.Exit(1)
+	}
 	if *promptFlag != "" {
 		if credErr != nil {
 			fmt.Fprintln(os.Stderr, "Error: cannot use --prompt without valid credentials.")

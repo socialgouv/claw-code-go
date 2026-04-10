@@ -63,7 +63,7 @@ func NewSession() *Session {
 // SaveSession persists a session to disk as JSON.
 func SaveSession(dir string, s *Session) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create session dir: %w", err)
+		return NewSessionIOError("create_dir", dir, err)
 	}
 
 	s.UpdatedAt = time.Now()
@@ -71,11 +71,11 @@ func SaveSession(dir string, s *Session) error {
 	path := filepath.Join(dir, s.ID+".json")
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal session: %w", err)
+		return NewSessionJSONError("marshal", err)
 	}
 
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write session file: %w", err)
+		return NewSessionIOError("write", path, err)
 	}
 
 	return nil
@@ -86,15 +86,55 @@ func LoadSession(dir, id string) (*Session, error) {
 	path := filepath.Join(dir, id+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read session file: %w", err)
+		return nil, NewSessionIOError("read", path, err)
 	}
 
 	var s Session
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("unmarshal session: %w", err)
+		return nil, NewSessionJSONError("unmarshal", err)
 	}
 
 	return &s, nil
+}
+
+// ForkSession creates an independent deep copy of the session with a new ID and
+// fork metadata linking back to this session. The copy uses JSON round-trip
+// to ensure nested pointer fields in Messages are fully independent.
+func (s *Session) ForkSession(branchName string) *Session {
+	// Deep-copy messages via JSON round-trip to avoid shared mutation.
+	var clonedMessages []api.Message
+	if data, err := json.Marshal(s.Messages); err == nil {
+		_ = json.Unmarshal(data, &clonedMessages)
+	} else {
+		// Fallback: shallow copy (should not happen with valid messages).
+		clonedMessages = make([]api.Message, len(s.Messages))
+		copy(clonedMessages, s.Messages)
+	}
+
+	// Clone prompt history.
+	var clonedPromptHistory []PromptHistoryEntry
+	if len(s.PromptHistory) > 0 {
+		clonedPromptHistory = make([]PromptHistoryEntry, len(s.PromptHistory))
+		copy(clonedPromptHistory, s.PromptHistory)
+	}
+
+	now := time.Now()
+	return &Session{
+		ID:                fmt.Sprintf("session-%d", now.UnixNano()),
+		Messages:          clonedMessages,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		CompactionSummary: s.CompactionSummary,
+		CompactionCount:   s.CompactionCount,
+		TotalInputTokens:  s.TotalInputTokens,
+		TotalOutputTokens: s.TotalOutputTokens,
+		TotalTurns:        s.TotalTurns,
+		PromptHistory:     clonedPromptHistory,
+		Fork: &SessionFork{
+			ParentSessionID: s.ID,
+			BranchName:      branchName,
+		},
+	}
 }
 
 // ListSessions returns all session IDs in the given directory.
@@ -104,7 +144,7 @@ func ListSessions(dir string) ([]string, error) {
 		if os.IsNotExist(err) {
 			return []string{}, nil
 		}
-		return nil, fmt.Errorf("read session dir: %w", err)
+		return nil, NewSessionIOError("list", dir, err)
 	}
 
 	var ids []string

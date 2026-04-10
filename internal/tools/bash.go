@@ -3,8 +3,11 @@ package tools
 import (
 	"bytes"
 	"claw-code-go/internal/api"
+	"claw-code-go/internal/permissions"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -13,6 +16,17 @@ const (
 	bashTimeout   = 30 * time.Second
 	maxOutputSize = 10000
 )
+
+// bashWarnWriter is the writer for bash validation warnings.
+// Defaults to os.Stderr; tests can replace it to capture output.
+var bashWarnWriter io.Writer
+
+func bashStderr() io.Writer {
+	if bashWarnWriter != nil {
+		return bashWarnWriter
+	}
+	return os.Stderr
+}
 
 // BashTool returns the tool definition for the bash tool.
 func BashTool() api.Tool {
@@ -33,10 +47,25 @@ func BashTool() api.Tool {
 }
 
 // ExecuteBash runs a bash command and returns combined stdout+stderr.
-func ExecuteBash(input map[string]any) (string, error) {
+// It validates the command against the current permission mode and workspace
+// path before execution. Pass permissions.ModeAllow and "" to skip validation.
+func ExecuteBash(input map[string]any, mode permissions.PermissionMode, workspace string) (string, error) {
 	command, ok := input["command"].(string)
 	if !ok || command == "" {
 		return "", fmt.Errorf("bash: 'command' input is required and must be a string")
+	}
+
+	// Validate command before execution.
+	if workspace == "" {
+		workspace = "."
+	}
+	result := ValidateCommand(command, mode, workspace)
+	switch result.Kind {
+	case ValidationBlock:
+		return "", fmt.Errorf("bash: command blocked: %s", result.Reason)
+	case ValidationWarn:
+		// Log warning but proceed.
+		fmt.Fprintf(bashStderr(), "bash warning: %s\n", result.Message)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), bashTimeout)

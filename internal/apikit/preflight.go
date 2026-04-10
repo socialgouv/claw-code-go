@@ -91,6 +91,14 @@ func MaxTokensForModelWithOverride(model string, pluginOverride *uint32) uint32 
 	return MaxTokensForModel(model)
 }
 
+// PreflightMessageRequest validates that a message request will fit within the
+// model's context window. It estimates input tokens using the JSON serialization
+// heuristic and calls PreflightCheck. Returns nil for unknown models.
+func PreflightMessageRequest(model string, messages any, maxOutputTokens uint32) error {
+	estimatedInput := EstimateSerializedTokens(messages)
+	return PreflightCheck(model, estimatedInput, maxOutputTokens)
+}
+
 // EstimateSerializedTokens estimates token count by serializing to JSON and
 // dividing by 4 (rough heuristic matching Rust's implementation).
 func EstimateSerializedTokens(value any) uint32 {

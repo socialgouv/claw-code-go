@@ -61,6 +61,15 @@ func (c *Client) WithTracer(tracer *apikit.SessionTracer) *Client {
 func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (<-chan StreamEvent, error) {
 	req.Stream = true
 
+	// Preflight: reject requests that would exceed the context window.
+	maxOutput := uint32(req.MaxTokens)
+	if maxOutput == 0 {
+		maxOutput = 8096 // default
+	}
+	if err := apikit.PreflightMessageRequest(c.Model, req.Messages, maxOutput); err != nil {
+		return nil, err
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
