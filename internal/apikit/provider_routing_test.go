@@ -1,6 +1,11 @@
 package apikit
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestResolveModelAliasRouting(t *testing.T) {
 	tests := []struct {
@@ -152,6 +157,61 @@ func TestDetectProviderKind(t *testing.T) {
 			t.Errorf("got %q, want %q", got, ProviderAnthropic)
 		}
 	})
+}
+
+func TestMaxTokensForModel(t *testing.T) {
+	tests := []struct {
+		model string
+		want  uint32
+	}{
+		{"claude-opus-4-6", 32_000},
+		{"claude-sonnet-4-6", 64_000},
+		{"claude-haiku-4-5-20251213", 64_000},
+		{"grok-3", 64_000},
+		{"grok-3-mini", 64_000},
+		// Aliases
+		{"opus", 32_000},
+		{"sonnet", 64_000},
+		{"haiku", 64_000},
+		{"grok", 64_000},
+		// Unknown models use heuristic: opus → 32k, others → 64k
+		{"unknown-model", 64_000},
+		{"my-opus-variant", 32_000}, // contains "opus"
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := MaxTokensForModel(tt.model)
+			if got != tt.want {
+				t.Errorf("MaxTokensForModel(%q) = %d, want %d", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveModelAliasGoldenFixtures(t *testing.T) {
+	type fixture struct {
+		Alias     string `json:"alias"`
+		Canonical string `json:"canonical"`
+	}
+
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "model_aliases.json"))
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+
+	var fixtures []fixture
+	if err := json.Unmarshal(data, &fixtures); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	for _, f := range fixtures {
+		t.Run(f.Alias, func(t *testing.T) {
+			got := ResolveModelAlias(f.Alias)
+			if got != f.Canonical {
+				t.Errorf("ResolveModelAlias(%q) = %q, want %q", f.Alias, got, f.Canonical)
+			}
+		})
+	}
 }
 
 func TestLookupModelTokenLimit(t *testing.T) {

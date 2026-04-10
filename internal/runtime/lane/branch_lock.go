@@ -131,7 +131,11 @@ func (m *BranchLockManager) Acquire(intent BranchLockIntent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	candidate := append(m.claims, intent)
+	// Defensive copy: avoid aliasing m.claims via append's capacity reuse.
+	candidate := make([]BranchLockIntent, len(m.claims)+1)
+	copy(candidate, m.claims)
+	candidate[len(m.claims)] = intent
+
 	if len(candidate) > BranchLockScalingWarningThreshold {
 		log.Printf("warning: branch lock manager has %d claims (N² check)", len(candidate))
 	}

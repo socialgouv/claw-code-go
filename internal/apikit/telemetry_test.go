@@ -394,6 +394,43 @@ func TestConcurrentRecordIsSafe(t *testing.T) {
 	}
 }
 
+func TestConcurrentSessionTracer100x10(t *testing.T) {
+	// 100 goroutines × 10 events = 1000 events, all with unique sequences.
+	sink := &MemoryTelemetrySink{}
+	tracer := NewSessionTracer("stress", sink)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				tracer.Record("event", map[string]any{"goroutine": g, "iteration": j})
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	events := sink.Events()
+	if len(events) != 1000 {
+		t.Fatalf("expected 1000 events, got %d", len(events))
+	}
+
+	seqs := make(map[uint64]bool)
+	for _, e := range events {
+		if e.SessionTrace == nil {
+			t.Fatal("expected session trace event")
+		}
+		if seqs[e.SessionTrace.Sequence] {
+			t.Errorf("duplicate sequence: %d", e.SessionTrace.Sequence)
+		}
+		seqs[e.SessionTrace.Sequence] = true
+	}
+	if len(seqs) != 1000 {
+		t.Errorf("expected 1000 unique sequences, got %d", len(seqs))
+	}
+}
+
 func TestJsonlSinkRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "roundtrip.jsonl")
@@ -499,6 +536,47 @@ func TestSessionTracerCloseNonCloser(t *testing.T) {
 	if err := tracer.Close(); err != nil {
 		t.Errorf("expected nil error from Close on non-closer sink, got %v", err)
 	}
+}
+
+func TestJsonlSinkErrorHandlerCalled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "error_handler.jsonl")
+
+	sink, err := NewJsonlTelemetrySink(path)
+	if err != nil {
+		t.Fatalf("failed to create sink: %v", err)
+	}
+
+	// Close the sink to cause write errors.
+	sink.Close()
+
+	var capturedErr error
+	sink.ErrorHandler = func(e error) {
+		capturedErr = e
+	}
+
+	// This should trigger the error handler.
+	sink.Record(TelemetryEvent{Type: EventTypeAnalytics, Analytics: &AnalyticsEvent{Namespace: "cli", Action: "fail"}})
+
+	if capturedErr == nil {
+		t.Error("ErrorHandler should have been called with an error")
+	}
+}
+
+func TestJsonlSinkNoErrorHandlerSilent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "silent.jsonl")
+
+	sink, err := NewJsonlTelemetrySink(path)
+	if err != nil {
+		t.Fatalf("failed to create sink: %v", err)
+	}
+
+	// Close to cause errors, but no error handler set.
+	sink.Close()
+
+	// Should not panic.
+	sink.Record(TelemetryEvent{Type: EventTypeAnalytics, Analytics: &AnalyticsEvent{Namespace: "cli", Action: "silent"}})
 }
 
 func TestJsonlSinkRecordErrReturnsError(t *testing.T) {

@@ -160,3 +160,109 @@ func TestResolveStartupAuth_Neither(t *testing.T) {
 		t.Fatalf("expected None, got %d", a.Kind)
 	}
 }
+
+func TestMaskedAuthorizationHeader_Bearer(t *testing.T) {
+	a := BearerAuth("tok-secret")
+	if got := a.MaskedAuthorizationHeader(); got != "Bearer [REDACTED]" {
+		t.Errorf("expected 'Bearer [REDACTED]', got %q", got)
+	}
+}
+
+func TestMaskedAuthorizationHeader_Combined(t *testing.T) {
+	a := CombinedAuth("sk-key", "tok-bearer")
+	if got := a.MaskedAuthorizationHeader(); got != "Bearer [REDACTED]" {
+		t.Errorf("expected 'Bearer [REDACTED]', got %q", got)
+	}
+}
+
+func TestMaskedAuthorizationHeader_NoBearer(t *testing.T) {
+	a := APIKeyAuth("sk-key")
+	if got := a.MaskedAuthorizationHeader(); got != "<absent>" {
+		t.Errorf("expected '<absent>', got %q", got)
+	}
+}
+
+func TestMaskedAuthorizationHeader_None(t *testing.T) {
+	a := NoAuth()
+	if got := a.MaskedAuthorizationHeader(); got != "<absent>" {
+		t.Errorf("expected '<absent>', got %q", got)
+	}
+}
+
+func TestResolveStartupAuthWithOAuth_EnvPriority(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "tok-token")
+
+	// Env vars should take priority over OAuth callback.
+	a, err := ResolveStartupAuthWithOAuth(func() (*OAuthTokenSet, error) {
+		t.Error("OAuth callback should not be called when env vars are present")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Kind != AuthSourceCombined {
+		t.Fatalf("expected Combined, got %d", a.Kind)
+	}
+}
+
+func TestResolveStartupAuthWithOAuth_FallbackToOAuth(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+
+	a, err := ResolveStartupAuthWithOAuth(func() (*OAuthTokenSet, error) {
+		return &OAuthTokenSet{AccessToken: "oauth-token"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Kind != AuthSourceBearer {
+		t.Fatalf("expected Bearer, got %d", a.Kind)
+	}
+	if a.BearerToken != "oauth-token" {
+		t.Fatalf("expected bearer oauth-token, got %s", a.BearerToken)
+	}
+}
+
+func TestResolveStartupAuthWithOAuth_NilCallbackReturnsNone(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+
+	a, err := ResolveStartupAuthWithOAuth(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Kind != AuthSourceNone {
+		t.Fatalf("expected None, got %d", a.Kind)
+	}
+}
+
+func TestResolveStartupAuthWithOAuth_EmptyToken(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+
+	a, err := ResolveStartupAuthWithOAuth(func() (*OAuthTokenSet, error) {
+		return &OAuthTokenSet{AccessToken: ""}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Kind != AuthSourceNone {
+		t.Fatalf("expected None for empty access token, got %d", a.Kind)
+	}
+}
+
+func TestOAuthTokenSetIsExpired(t *testing.T) {
+	// No expiry set → not expired.
+	token := OAuthTokenSet{AccessToken: "tok"}
+	if token.IsExpired() {
+		t.Error("token without ExpiresAt should not be expired")
+	}
+
+	// Expiry in the past → expired.
+	past := uint64(1000)
+	token.ExpiresAt = &past
+	if !token.IsExpired() {
+		t.Error("token with past ExpiresAt should be expired")
+	}
+}

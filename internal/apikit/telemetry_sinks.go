@@ -44,9 +44,10 @@ func (s *MemoryTelemetrySink) Events() []TelemetryEvent {
 
 // JsonlTelemetrySink writes events as newline-delimited JSON to a file.
 type JsonlTelemetrySink struct {
-	path string
-	mu   sync.Mutex
-	file *os.File
+	path         string
+	mu           sync.Mutex
+	file         *os.File
+	ErrorHandler func(error) // optional callback for write errors; defaults to silent (Rust parity)
 }
 
 // NewJsonlTelemetrySink creates a JSONL sink, creating parent directories as needed.
@@ -85,8 +86,11 @@ func (s *JsonlTelemetrySink) RecordErr(event TelemetryEvent) error {
 
 // Record writes one JSON line and flushes. Errors are silently discarded to
 // satisfy the TelemetrySink interface (matching Rust fire-and-forget behavior).
+// If ErrorHandler is set, it is called with any write error for operator visibility.
 func (s *JsonlTelemetrySink) Record(event TelemetryEvent) {
-	_ = s.RecordErr(event)
+	if err := s.RecordErr(event); err != nil && s.ErrorHandler != nil {
+		s.ErrorHandler(err)
+	}
 }
 
 // Close closes the underlying file.

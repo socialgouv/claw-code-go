@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"os"
+	"time"
 )
 
 // AuthSourceKind discriminates AuthSource variants.
@@ -84,4 +85,62 @@ func (a AuthSource) HasAPIKey() bool {
 // HasBearerToken returns true if a bearer token is present.
 func (a AuthSource) HasBearerToken() bool {
 	return a.BearerToken != ""
+}
+
+// MaskedAuthorizationHeader returns a redacted representation of the auth header.
+// Matches Rust's masked_authorization_header() for safe logging.
+func (a AuthSource) MaskedAuthorizationHeader() string {
+	if a.HasBearerToken() {
+		return "Bearer [REDACTED]"
+	}
+	return "<absent>"
+}
+
+// ResolveStartupAuthWithOAuth resolves auth from environment variables, falling
+// back to a saved OAuth token if available. The loadOAuth callback loads and
+// optionally refreshes a persisted token set. Matches Rust's
+// resolve_startup_auth_source() precedence chain.
+func ResolveStartupAuthWithOAuth(loadOAuth func() (*OAuthTokenSet, error)) (AuthSource, error) {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	bearerToken := os.Getenv("ANTHROPIC_AUTH_TOKEN")
+
+	// Env vars take highest priority.
+	if apiKey != "" && bearerToken != "" {
+		return CombinedAuth(apiKey, bearerToken), nil
+	}
+	if apiKey != "" {
+		return APIKeyAuth(apiKey), nil
+	}
+	if bearerToken != "" {
+		return BearerAuth(bearerToken), nil
+	}
+
+	// Fallback to saved OAuth token.
+	if loadOAuth != nil {
+		token, err := loadOAuth()
+		if err != nil {
+			return NoAuth(), err
+		}
+		if token != nil && token.AccessToken != "" {
+			return BearerAuth(token.AccessToken), nil
+		}
+	}
+
+	return NoAuth(), nil
+}
+
+// OAuthTokenSet represents a saved OAuth token set for auth resolution.
+type OAuthTokenSet struct {
+	AccessToken  string   `json:"access_token"`
+	RefreshToken string   `json:"refresh_token,omitempty"`
+	ExpiresAt    *uint64  `json:"expires_at,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+}
+
+// IsExpired returns true if the token has an expiration time that has passed.
+func (t *OAuthTokenSet) IsExpired() bool {
+	if t.ExpiresAt == nil {
+		return false
+	}
+	return *t.ExpiresAt <= uint64(time.Now().Unix())
 }

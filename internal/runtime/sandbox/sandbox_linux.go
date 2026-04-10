@@ -19,6 +19,9 @@ func unshareSupported() bool {
 			return
 		}
 		cmd := exec.Command("unshare", "--user", "--map-root-user", "true")
+		// Discard stdout/stderr for the probe (Rust uses Stdio::null()).
+		cmd.Stdout = nil
+		cmd.Stderr = nil
 		err := cmd.Run()
 		unshareResult = err == nil
 	})

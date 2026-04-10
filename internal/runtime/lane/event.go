@@ -2,7 +2,10 @@
 // branch locking, and freshness analysis for multi-lane orchestration.
 package lane
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // LaneEventName identifies the type of lane event on the wire.
 type LaneEventName string
@@ -76,6 +79,81 @@ type LaneCommitProvenance struct {
 	Lineage         []string `json:"lineage,omitempty"`
 }
 
+// LaneEventData is a sealed interface for typed lane event payloads.
+// Implementations must provide the unexported marker method. This replaces
+// the previous json.RawMessage Data field for type safety while maintaining
+// wire compatibility via custom JSON marshaling.
+type LaneEventData interface {
+	isLaneEventData() // sealed marker — only types in this package may implement
+
+	// RawJSON returns the JSON encoding of the typed payload. This provides
+	// backward compatibility for callers that previously used json.RawMessage.
+	RawJSON() json.RawMessage
+}
+
+// CommitProvenanceData wraps LaneCommitProvenance as a typed event payload.
+type CommitProvenanceData struct {
+	LaneCommitProvenance
+}
+
+func (CommitProvenanceData) isLaneEventData() {}
+
+// RawJSON returns the JSON encoding of the commit provenance.
+func (d CommitProvenanceData) RawJSON() json.RawMessage {
+	data, _ := json.Marshal(d.LaneCommitProvenance)
+	return data
+}
+
+// RawEventData wraps a json.RawMessage for backward compatibility with
+// untyped payloads during the transition period.
+type RawEventData struct {
+	Raw json.RawMessage
+}
+
+func (RawEventData) isLaneEventData() {}
+
+// RawJSON returns the underlying raw JSON.
+func (d RawEventData) RawJSON() json.RawMessage {
+	return d.Raw
+}
+
+// StaleBranchEventData wraps a StaleBranchEvent as a typed event payload.
+type StaleBranchEventData struct {
+	StaleBranchEvent
+}
+
+func (StaleBranchEventData) isLaneEventData() {}
+
+// RawJSON returns the JSON encoding of the stale branch event.
+func (d StaleBranchEventData) RawJSON() json.RawMessage {
+	data, _ := json.Marshal(d.StaleBranchEvent)
+	return data
+}
+
+// StaleBranchEvent describes a branch staleness event with 3 variants.
+// Matches Rust's StaleBranchEvent enum.
+type StaleBranchEvent struct {
+	Kind   StaleBranchEventKind `json:"kind"`
+	Detail string               `json:"detail,omitempty"`
+	Behind int                  `json:"behind,omitempty"`
+	Ahead  int                  `json:"ahead,omitempty"`
+	Fixes  []string             `json:"fixes,omitempty"`
+}
+
+// StaleBranchEventKind identifies the variant of StaleBranchEvent.
+type StaleBranchEventKind string
+
+const (
+	StaleBranchFresh    StaleBranchEventKind = "fresh"
+	StaleBranchStale    StaleBranchEventKind = "stale"
+	StaleBranchDiverged StaleBranchEventKind = "diverged"
+)
+
+// String returns the string representation of the kind.
+func (k StaleBranchEventKind) String() string {
+	return string(k)
+}
+
 // LaneEvent is a single append-only lane event record.
 type LaneEvent struct {
 	Event        LaneEventName     `json:"event"`
@@ -83,7 +161,55 @@ type LaneEvent struct {
 	EmittedAt    string            `json:"emittedAt"`
 	FailureClass *LaneFailureClass `json:"failureClass,omitempty"`
 	Detail       *string           `json:"detail,omitempty"`
-	Data         json.RawMessage   `json:"data,omitempty"`
+
+	// TypedData holds the typed event payload. Use this for type-safe access.
+	TypedData LaneEventData `json:"-"`
+
+	// Data is the JSON wire representation. It is populated automatically
+	// during marshaling from TypedData, and populated during unmarshaling
+	// for backward compatibility.
+	Data json.RawMessage `json:"data,omitempty"`
+}
+
+// MarshalJSON produces the wire representation. If TypedData is set, its
+// RawJSON output is used as the "data" field.
+func (e LaneEvent) MarshalJSON() ([]byte, error) {
+	type alias LaneEvent // avoid recursion
+	a := alias(e)
+	if e.TypedData != nil {
+		a.Data = e.TypedData.RawJSON()
+	}
+	return json.Marshal(a)
+}
+
+// UnmarshalJSON reads a LaneEvent and attempts to reconstruct TypedData from
+// the event type and raw data for known payload types.
+func (e *LaneEvent) UnmarshalJSON(data []byte) error {
+	type alias LaneEvent
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return fmt.Errorf("lane event: %w", err)
+	}
+	*e = LaneEvent(a)
+
+	// Reconstruct typed data for known event types.
+	if len(e.Data) > 0 {
+		switch e.Event {
+		case EventCommitCreated, EventSuperseded:
+			var prov LaneCommitProvenance
+			if json.Unmarshal(e.Data, &prov) == nil {
+				e.TypedData = CommitProvenanceData{prov}
+			}
+		case EventBranchStaleAgainstMain:
+			var sbe StaleBranchEvent
+			if json.Unmarshal(e.Data, &sbe) == nil {
+				e.TypedData = StaleBranchEventData{sbe}
+			}
+		default:
+			e.TypedData = RawEventData{Raw: e.Data}
+		}
+	}
+	return nil
 }
 
 // NewLaneEvent creates a base LaneEvent.
@@ -111,8 +237,8 @@ func Finished(emittedAt string, detail *string) LaneEvent {
 func CommitCreated(emittedAt string, detail *string, provenance LaneCommitProvenance) LaneEvent {
 	e := NewLaneEvent(EventCommitCreated, StatusCompleted, emittedAt)
 	e.Detail = detail
-	data, _ := json.Marshal(provenance)
-	e.Data = data
+	e.TypedData = CommitProvenanceData{provenance}
+	e.Data = e.TypedData.RawJSON()
 	return e
 }
 
@@ -120,8 +246,20 @@ func CommitCreated(emittedAt string, detail *string, provenance LaneCommitProven
 func Superseded(emittedAt string, detail *string, provenance LaneCommitProvenance) LaneEvent {
 	e := NewLaneEvent(EventSuperseded, StatusSuperseded, emittedAt)
 	e.Detail = detail
-	data, _ := json.Marshal(provenance)
-	e.Data = data
+	e.TypedData = CommitProvenanceData{provenance}
+	e.Data = e.TypedData.RawJSON()
+	return e
+}
+
+// BranchStale creates a branch.stale_against_main event with stale branch data.
+func BranchStale(emittedAt string, sbe StaleBranchEvent) LaneEvent {
+	e := NewLaneEvent(EventBranchStaleAgainstMain, StatusBlocked, emittedAt)
+	detail := sbe.Detail
+	if detail != "" {
+		e.Detail = &detail
+	}
+	e.TypedData = StaleBranchEventData{sbe}
+	e.Data = e.TypedData.RawJSON()
 	return e
 }
 

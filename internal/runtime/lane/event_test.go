@@ -198,3 +198,206 @@ func TestLaneEventJSONRoundTrip(t *testing.T) {
 		t.Errorf("decoded.EmittedAt = %s", decoded.EmittedAt)
 	}
 }
+
+// --- Typed LaneEventData tests ---
+
+func TestTypedDataCommitProvenanceMarshalRoundTrip(t *testing.T) {
+	wt := "wt-a"
+	cc := "canon123"
+	detail := "commit"
+	event := CommitCreated("2026-04-04T00:00:00Z", &detail, LaneCommitProvenance{
+		Commit:          "abc123",
+		Branch:          "feature/typed",
+		Worktree:        &wt,
+		CanonicalCommit: &cc,
+	})
+
+	// Verify TypedData is set.
+	if event.TypedData == nil {
+		t.Fatal("TypedData should be set")
+	}
+	cpd, ok := event.TypedData.(CommitProvenanceData)
+	if !ok {
+		t.Fatalf("expected CommitProvenanceData, got %T", event.TypedData)
+	}
+	if cpd.Commit != "abc123" {
+		t.Errorf("commit = %q", cpd.Commit)
+	}
+
+	// Marshal and unmarshal.
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded LaneEvent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify typed data is reconstructed.
+	if decoded.TypedData == nil {
+		t.Fatal("TypedData should be reconstructed from JSON")
+	}
+	cpd2, ok := decoded.TypedData.(CommitProvenanceData)
+	if !ok {
+		t.Fatalf("expected CommitProvenanceData, got %T", decoded.TypedData)
+	}
+	if cpd2.Branch != "feature/typed" {
+		t.Errorf("branch = %q", cpd2.Branch)
+	}
+}
+
+func TestTypedDataRawJSONBackwardCompat(t *testing.T) {
+	wt := "wt-a"
+	detail := "test"
+	event := CommitCreated("2026-04-04T00:00:00Z", &detail, LaneCommitProvenance{
+		Commit:   "abc",
+		Branch:   "main",
+		Worktree: &wt,
+	})
+
+	// RawJSON() should return valid JSON.
+	raw := event.TypedData.RawJSON()
+	if !json.Valid(raw) {
+		t.Fatalf("RawJSON() returned invalid JSON: %s", raw)
+	}
+
+	// It should contain expected fields.
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["commit"] != "abc" {
+		t.Errorf("commit = %v", parsed["commit"])
+	}
+}
+
+func TestStaleBranchEventKindString(t *testing.T) {
+	tests := []struct {
+		kind StaleBranchEventKind
+		want string
+	}{
+		{StaleBranchFresh, "fresh"},
+		{StaleBranchStale, "stale"},
+		{StaleBranchDiverged, "diverged"},
+	}
+	for _, tt := range tests {
+		if got := tt.kind.String(); got != tt.want {
+			t.Errorf("String() = %q, want %q", got, tt.want)
+		}
+	}
+}
+
+func TestStaleBranchEventJSONRoundTrip(t *testing.T) {
+	sbe := StaleBranchEvent{
+		Kind:   StaleBranchStale,
+		Detail: "3 commits behind main",
+		Behind: 3,
+		Fixes:  []string{"fix: timeout", "fix: null ptr"},
+	}
+
+	data, err := json.Marshal(sbe)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var decoded StaleBranchEvent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	if decoded.Kind != StaleBranchStale {
+		t.Errorf("Kind = %q, want 'stale'", decoded.Kind)
+	}
+	if decoded.Behind != 3 {
+		t.Errorf("Behind = %d, want 3", decoded.Behind)
+	}
+	if len(decoded.Fixes) != 2 {
+		t.Errorf("Fixes count = %d, want 2", len(decoded.Fixes))
+	}
+}
+
+func TestBranchStaleEventHelper(t *testing.T) {
+	sbe := StaleBranchEvent{
+		Kind:   StaleBranchDiverged,
+		Detail: "diverged: 2 ahead, 1 behind",
+		Ahead:  2,
+		Behind: 1,
+	}
+	event := BranchStale("2026-04-04T00:00:00Z", sbe)
+
+	if event.Event != EventBranchStaleAgainstMain {
+		t.Errorf("Event = %s", event.Event)
+	}
+	if event.Status != StatusBlocked {
+		t.Errorf("Status = %s", event.Status)
+	}
+	if event.TypedData == nil {
+		t.Fatal("TypedData should be set")
+	}
+	sbed, ok := event.TypedData.(StaleBranchEventData)
+	if !ok {
+		t.Fatalf("expected StaleBranchEventData, got %T", event.TypedData)
+	}
+	if sbed.Kind != StaleBranchDiverged {
+		t.Errorf("Kind = %q", sbed.Kind)
+	}
+
+	// Marshal round-trip.
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded LaneEvent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TypedData == nil {
+		t.Fatal("TypedData should be reconstructed")
+	}
+	sbed2, ok := decoded.TypedData.(StaleBranchEventData)
+	if !ok {
+		t.Fatalf("expected StaleBranchEventData, got %T", decoded.TypedData)
+	}
+	if sbed2.Ahead != 2 || sbed2.Behind != 1 {
+		t.Errorf("ahead=%d behind=%d", sbed2.Ahead, sbed2.Behind)
+	}
+}
+
+func TestRawEventDataWrapsArbitraryJSON(t *testing.T) {
+	raw := RawEventData{Raw: json.RawMessage(`{"custom":"field","value":42}`)}
+	if !json.Valid(raw.RawJSON()) {
+		t.Fatal("RawJSON() should return valid JSON")
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(raw.RawJSON(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["custom"] != "field" {
+		t.Errorf("custom = %v", parsed["custom"])
+	}
+}
+
+func TestLaneEventUnmarshalUnknownDataType(t *testing.T) {
+	// An event with unknown event type should wrap data as RawEventData.
+	input := `{"event":"lane.ready","status":"ready","emittedAt":"2026-04-04T00:00:00Z","data":{"foo":"bar"}}`
+	var event LaneEvent
+	if err := json.Unmarshal([]byte(input), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.TypedData == nil {
+		t.Fatal("TypedData should be set for unknown data types")
+	}
+	raw, ok := event.TypedData.(RawEventData)
+	if !ok {
+		t.Fatalf("expected RawEventData, got %T", event.TypedData)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(raw.RawJSON(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["foo"] != "bar" {
+		t.Errorf("foo = %v", parsed["foo"])
+	}
+}

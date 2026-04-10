@@ -87,3 +87,17 @@ func DetectProviderKind(model string) ProviderKind {
 func LookupModelTokenLimit(model string) *ModelTokenLimit {
 	return ModelTokenLimitForModel(model)
 }
+
+// MaxTokensForModel returns the max output tokens for a known model.
+// Falls back to a heuristic: 32,000 for opus models, 64,000 for others.
+// Matches Rust's max_tokens_for_model().
+func MaxTokensForModel(model string) uint32 {
+	if limit := ModelTokenLimitForModel(model); limit != nil {
+		return limit.MaxOutputTokens
+	}
+	canonical := ResolveModelAlias(model)
+	if strings.Contains(strings.ToLower(canonical), "opus") {
+		return 32_000
+	}
+	return 64_000
+}
