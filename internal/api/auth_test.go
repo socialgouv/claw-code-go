@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -249,6 +250,41 @@ func TestResolveStartupAuthWithOAuth_EmptyToken(t *testing.T) {
 	}
 	if a.Kind != AuthSourceNone {
 		t.Fatalf("expected None for empty access token, got %d", a.Kind)
+	}
+}
+
+func TestEnrichBearerAuthError_APIKeyAsBearer(t *testing.T) {
+	auth := BearerAuth("sk-ant-api03-test-key")
+	enriched := EnrichBearerAuthError("401 Unauthorized", auth)
+	if !strings.Contains(enriched, "Hint:") {
+		t.Error("expected hint about API key as Bearer token")
+	}
+	if !strings.Contains(enriched, "x-api-key") {
+		t.Error("expected mention of x-api-key header")
+	}
+}
+
+func TestEnrichBearerAuthError_NormalBearer(t *testing.T) {
+	auth := BearerAuth("some-oauth-token")
+	enriched := EnrichBearerAuthError("401 Unauthorized", auth)
+	if enriched != "401 Unauthorized" {
+		t.Error("should not enrich error for non-sk-ant bearer token")
+	}
+}
+
+func TestEnrichBearerAuthError_NonBearer(t *testing.T) {
+	auth := APIKeyAuth("sk-ant-api03-key")
+	enriched := EnrichBearerAuthError("401 Unauthorized", auth)
+	if enriched != "401 Unauthorized" {
+		t.Error("should not enrich error for non-Bearer auth")
+	}
+}
+
+func TestEnrichBearerAuthError_CombinedAuth(t *testing.T) {
+	auth := CombinedAuth("sk-key", "tok-bearer")
+	enriched := EnrichBearerAuthError("401 Unauthorized", auth)
+	if enriched != "401 Unauthorized" {
+		t.Error("should not enrich error for Combined auth")
 	}
 }
 

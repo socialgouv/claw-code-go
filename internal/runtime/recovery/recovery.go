@@ -372,7 +372,7 @@ func AttemptRecovery(scenario FailureScenario, ctx *RecoveryContext) RecoveryRes
 				result = EscalationRequired{Reason: fmt.Sprintf("recovery failed at first step for %s", scenario)}
 				ctx.events = append(ctx.events,
 					RecoveryAttempted{Scenario: scenario, Recipe: recipe, Result: result},
-					RecoveryFailed{},
+					Escalated{},
 				)
 			} else {
 				result = PartialRecovery{

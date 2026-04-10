@@ -46,14 +46,15 @@ type CompactionState struct {
 }
 
 // EstimateTokens roughly estimates the number of tokens in a slice of messages
-// using a simple chars-per-token heuristic.
+// using a simple chars-per-token heuristic. Adds +1 per content block to match
+// Rust's token estimation which accounts for per-block overhead.
 func EstimateTokens(messages []api.Message) int {
 	var total int
 	for _, msg := range messages {
 		for _, cb := range msg.Content {
-			total += len(cb.Text) / charsPerToken
+			total += len(cb.Text)/charsPerToken + 1
 			for _, inner := range cb.Content {
-				total += len(inner.Text) / charsPerToken
+				total += len(inner.Text)/charsPerToken + 1
 			}
 		}
 	}

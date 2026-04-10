@@ -350,7 +350,7 @@ type WorkerReadySnapshot struct {
 func (w *Worker) appendEvent(kind WorkerEventKind, detail string, payload *WorkerEventPayload) {
 	now := nowSecs()
 	w.Events = append(w.Events, WorkerEvent{
-		Seq:       uint64(len(w.Events)),
+		Seq:       uint64(len(w.Events)) + 1,
 		Kind:      kind,
 		Status:    w.Status,
 		Detail:    detail,

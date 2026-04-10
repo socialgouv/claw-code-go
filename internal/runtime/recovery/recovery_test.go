@@ -162,13 +162,13 @@ func TestAttemptRecoveryFailAtStepZero(t *testing.T) {
 		t.Fatalf("expected EscalationRequired, got %T", result)
 	}
 
-	// Should have RecoveryFailed event.
+	// Should have Escalated event (Rust emits Escalated for all EscalationRequired results).
 	events := ctx.Events()
 	if len(events) != 2 {
 		t.Fatalf("len(Events) = %d, want 2", len(events))
 	}
-	if _, ok := events[1].(RecoveryFailed); !ok {
-		t.Errorf("events[1] type = %T, want RecoveryFailed", events[1])
+	if _, ok := events[1].(Escalated); !ok {
+		t.Errorf("events[1] type = %T, want Escalated", events[1])
 	}
 }
 

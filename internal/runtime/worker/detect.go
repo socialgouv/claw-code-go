@@ -230,10 +230,11 @@ func pathMatchesAllowlist(cwd, trustedRoot string) bool {
 // ---------------------------------------------------------------------------
 
 func promptPreview(prompt string) string {
-	if len(prompt) <= 48 {
+	runes := []rune(prompt)
+	if len(runes) <= 48 {
 		return prompt
 	}
-	return prompt[:48] + "\u2026"
+	return string(runes[:48]) + "\u2026"
 }
 
 func promptMisdeliveryDetail(target WorkerPromptTarget) string {

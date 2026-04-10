@@ -1,8 +1,10 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -143,4 +145,18 @@ func (t *OAuthTokenSet) IsExpired() bool {
 		return false
 	}
 	return *t.ExpiresAt <= uint64(time.Now().Unix())
+}
+
+// EnrichBearerAuthError adds a helpful hint when an API key (sk-ant-*) is
+// mistakenly used as a Bearer token. Matches Rust's enrich_bearer_auth_error().
+func EnrichBearerAuthError(errMsg string, auth AuthSource) string {
+	if auth.Kind != AuthSourceBearer {
+		return errMsg
+	}
+	if strings.HasPrefix(auth.BearerToken, "sk-ant-") {
+		return fmt.Sprintf("%s\n\nHint: It looks like you're using an API key (sk-ant-*) as a Bearer token. "+
+			"API keys should be passed via the x-api-key header instead. "+
+			"Set the ANTHROPIC_API_KEY environment variable, or use APIKeyAuth() instead of BearerAuth().", errMsg)
+	}
+	return errMsg
 }
