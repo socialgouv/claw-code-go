@@ -341,6 +341,73 @@ func TestPromptCachePathsForSession(t *testing.T) {
 	}
 }
 
+func TestCacheBreakEmitsTelemetryEvent(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_HOME", t.TempDir())
+
+	sink := &MemoryTelemetrySink{}
+	cache := NewPromptCache("telemetry-session").WithTelemetrySink(sink)
+
+	request := sampleRequest("same")
+	highUsage := &CacheUsage{CacheReadInputTokens: 6000}
+	lowUsage := &CacheUsage{CacheReadInputTokens: 1000}
+
+	cache.RecordUsage(request, highUsage)
+	record := cache.RecordUsage(request, lowUsage)
+
+	if record.CacheBreak == nil {
+		t.Fatal("expected cache break event")
+	}
+
+	events := sink.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 telemetry event, got %d", len(events))
+	}
+
+	ev := events[0]
+	if ev.Type != EventTypeSessionTrace {
+		t.Errorf("expected event type %s, got %s", EventTypeSessionTrace, ev.Type)
+	}
+	if ev.SessionTrace == nil {
+		t.Fatal("expected non-nil SessionTrace")
+	}
+	if ev.SessionTrace.Name != "prompt_cache_break" {
+		t.Errorf("expected name 'prompt_cache_break', got %q", ev.SessionTrace.Name)
+	}
+	if ev.SessionTrace.TimestampMs == 0 {
+		t.Error("expected non-zero timestamp")
+	}
+
+	attrs := ev.SessionTrace.Attributes
+	if attrs["unexpected"] != true {
+		t.Errorf("expected unexpected=true, got %v", attrs["unexpected"])
+	}
+	if attrs["reason"] != "cache read tokens dropped while prompt fingerprint remained stable" {
+		t.Errorf("unexpected reason: %v", attrs["reason"])
+	}
+	if attrs["token_drop"] != uint32(5000) {
+		t.Errorf("expected token_drop=5000, got %v", attrs["token_drop"])
+	}
+}
+
+func TestCacheBreakWithoutSinkNoPanic(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_HOME", t.TempDir())
+
+	// No sink attached — should not panic
+	cache := NewPromptCache("no-sink-session")
+
+	request := sampleRequest("same")
+	highUsage := &CacheUsage{CacheReadInputTokens: 6000}
+	lowUsage := &CacheUsage{CacheReadInputTokens: 1000}
+
+	cache.RecordUsage(request, highUsage)
+	record := cache.RecordUsage(request, lowUsage)
+
+	if record.CacheBreak == nil {
+		t.Fatal("expected cache break event")
+	}
+	// If we got here without panicking, the test passes.
+}
+
 func TestBaseCacheRootPrecedence(t *testing.T) {
 	t.Run("CLAUDE_CONFIG_HOME takes precedence", func(t *testing.T) {
 		t.Setenv("CLAUDE_CONFIG_HOME", "/custom/config")

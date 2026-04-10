@@ -62,6 +62,16 @@ type Config struct {
 
 	// Theme is the active TUI color theme ("dark" or "light").
 	Theme string
+
+	// Plugin settings.
+	// PluginBundledRoot is the directory containing bundled plugins.
+	PluginBundledRoot string
+	// PluginInstallRoot is the directory where installed plugins are stored.
+	PluginInstallRoot string
+	// PluginExternalDirs are additional directories to scan for plugins.
+	PluginExternalDirs []string
+	// EnabledPlugins maps plugin IDs to their enabled state.
+	EnabledPlugins map[string]bool
 }
 
 // LoadConfig reads configuration from layered settings files and environment
@@ -99,6 +109,11 @@ func LoadConfig() *Config {
 	}
 	if s.Theme != "" {
 		cfg.Theme = s.Theme
+	}
+
+	// Plugin configuration
+	if s.EnabledPlugins != nil {
+		cfg.EnabledPlugins = s.EnabledPlugins
 	}
 
 	// Environment variables override settings files.

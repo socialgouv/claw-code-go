@@ -1,14 +1,13 @@
 package api
 
 import (
-	"bufio"
 	"bytes"
+	"claw-code-go/internal/apikit"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 )
 
 const (
@@ -21,11 +20,14 @@ const (
 // Client is the Anthropic HTTP API client.
 // It implements the APIClient interface.
 type Client struct {
-	APIKey     string // API key for x-api-key header auth
-	OAuthToken string // OAuth access token; takes precedence over APIKey when set
-	BaseURL    string
-	Model      string
-	HTTPClient *http.Client
+	APIKey      string // API key for x-api-key header auth (legacy; prefer Auth)
+	OAuthToken  string // OAuth access token; takes precedence over APIKey when set (legacy; prefer Auth)
+	BaseURL     string
+	Model       string
+	HTTPClient  *http.Client
+	Auth        AuthSource            // structured auth; when Kind != AuthSourceNone, takes precedence over APIKey/OAuthToken
+	Tracer      *apikit.SessionTracer // optional HTTP lifecycle telemetry
+	PromptCache *apikit.PromptCache   // optional prompt cache for break telemetry
 }
 
 // NewClient creates a new API client with the given API key and model.
@@ -36,6 +38,12 @@ func NewClient(apiKey, model string) *Client {
 		Model:      model,
 		HTTPClient: &http.Client{},
 	}
+}
+
+// WithTracer returns the client with the given session tracer attached.
+func (c *Client) WithTracer(tracer *apikit.SessionTracer) *Client {
+	c.Tracer = tracer
+	return c
 }
 
 // StreamResponse sends a streaming message request and returns a channel of StreamEvents.
@@ -54,7 +62,10 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	if c.OAuthToken != "" {
+	// Apply authentication headers. Prefer structured Auth; fall back to legacy fields.
+	if c.Auth.Kind != AuthSourceNone {
+		c.Auth.ApplyToRequest(httpReq)
+	} else if c.OAuthToken != "" {
 		httpReq.Header.Set("authorization", "Bearer "+c.OAuthToken)
 	} else {
 		httpReq.Header.Set("x-api-key", c.APIKey)
@@ -63,15 +74,34 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 	httpReq.Header.Set("content-type", "application/json")
 	httpReq.Header.Set("accept", "text/event-stream")
 
+	// Telemetry: record request started
+	if c.Tracer != nil {
+		c.Tracer.RecordHTTPRequestStarted(1, "POST", "/v1/messages", nil)
+	}
+
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
+		if c.Tracer != nil {
+			c.Tracer.RecordHTTPRequestFailed(1, "POST", "/v1/messages", err.Error(), false, nil)
+		}
 		return nil, fmt.Errorf("do request: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		errBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(errBody))
+		errMsg := fmt.Sprintf("API error %d: %s", resp.StatusCode, string(errBody))
+		if c.Tracer != nil {
+			retryable := isRetryableStatus(resp.StatusCode)
+			c.Tracer.RecordHTTPRequestFailed(1, "POST", "/v1/messages", errMsg, retryable, nil)
+		}
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+
+	// Telemetry: record request succeeded
+	requestID := resp.Header.Get("x-request-id")
+	if c.Tracer != nil {
+		c.Tracer.RecordHTTPRequestSucceeded(1, "POST", "/v1/messages", uint16(resp.StatusCode), requestID, nil)
 	}
 
 	ch := make(chan StreamEvent, 64)
@@ -80,51 +110,62 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 		defer close(ch)
 		defer resp.Body.Close()
 
-		scanner := bufio.NewScanner(resp.Body)
-		// Increase buffer for large tool inputs
-		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+		parser := NewSseParser().WithContext("anthropic", c.Model)
+		buf := make([]byte, 64*1024)
 
-		for scanner.Scan() {
-			line := scanner.Text()
-
-			// Skip empty lines and event: lines (type is also in the JSON)
-			if line == "" || strings.HasPrefix(line, "event:") {
-				continue
+		for {
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				events, parseErr := parser.Push(buf[:n])
+				if parseErr != nil {
+					select {
+					case ch <- StreamEvent{
+						Type:         EventError,
+						ErrorMessage: fmt.Sprintf("parse SSE: %v", parseErr),
+					}:
+					case <-ctx.Done():
+						return
+					}
+					break
+				}
+				for _, event := range events {
+					select {
+					case ch <- event:
+					case <-ctx.Done():
+						return
+					}
+				}
 			}
-
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "[DONE]" {
+			if readErr != nil {
+				if readErr != io.EOF {
+					select {
+					case ch <- StreamEvent{
+						Type:         EventError,
+						ErrorMessage: fmt.Sprintf("read stream: %v", readErr),
+					}:
+					case <-ctx.Done():
+					}
+				}
 				break
 			}
+		}
 
-			event, err := parseSSEData(data)
-			if err != nil {
-				// Send an error event
-				ch <- StreamEvent{
-					Type:         EventError,
-					ErrorMessage: fmt.Sprintf("parse SSE: %v", err),
-				}
-				continue
+		// Flush any trailing data from the parser
+		events, parseErr := parser.Finish()
+		if parseErr != nil {
+			select {
+			case ch <- StreamEvent{
+				Type:         EventError,
+				ErrorMessage: fmt.Sprintf("parse SSE finish: %v", parseErr),
+			}:
+			case <-ctx.Done():
 			}
-
+		}
+		for _, event := range events {
 			select {
 			case ch <- event:
 			case <-ctx.Done():
 				return
-			}
-		}
-
-		if err := scanner.Err(); err != nil && err != io.EOF {
-			select {
-			case ch <- StreamEvent{
-				Type:         EventError,
-				ErrorMessage: fmt.Sprintf("scanner: %v", err),
-			}:
-			case <-ctx.Done():
 			}
 		}
 	}()
@@ -228,4 +269,10 @@ func parseSSEData(data string) (StreamEvent, error) {
 	}
 
 	return event, nil
+}
+
+// isRetryableStatus returns true for HTTP status codes that indicate a
+// transient error suitable for retry (408, 429, and 5xx).
+func isRetryableStatus(code int) bool {
+	return code == 408 || code == 429 || code >= 500
 }

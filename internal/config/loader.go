@@ -16,6 +16,9 @@ type Settings struct {
 	MaxTokens      int      `json:"maxTokens,omitempty"`
 	Theme          string   `json:"theme,omitempty"`
 
+	// EnabledPlugins maps plugin IDs to their enabled state.
+	EnabledPlugins map[string]bool `json:"enabledPlugins,omitempty"`
+
 	// Hooks holds hook command lists per event type.
 	Hooks *SettingsHooks `json:"hooks,omitempty"`
 
@@ -96,6 +99,9 @@ func merge(dst, src *Settings) {
 	}
 	if src.Theme != "" {
 		dst.Theme = src.Theme
+	}
+	if src.EnabledPlugins != nil {
+		dst.EnabledPlugins = src.EnabledPlugins
 	}
 	if src.Hooks != nil {
 		dst.Hooks = src.Hooks

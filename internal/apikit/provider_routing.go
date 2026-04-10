@@ -22,10 +22,21 @@ type ProviderMetadata struct {
 	DefaultBaseURL string
 }
 
-// MetadataForModel returns provider routing metadata based on model name prefix.
-// Returns nil if no prefix matches a known provider.
+// MetadataForModel returns provider routing metadata for a model.
+// It first checks the ModelRegistry for an exact match (supports runtime-registered
+// models), then falls back to prefix-based detection for Go-only providers like
+// Bedrock/Vertex/Foundry that route qwen/openai models via prefix.
+// Returns nil if neither lookup matches.
 func MetadataForModel(model string) *ProviderMetadata {
 	canonical := ResolveModelAlias(model)
+
+	// 1. Registry lookup — handles all registered models (built-in + runtime).
+	if entry := DefaultModelRegistry().LookupModel(canonical); entry != nil && entry.Metadata != nil {
+		return entry.Metadata
+	}
+
+	// 2. Prefix-based fallback — important for models not in the registry
+	//    (e.g., Bedrock/Vertex/Foundry routing for qwen/openai prefixed models).
 	lower := strings.ToLower(canonical)
 	switch {
 	case strings.HasPrefix(lower, "claude"):

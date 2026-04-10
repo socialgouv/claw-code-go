@@ -214,6 +214,173 @@ func TestResolveModelAliasGoldenFixtures(t *testing.T) {
 	}
 }
 
+// TestMetadataForModelPrefixFallback verifies that Go-only providers (Bedrock/Vertex/Foundry)
+// that route models via prefix detection still work correctly even though they are
+// not in the registry.
+func TestMetadataForModelPrefixFallback(t *testing.T) {
+	tests := []struct {
+		model    string
+		provider ProviderKind
+		authEnv  string
+		baseURL  string
+	}{
+		// OpenAI prefix models (not individually registered)
+		{"openai/gpt-4", ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
+		{"openai/gpt-4o-mini", ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
+		{"gpt-4o", ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
+		// Qwen/DashScope prefix models (not individually registered)
+		{"qwen/qwen-max", ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-turbo", ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen/qwen-plus", ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		// Claude prefix models not in registry (hypothetical future variants)
+		{"claude-next-gen-v1", ProviderAnthropic, "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
+		// Grok prefix models not in registry
+		{"grok-4-preview", ProviderXai, "XAI_API_KEY", "https://api.x.ai/v1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			meta := MetadataForModel(tt.model)
+			if meta == nil {
+				t.Fatalf("MetadataForModel(%q) = nil, want non-nil (prefix fallback)", tt.model)
+			}
+			if meta.Provider != tt.provider {
+				t.Errorf("Provider = %q, want %q", meta.Provider, tt.provider)
+			}
+			if meta.AuthEnvVar != tt.authEnv {
+				t.Errorf("AuthEnvVar = %q, want %q", meta.AuthEnvVar, tt.authEnv)
+			}
+			if meta.DefaultBaseURL != tt.baseURL {
+				t.Errorf("DefaultBaseURL = %q, want %q", meta.DefaultBaseURL, tt.baseURL)
+			}
+		})
+	}
+}
+
+// TestMetadataForModelRegistryLookup verifies that registry-registered models
+// are found via MetadataForModel and return registry metadata.
+func TestMetadataForModelRegistryLookup(t *testing.T) {
+	tests := []struct {
+		model    string
+		provider ProviderKind
+	}{
+		{"claude-opus-4-6", ProviderAnthropic},
+		{"claude-sonnet-4-6", ProviderAnthropic},
+		{"claude-haiku-4-5-20251213", ProviderAnthropic},
+		{"grok-3", ProviderXai},
+		{"grok-3-mini", ProviderXai},
+		{"grok-2", ProviderXai},
+		// Via aliases
+		{"opus", ProviderAnthropic},
+		{"sonnet", ProviderAnthropic},
+		{"grok", ProviderXai},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			meta := MetadataForModel(tt.model)
+			if meta == nil {
+				t.Fatalf("MetadataForModel(%q) = nil, want non-nil", tt.model)
+			}
+			if meta.Provider != tt.provider {
+				t.Errorf("Provider = %q, want %q", meta.Provider, tt.provider)
+			}
+		})
+	}
+}
+
+// TestMetadataForModelRuntimeRegistered verifies that models registered at
+// runtime via RegisterModel are picked up by MetadataForModel.
+func TestMetadataForModelRuntimeRegistered(t *testing.T) {
+	reg := DefaultModelRegistry()
+	reg.RegisterModel(ModelEntry{
+		Canonical:     "my-custom-llm-v1",
+		Provider:      ProviderOpenAI,
+		MaxOutput:     16_000,
+		ContextWindow: 128_000,
+		Aliases:       []string{"custom-llm"},
+		Metadata: &ProviderMetadata{
+			Provider:       ProviderOpenAI,
+			AuthEnvVar:     "CUSTOM_LLM_KEY",
+			BaseURLEnvVar:  "CUSTOM_LLM_BASE_URL",
+			DefaultBaseURL: "https://custom-llm.example.com/v1",
+		},
+	})
+
+	// Lookup by canonical name
+	meta := MetadataForModel("my-custom-llm-v1")
+	if meta == nil {
+		t.Fatal("MetadataForModel(\"my-custom-llm-v1\") = nil after RegisterModel")
+	}
+	if meta.AuthEnvVar != "CUSTOM_LLM_KEY" {
+		t.Errorf("AuthEnvVar = %q, want CUSTOM_LLM_KEY", meta.AuthEnvVar)
+	}
+
+	// Lookup by alias
+	meta = MetadataForModel("custom-llm")
+	if meta == nil {
+		t.Fatal("MetadataForModel(\"custom-llm\") = nil after RegisterModel")
+	}
+	if meta.Provider != ProviderOpenAI {
+		t.Errorf("Provider = %q, want %q", meta.Provider, ProviderOpenAI)
+	}
+}
+
+// TestModelTokenLimitRuntimeRegistered verifies that ModelTokenLimitForModel
+// picks up runtime-registered models from the registry.
+func TestModelTokenLimitRuntimeRegistered(t *testing.T) {
+	reg := DefaultModelRegistry()
+	reg.RegisterModel(ModelEntry{
+		Canonical:     "runtime-model-v2",
+		Provider:      ProviderOpenAI,
+		MaxOutput:     8_000,
+		ContextWindow: 64_000,
+		Aliases:       []string{"rtm2"},
+	})
+
+	limit := ModelTokenLimitForModel("runtime-model-v2")
+	if limit == nil {
+		t.Fatal("expected non-nil limit for runtime-registered model")
+	}
+	if limit.MaxOutputTokens != 8_000 {
+		t.Errorf("MaxOutputTokens = %d, want 8000", limit.MaxOutputTokens)
+	}
+	if limit.ContextWindowTokens != 64_000 {
+		t.Errorf("ContextWindowTokens = %d, want 64000", limit.ContextWindowTokens)
+	}
+
+	// Also via alias
+	limit = ModelTokenLimitForModel("rtm2")
+	if limit == nil {
+		t.Fatal("expected non-nil limit for runtime-registered model via alias")
+	}
+	if limit.MaxOutputTokens != 8_000 {
+		t.Errorf("MaxOutputTokens = %d, want 8000", limit.MaxOutputTokens)
+	}
+}
+
+// TestResolveModelAliasDelegatesToRegistry verifies that ResolveModelAlias
+// now delegates to the registry and handles runtime-registered aliases.
+func TestResolveModelAliasDelegatesToRegistry(t *testing.T) {
+	reg := DefaultModelRegistry()
+	reg.RegisterModel(ModelEntry{
+		Canonical:     "delegated-model-v1",
+		Provider:      ProviderAnthropic,
+		MaxOutput:     16_000,
+		ContextWindow: 200_000,
+		Aliases:       []string{"dm1"},
+	})
+
+	got := ResolveModelAlias("dm1")
+	if got != "delegated-model-v1" {
+		t.Errorf("ResolveModelAlias(\"dm1\") = %q, want \"delegated-model-v1\"", got)
+	}
+
+	// Unknown still passes through
+	got = ResolveModelAlias("totally-unknown")
+	if got != "totally-unknown" {
+		t.Errorf("ResolveModelAlias(\"totally-unknown\") = %q, want \"totally-unknown\"", got)
+	}
+}
+
 func TestLookupModelTokenLimit(t *testing.T) {
 	tests := []struct {
 		model       string

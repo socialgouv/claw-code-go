@@ -98,6 +98,7 @@ type PromptCache struct {
 	paths    PromptCachePaths
 	stats    PromptCacheStats
 	previous *trackedPromptState
+	Sink     TelemetrySink
 }
 
 // NewPromptCache creates a prompt cache for the given session ID.
@@ -116,6 +117,12 @@ func NewPromptCacheWithConfig(config PromptCacheConfig) *PromptCache {
 		stats:    stats,
 		previous: previous,
 	}
+}
+
+// WithTelemetrySink attaches a telemetry sink for cache break event logging.
+func (c *PromptCache) WithTelemetrySink(sink TelemetrySink) *PromptCache {
+	c.Sink = sink
+	return c
 }
 
 // Paths returns the cache directory paths.
@@ -211,6 +218,23 @@ func (c *PromptCache) recordUsageInternal(request *CacheRequest, usage *CacheUsa
 			c.stats.ExpectedInvalidations++
 		}
 		c.stats.LastBreakReason = cacheBreak.Reason
+
+		if c.Sink != nil {
+			c.Sink.Record(TelemetryEvent{
+				Type: EventTypeSessionTrace,
+				SessionTrace: &SessionTraceRecord{
+					Name:        "prompt_cache_break",
+					TimestampMs: uint64(time.Now().UnixMilli()),
+					Attributes: map[string]any{
+						"unexpected":          cacheBreak.Unexpected,
+						"reason":              cacheBreak.Reason,
+						"token_drop":          cacheBreak.TokenDrop,
+						"previous_cache_read": cacheBreak.PreviousCacheReadInputTokens,
+						"current_cache_read":  cacheBreak.CurrentCacheReadInputTokens,
+					},
+				},
+			})
+		}
 	}
 
 	c.previous = current

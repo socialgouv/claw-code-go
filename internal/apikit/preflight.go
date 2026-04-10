@@ -3,7 +3,6 @@ package apikit
 import (
 	"encoding/json"
 	"math"
-	"strings"
 )
 
 // ModelTokenLimit holds the token limits for a known model.
@@ -13,9 +12,22 @@ type ModelTokenLimit struct {
 }
 
 // ModelTokenLimitForModel returns the token limits for a known model, or nil
-// for unknown models. Matches the Rust model_token_limit() lookup table.
+// for unknown models. It first checks the ModelRegistry, then falls back to
+// the hardcoded switch for backward compatibility.
 func ModelTokenLimitForModel(model string) *ModelTokenLimit {
 	canonical := ResolveModelAlias(model)
+
+	// 1. Registry lookup — handles built-in + runtime-registered models.
+	//    Guard against zero MaxOutput (e.g., grok-2) to avoid returning
+	//    a misleading zero-value limit.
+	if entry := DefaultModelRegistry().LookupModel(canonical); entry != nil && entry.MaxOutput > 0 {
+		return &ModelTokenLimit{
+			MaxOutputTokens:     entry.MaxOutput,
+			ContextWindowTokens: entry.ContextWindow,
+		}
+	}
+
+	// 2. Hardcoded fallback for backward compat.
 	switch canonical {
 	case "claude-opus-4-6":
 		return &ModelTokenLimit{MaxOutputTokens: 32_000, ContextWindowTokens: 200_000}
@@ -29,26 +41,11 @@ func ModelTokenLimitForModel(model string) *ModelTokenLimit {
 }
 
 // ResolveModelAlias normalizes model names to their canonical form.
-// Matches the Rust resolve_model_alias() in providers/mod.rs:128-155.
+// Delegates to the ModelRegistry which holds all alias mappings (built-in +
+// runtime-registered). The registry's ResolveAlias returns the input unchanged
+// when no alias match is found, preserving pass-through behavior.
 func ResolveModelAlias(model string) string {
-	trimmed := strings.TrimSpace(model)
-	lower := strings.ToLower(trimmed)
-	switch lower {
-	case "opus":
-		return "claude-opus-4-6"
-	case "sonnet":
-		return "claude-sonnet-4-6"
-	case "haiku":
-		return "claude-haiku-4-5-20251213"
-	case "grok", "grok-3":
-		return "grok-3"
-	case "grok-mini", "grok-3-mini":
-		return "grok-3-mini"
-	case "grok-2":
-		return "grok-2"
-	default:
-		return trimmed
-	}
+	return DefaultModelRegistry().ResolveAlias(model)
 }
 
 // PreflightCheck validates that the estimated token usage fits within the

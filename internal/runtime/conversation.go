@@ -769,9 +769,14 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 	inputStr := string(inputJSON)
 
 	// --- PreToolUse hooks ---
+	var preHookMessages []string
+	// Extract permission override from pre-hooks (Phase 3: wired when
+	// PermissionContext support is added in Phase 4).
+	var preHookPermOverride *hooks.PermissionDecision
+	var preHookPermReason string
 	if loop.HookRunner != nil {
 		hookResult := loop.HookRunner.RunPreToolUse(name, inputStr)
-		if hookResult.IsDenied() || hookResult.IsFailed() {
+		if hookResult.IsDenied() || hookResult.IsFailed() || hookResult.IsCancelled() {
 			msg := strings.Join(hookResult.Messages, "\n")
 			if msg == "" {
 				msg = fmt.Sprintf("Hook denied tool %s", name)
@@ -782,6 +787,10 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 				IsError: true,
 			}
 		}
+		// Store pre-hook messages for merging after tool execution.
+		preHookMessages = hookResult.Messages
+		preHookPermOverride = hookResult.PermissionOverride
+		preHookPermReason = hookResult.PermissionReason
 		// Apply input mutation from hooks.
 		if hookResult.UpdatedInput != "" {
 			var updatedMap map[string]any
@@ -791,6 +800,10 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 			}
 		}
 	}
+	// TODO(Phase 4): Pass preHookPermOverride and preHookPermReason to
+	// the permission policy check via PermissionContext.
+	_ = preHookPermOverride
+	_ = preHookPermReason
 
 	// --- Telemetry: record tool execution start ---
 	if loop.Tracer != nil {
@@ -825,32 +838,99 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 			err = fmt.Errorf("ask_user: 'question' is required")
 		} else {
 			cb := tools.AskUserFallback(q)
-			fmt.Fprintf(os.Stdout, "%s\n", cb.Content[0].Text)
+			askText := cb.Content[0].Text
+			fmt.Fprintf(os.Stdout, "%s\n", askText)
+			// Run post-hooks and telemetry for ask_user (matching Rust behavior).
+			askText = hooks.MergeHookFeedback(preHookMessages, askText, false)
+			postResult := loop.runPostToolHooks(name, inputStr, askText, false)
+			if postResult.IsDenied() || postResult.IsFailed() || postResult.IsCancelled() {
+				askText = hooks.MergeHookFeedback(postResult.Messages, askText, true)
+				cb.Content[0].Text = askText
+				cb.IsError = true
+			} else {
+				askText = hooks.MergeHookFeedback(postResult.Messages, askText, false)
+				cb.Content[0].Text = askText
+			}
+			if loop.Tracer != nil {
+				loop.Tracer.Record("tool_execute_end", map[string]any{
+					"tool_name": name,
+					"is_error":  cb.IsError,
+				})
+			}
 			return cb
 		}
 	case "todo_write":
 		result, err = tools.ExecuteTodoWrite(input)
 	default:
+		// Try plugin tools first.
+		if loop.PluginRegistry != nil {
+			pluginTools, ptErr := loop.PluginRegistry.AggregatedTools()
+			if ptErr == nil {
+				for i := range pluginTools {
+					pt := &pluginTools[i]
+					if pt.Definition.Name == name {
+						ptResult, ptExecErr := pt.Execute(json.RawMessage(inputJSON))
+						ptIsError := ptExecErr != nil
+						ptText := ptResult
+						if ptExecErr != nil {
+							ptText = fmt.Sprintf("Error: %v", ptExecErr)
+							fmt.Fprintf(os.Stderr, "[Plugin tool %s error]: %v\n", name, ptExecErr)
+						} else {
+							fmt.Fprintf(os.Stdout, "%s\n", ptResult)
+						}
+						ptText = hooks.MergeHookFeedback(preHookMessages, ptText, ptIsError)
+						postResult := loop.runPostToolHooks(name, inputStr, ptText, ptIsError)
+						if postResult.IsDenied() || postResult.IsFailed() || postResult.IsCancelled() {
+							ptIsError = true
+						}
+						ptText = hooks.MergeHookFeedback(postResult.Messages, ptText,
+							postResult.IsDenied() || postResult.IsFailed() || postResult.IsCancelled())
+						if loop.Tracer != nil {
+							loop.Tracer.Record("tool_execute_end", map[string]any{
+								"tool_name": name,
+								"is_error":  ptIsError,
+							})
+						}
+						return api.ContentBlock{
+							Type:    "tool_result",
+							Content: []api.ContentBlock{{Type: "text", Text: ptText}},
+							IsError: ptIsError,
+						}
+					}
+				}
+			}
+		}
+
 		// Fall back to MCP registry.
 		if loop.MCPRegistry != nil {
 			if client, _, ok := loop.MCPRegistry.FindTool(name); ok {
 				mcpResult, mcpErr := client.CallTool(context.Background(), name, input)
 				if mcpErr != nil {
 					fmt.Fprintf(os.Stderr, "[MCP tool %s error]: %v\n", name, mcpErr)
-					loop.runPostToolHooks(name, inputStr, fmt.Sprintf("Error: %v", mcpErr), true)
+					mcpErrText := fmt.Sprintf("Error: %v", mcpErr)
+					mcpErrText = hooks.MergeHookFeedback(preHookMessages, mcpErrText, true)
+					postResult := loop.runPostToolHooks(name, inputStr, mcpErrText, true)
+					mcpErrText = hooks.MergeHookFeedback(postResult.Messages, mcpErrText, true)
 					return api.ContentBlock{
 						Type:    "tool_result",
-						Content: []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("Error: %v", mcpErr)}},
+						Content: []api.ContentBlock{{Type: "text", Text: mcpErrText}},
 						IsError: true,
 					}
 				}
-				text := mcpResultText(mcpResult)
-				fmt.Fprintf(os.Stdout, "%s\n", text)
-				loop.runPostToolHooks(name, inputStr, text, mcpResult.IsError)
+				mcpText := mcpResultText(mcpResult)
+				fmt.Fprintf(os.Stdout, "%s\n", mcpText)
+				mcpIsError := mcpResult.IsError
+				mcpText = hooks.MergeHookFeedback(preHookMessages, mcpText, false)
+				postResult := loop.runPostToolHooks(name, inputStr, mcpText, mcpIsError)
+				if postResult.IsDenied() || postResult.IsFailed() || postResult.IsCancelled() {
+					mcpIsError = true
+				}
+				mcpText = hooks.MergeHookFeedback(postResult.Messages, mcpText,
+					postResult.IsDenied() || postResult.IsFailed() || postResult.IsCancelled())
 				return api.ContentBlock{
 					Type:    "tool_result",
-					Content: []api.ContentBlock{{Type: "text", Text: text}},
-					IsError: mcpResult.IsError,
+					Content: []api.ContentBlock{{Type: "text", Text: mcpText}},
+					IsError: mcpIsError,
 				}
 			}
 		}
@@ -866,8 +946,16 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 		fmt.Fprintf(os.Stdout, "%s\n", result)
 	}
 
+	// --- Pre-hook message merging (Rust: merge_hook_feedback(pre_hook_result.messages(), output, false)) ---
+	text = hooks.MergeHookFeedback(preHookMessages, text, false)
+
 	// --- PostToolUse / PostToolUseFailure hooks ---
-	loop.runPostToolHooks(name, inputStr, text, isError)
+	postResult := loop.runPostToolHooks(name, inputStr, text, isError)
+	if postResult.IsDenied() || postResult.IsFailed() || postResult.IsCancelled() {
+		isError = true
+	}
+	text = hooks.MergeHookFeedback(postResult.Messages, text,
+		postResult.IsDenied() || postResult.IsFailed() || postResult.IsCancelled())
 
 	// --- Telemetry: record tool execution end ---
 	if loop.Tracer != nil {
@@ -887,15 +975,16 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 }
 
 // runPostToolHooks runs PostToolUse or PostToolUseFailure hooks if a HookRunner is configured.
-func (loop *ConversationLoop) runPostToolHooks(toolName, toolInput, toolOutput string, isError bool) {
+// Returns the HookRunResult so callers can check for denial/failure/cancellation
+// and merge hook messages into tool output (matching Rust behavior).
+func (loop *ConversationLoop) runPostToolHooks(toolName, toolInput, toolOutput string, isError bool) hooks.HookRunResult {
 	if loop.HookRunner == nil {
-		return
+		return hooks.Allow(nil)
 	}
 	if isError {
-		loop.HookRunner.RunPostToolUseFailure(toolName, toolInput, toolOutput)
-	} else {
-		loop.HookRunner.RunPostToolUse(toolName, toolInput, toolOutput, false)
+		return loop.HookRunner.RunPostToolUseFailure(toolName, toolInput, toolOutput)
 	}
+	return loop.HookRunner.RunPostToolUse(toolName, toolInput, toolOutput, false)
 }
 
 // mcpResultText extracts the concatenated text from an MCP tool result.
@@ -1065,6 +1154,13 @@ func (loop *ConversationLoop) InitTelemetry(path string) {
 	loop.TelemetrySink = sink
 	if loop.Session != nil {
 		loop.Tracer = apikit.NewSessionTracer(loop.Session.ID, sink)
+	}
+
+	// Wire the tracer to the API client if it supports it.
+	if loop.Tracer != nil {
+		if c, ok := loop.Client.(*api.Client); ok {
+			c.Tracer = loop.Tracer
+		}
 	}
 }
 
