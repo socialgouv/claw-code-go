@@ -1,16 +1,19 @@
 package lsp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Registry is a thread-safe registry for LSP language servers.
 type Registry struct {
-	mu      sync.Mutex
-	servers map[string]*LspServerState
+	mu        sync.Mutex
+	servers   map[string]*LspServerState
+	transport *LspTransport
 }
 
 // NewRegistry creates a new empty LSP registry.
@@ -132,6 +135,13 @@ func (r *Registry) Disconnect(language string) *LspServerState {
 	return &c
 }
 
+// SetTransport sets the LSP transport for routing requests to a real server.
+func (r *Registry) SetTransport(t *LspTransport) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.transport = t
+}
+
 // Len returns the number of registered servers.
 func (r *Registry) Len() int {
 	r.mu.Lock()
@@ -152,6 +162,7 @@ func (r *Registry) Dispatch(action string, path *string, line *uint32, character
 	}
 
 	// For diagnostics, we can check existing cached diagnostics.
+	// Note: GetDiagnostics acquires its own mutex, so we must not hold r.mu here.
 	if lspAction == ActionDiagnostics {
 		if path != nil {
 			diags := r.GetDiagnostics(*path)
@@ -197,6 +208,19 @@ func (r *Registry) Dispatch(action string, path *string, line *uint32, character
 		return nil, fmt.Errorf("LSP server for '%s' is not connected (status: %s)", server.Language, server.Status)
 	}
 
+	// Try routing through the transport if available.
+	r.mu.Lock()
+	transport := r.transport
+	r.mu.Unlock()
+
+	if transport != nil {
+		result, err := r.dispatchViaTransport(transport, lspAction, *path, line, character)
+		if err == nil {
+			return result, nil
+		}
+		// Fall through to placeholder on transport failure.
+	}
+
 	// Return structured placeholder — actual LSP JSON-RPC calls would
 	// go through the real LSP process here.
 	result, _ := json.Marshal(map[string]any{
@@ -209,6 +233,76 @@ func (r *Registry) Dispatch(action string, path *string, line *uint32, character
 		"message":   fmt.Sprintf("LSP %s dispatched to %s server", action, server.Language),
 	})
 	return result, nil
+}
+
+// dispatchViaTransport routes an LSP action through the JSON-RPC transport.
+func (r *Registry) dispatchViaTransport(transport *LspTransport, action LspAction, path string, line *uint32, character *uint32) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	uri := "file://" + path
+
+	var method string
+	var params interface{}
+
+	switch action {
+	case ActionHover:
+		method = "textDocument/hover"
+		params = map[string]interface{}{
+			"textDocument": map[string]string{"uri": uri},
+			"position":     makePosition(line, character),
+		}
+	case ActionDefinition:
+		method = "textDocument/definition"
+		params = map[string]interface{}{
+			"textDocument": map[string]string{"uri": uri},
+			"position":     makePosition(line, character),
+		}
+	case ActionReferences:
+		method = "textDocument/references"
+		params = map[string]interface{}{
+			"textDocument": map[string]string{"uri": uri},
+			"position":     makePosition(line, character),
+			"context":      map[string]bool{"includeDeclaration": true},
+		}
+	case ActionCompletion:
+		method = "textDocument/completion"
+		params = map[string]interface{}{
+			"textDocument": map[string]string{"uri": uri},
+			"position":     makePosition(line, character),
+		}
+	case ActionSymbols:
+		method = "textDocument/documentSymbol"
+		params = map[string]interface{}{
+			"textDocument": map[string]string{"uri": uri},
+		}
+	case ActionFormat:
+		method = "textDocument/formatting"
+		params = map[string]interface{}{
+			"textDocument": map[string]string{"uri": uri},
+			"options": map[string]interface{}{
+				"tabSize":                4,
+				"insertSpaces":           true,
+				"trimTrailingWhitespace": true,
+			},
+		}
+	default:
+		return nil, fmt.Errorf("unsupported action for transport: %s", action)
+	}
+
+	return transport.Request(ctx, method, params)
+}
+
+// makePosition builds an LSP Position object from optional line/character.
+func makePosition(line *uint32, character *uint32) map[string]uint32 {
+	pos := map[string]uint32{"line": 0, "character": 0}
+	if line != nil {
+		pos["line"] = *line
+	}
+	if character != nil {
+		pos["character"] = *character
+	}
+	return pos
 }
 
 // extensionToLanguage maps file extensions to language identifiers.

@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	"claw-code-go/internal/apikit"
+	"claw-code-go/internal/commands"
 	"claw-code-go/internal/permissions"
 	"claw-code-go/internal/runtime"
+	"claw-code-go/internal/runtime/recovery"
 )
 
 // fixtureDir returns the path to the golden fixtures directory.
@@ -170,5 +172,153 @@ func TestTelemetryTracerParity(t *testing.T) {
 	}
 	if events[3].SessionTrace.Sequence != 1 {
 		t.Errorf("event[3]: sequence = %d, want 1", events[3].SessionTrace.Sequence)
+	}
+}
+
+// TestCommandCountParity verifies the Go command registry has at least the
+// target count from Batch 5 (35 commands). The Rust reference has 142 SlashCommandSpec
+// entries; we track how close we are.
+func TestCommandCountParity(t *testing.T) {
+	_ = fixtureDir(t)
+
+	r := commands.NewFullRegistry()
+	goCount := r.Count()
+
+	// Batch 5 target: at least 35 ported commands
+	const batch5Target = 35
+	// Rust reference: 142 SlashCommandSpec entries
+	const rustTotal = 142
+
+	if goCount < batch5Target {
+		t.Errorf("Go command count %d < batch 5 target %d", goCount, batch5Target)
+	}
+
+	t.Logf("Command count parity: Go=%d, Rust=%d (%.0f%%)", goCount, rustTotal, float64(goCount)/float64(rustTotal)*100)
+
+	// Verify key commands from each category exist
+	requiredCommands := []string{
+		// Builtins
+		"help", "exit", "quit", "clear",
+		// Session
+		"session", "resume", "rename", "export",
+		// Status
+		"status", "cost", "usage", "version",
+		// Config
+		"config", "model", "permissions", "plan", "compact",
+		// Diagnostics
+		"doctor", "diff",
+		// Plugin/session-mgmt
+		"plugin", "agents", "skills", "tasks", "team", "cron", "memory", "sandbox", "init", "upgrade",
+		// Code
+		"commit", "pr", "issue", "bughunter", "review", "security-review", "release-notes", "test",
+		// UX
+		"theme", "vim", "effort", "fast", "brief", "advisor", "color", "keybindings", "privacy-settings", "output-style",
+		// Context
+		"files", "context", "hooks", "search", "copy", "rewind", "branch",
+		// Auth
+		"auth",
+		// MCP
+		"mcp",
+	}
+
+	for _, name := range requiredCommands {
+		if _, ok := r.Lookup(name); !ok {
+			t.Errorf("required command /%s not found in Go registry", name)
+		}
+	}
+}
+
+// TestRecoveryScenariosParity verifies all 7 Rust failure scenarios are
+// implemented and have matching recipes.
+func TestRecoveryScenariosParity(t *testing.T) {
+	_ = fixtureDir(t)
+
+	scenarios := recovery.AllScenarios()
+	if len(scenarios) != 7 {
+		t.Fatalf("expected 7 scenarios, got %d", len(scenarios))
+	}
+
+	// Verify each scenario has a recipe with correct escalation policy (matches Rust).
+	expectedPolicies := map[recovery.FailureScenario]recovery.EscalationPolicy{
+		recovery.ScenarioTrustPromptUnresolved: recovery.PolicyAlertHuman,
+		recovery.ScenarioPromptMisdelivery:     recovery.PolicyAlertHuman,
+		recovery.ScenarioStaleBranch:           recovery.PolicyAlertHuman,
+		recovery.ScenarioCompileRedCrossCrate:  recovery.PolicyAlertHuman,
+		recovery.ScenarioMcpHandshakeFailure:   recovery.PolicyAbort,
+		recovery.ScenarioPartialPluginStartup:  recovery.PolicyLogAndContinue,
+		recovery.ScenarioProviderFailure:       recovery.PolicyAlertHuman,
+	}
+
+	for scenario, expectedPolicy := range expectedPolicies {
+		recipe := recovery.RecipeFor(scenario)
+		if recipe.EscalationPolicy != expectedPolicy {
+			t.Errorf("scenario %s: escalation policy = %s, want %s",
+				scenario, recipe.EscalationPolicy, expectedPolicy)
+		}
+		if recipe.MaxAttempts != 1 {
+			t.Errorf("scenario %s: max_attempts = %d, want 1", scenario, recipe.MaxAttempts)
+		}
+		if len(recipe.Steps) == 0 {
+			t.Errorf("scenario %s: no recovery steps", scenario)
+		}
+	}
+
+	// Verify FromLaneEvent mapping for all known event types.
+	laneEvents := map[string]recovery.FailureScenario{
+		"trust_prompt_unresolved": recovery.ScenarioTrustPromptUnresolved,
+		"prompt_misdelivery":      recovery.ScenarioPromptMisdelivery,
+		"stale_branch":            recovery.ScenarioStaleBranch,
+		"compile_failure":         recovery.ScenarioCompileRedCrossCrate,
+		"mcp_handshake_failure":   recovery.ScenarioMcpHandshakeFailure,
+		"plugin_startup_failure":  recovery.ScenarioPartialPluginStartup,
+		"provider_failure":        recovery.ScenarioProviderFailure,
+	}
+
+	for event, expected := range laneEvents {
+		got, ok := recovery.FromLaneEvent(event)
+		if !ok {
+			t.Errorf("FromLaneEvent(%q): not found", event)
+			continue
+		}
+		if got != expected {
+			t.Errorf("FromLaneEvent(%q) = %s, want %s", event, got, expected)
+		}
+	}
+}
+
+// TestRecoveryWithDepsExecutesParity verifies recovery execution matches Rust behavior.
+func TestRecoveryWithDepsExecutesParity(t *testing.T) {
+	_ = fixtureDir(t)
+
+	// Test: successful recovery produces Recovered result with correct step count.
+	ctx := recovery.NewRecoveryContext()
+	result := recovery.AttemptRecovery(recovery.ScenarioProviderFailure, ctx)
+	if result.ResultKind() != "recovered" {
+		t.Errorf("expected 'recovered', got %q", result.ResultKind())
+	}
+	if r, ok := result.(recovery.Recovered); ok {
+		if r.StepsTaken != 1 {
+			t.Errorf("expected 1 step taken, got %d", r.StepsTaken)
+		}
+	}
+
+	// Test: second attempt for same scenario triggers escalation (max_attempts=1).
+	result2 := recovery.AttemptRecovery(recovery.ScenarioProviderFailure, ctx)
+	if result2.ResultKind() != "escalation_required" {
+		t.Errorf("expected 'escalation_required' on second attempt, got %q", result2.ResultKind())
+	}
+
+	// Test: partial recovery when step fails mid-recipe.
+	ctx2 := recovery.NewRecoveryContextWithFailAt(1) // fail at step index 1
+	result3 := recovery.AttemptRecovery(recovery.ScenarioStaleBranch, ctx2)
+	// StaleBranch has [RebaseBranch, CleanBuild]; fail at step 1 = partial
+	if result3.ResultKind() != "partial_recovery" {
+		t.Errorf("expected 'partial_recovery', got %q", result3.ResultKind())
+	}
+
+	// Verify events were emitted.
+	events := ctx2.Events()
+	if len(events) == 0 {
+		t.Error("expected recovery events to be emitted")
 	}
 }

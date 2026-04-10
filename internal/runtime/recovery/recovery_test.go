@@ -548,3 +548,155 @@ func TestAttemptRecoveryWithDepsPluginStartup(t *testing.T) {
 		t.Errorf("calls[1] = %q, want retry_mcp_handshake", deps.calls[1])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ProductionRecoveryDeps tests
+// ---------------------------------------------------------------------------
+
+type prodMockWorkerRegistry struct {
+	trustResolved bool
+	restarted     bool
+	failOn        string
+}
+
+func (m *prodMockWorkerRegistry) ResolveTrust(id string) error {
+	if m.failOn == "resolve_trust" {
+		return fmt.Errorf("mock: failed")
+	}
+	m.trustResolved = true
+	return nil
+}
+func (m *prodMockWorkerRegistry) Restart(id string) error {
+	if m.failOn == "restart" {
+		return fmt.Errorf("mock: failed")
+	}
+	m.restarted = true
+	return nil
+}
+func (m *prodMockWorkerRegistry) SendPrompt(id, p string) error { return nil }
+
+type prodMockMCPRegistry struct{ reconnected bool }
+
+func (m *prodMockMCPRegistry) Reconnect(n string) error { m.reconnected = true; return nil }
+
+type prodMockPluginManager struct{ disabled, enabled []string }
+
+func (m *prodMockPluginManager) DisablePlugin(n string) error {
+	m.disabled = append(m.disabled, n)
+	return nil
+}
+func (m *prodMockPluginManager) EnablePlugin(n string) error {
+	m.enabled = append(m.enabled, n)
+	return nil
+}
+
+func TestProductionDepsAcceptTrust(t *testing.T) {
+	t.Parallel()
+	w := &prodMockWorkerRegistry{}
+	d := &ProductionRecoveryDeps{Workers: w}
+	if err := d.AcceptTrust(); err != nil {
+		t.Fatal(err)
+	}
+	if !w.trustResolved {
+		t.Error("not resolved")
+	}
+}
+
+func TestProductionDepsNilGuards(t *testing.T) {
+	t.Parallel()
+	d := &ProductionRecoveryDeps{}
+	fns := []func() error{
+		d.AcceptTrust,
+		d.RedirectPrompt,
+		d.RestartWorker,
+		func() error { return d.RetryMcpHandshake(100) },
+		func() error { return d.RestartPlugin("x") },
+	}
+	for _, fn := range fns {
+		if err := fn(); err == nil {
+			t.Error("expected nil-guard error")
+		}
+	}
+}
+
+func TestProductionDepsAllScenarios(t *testing.T) {
+	t.Parallel()
+	for _, s := range AllScenarios() {
+		t.Run(s.String(), func(t *testing.T) {
+			d := &ProductionRecoveryDeps{
+				Workers: &prodMockWorkerRegistry{},
+				MCP:     &prodMockMCPRegistry{},
+				Plugins: &prodMockPluginManager{},
+			}
+			ctx := NewRecoveryContext()
+			r := AttemptRecoveryWithDeps(s, ctx, d)
+			if r.ResultKind() != "recovered" {
+				t.Errorf("got %q", r.ResultKind())
+			}
+		})
+	}
+}
+
+func TestProductionDepsEscalation(t *testing.T) {
+	t.Parallel()
+	d := &ProductionRecoveryDeps{Workers: &prodMockWorkerRegistry{}}
+	ctx := NewRecoveryContext()
+	AttemptRecoveryWithDeps(ScenarioProviderFailure, ctx, d)
+	r := AttemptRecoveryWithDeps(ScenarioProviderFailure, ctx, d)
+	if r.ResultKind() != "escalation_required" {
+		t.Errorf("got %q", r.ResultKind())
+	}
+}
+
+func TestProductionDepsRestartPlugin(t *testing.T) {
+	t.Parallel()
+	p := &prodMockPluginManager{}
+	d := &ProductionRecoveryDeps{Plugins: p}
+	if err := d.RestartPlugin("test"); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.disabled) != 1 || p.disabled[0] != "test" {
+		t.Errorf("disabled: %v", p.disabled)
+	}
+	if len(p.enabled) != 1 || p.enabled[0] != "test" {
+		t.Errorf("enabled: %v", p.enabled)
+	}
+}
+
+func TestProductionDepsFailingStep(t *testing.T) {
+	t.Parallel()
+	d := &ProductionRecoveryDeps{Workers: &prodMockWorkerRegistry{failOn: "resolve_trust"}}
+	ctx := NewRecoveryContext()
+	r := AttemptRecoveryWithDeps(ScenarioTrustPromptUnresolved, ctx, d)
+	if r.ResultKind() != "escalation_required" {
+		t.Errorf("got %q", r.ResultKind())
+	}
+}
+
+func TestFromLaneEventMapping(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		ev string
+		sc FailureScenario
+		ok bool
+	}{
+		{"trust_prompt_unresolved", ScenarioTrustPromptUnresolved, true},
+		{"prompt_misdelivery", ScenarioPromptMisdelivery, true},
+		{"stale_branch", ScenarioStaleBranch, true},
+		{"compile_failure", ScenarioCompileRedCrossCrate, true},
+		{"mcp_handshake_failure", ScenarioMcpHandshakeFailure, true},
+		{"plugin_startup_failure", ScenarioPartialPluginStartup, true},
+		{"provider_failure", ScenarioProviderFailure, true},
+		{"unknown", 0, false},
+		{"", 0, false},
+	}
+	for _, c := range cases {
+		got, ok := FromLaneEvent(c.ev)
+		if ok != c.ok {
+			t.Errorf("FromLaneEvent(%q): ok=%v, want %v", c.ev, ok, c.ok)
+		}
+		if ok && got != c.sc {
+			t.Errorf("FromLaneEvent(%q): got %s, want %s", c.ev, got, c.sc)
+		}
+	}
+}

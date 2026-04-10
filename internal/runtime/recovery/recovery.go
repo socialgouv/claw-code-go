@@ -1,8 +1,11 @@
 package recovery
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
+	"time"
 
 	"claw-code-go/internal/runtime/worker"
 )
@@ -505,5 +508,138 @@ func FromWorkerFailure(kind worker.WorkerFailureKind) FailureScenario {
 		return ScenarioProviderFailure
 	default:
 		return ScenarioProviderFailure
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Dependency interfaces (avoid import cycles with concrete packages)
+// ---------------------------------------------------------------------------
+
+// WorkerRegistryInterface is the subset of worker.WorkerRegistry needed for recovery.
+type WorkerRegistryInterface interface {
+	ResolveTrust(workerID string) error
+	Restart(workerID string) error
+	SendPrompt(workerID string, prompt string) error
+}
+
+// MCPRegistryInterface is the subset of mcp.Registry needed for recovery.
+type MCPRegistryInterface interface {
+	Reconnect(serverName string) error
+}
+
+// PluginManagerInterface is the subset of plugin.PluginManager needed for recovery.
+type PluginManagerInterface interface {
+	DisablePlugin(name string) error
+	EnablePlugin(name string) error
+}
+
+// ---------------------------------------------------------------------------
+// ProductionRecoveryDeps
+// ---------------------------------------------------------------------------
+
+// ProductionRecoveryDeps implements RecoveryDeps with real system dependencies.
+type ProductionRecoveryDeps struct {
+	Workers   WorkerRegistryInterface
+	MCP       MCPRegistryInterface
+	Plugins   PluginManagerInterface
+	EventSink func(RecoveryEvent)
+}
+
+var _ RecoveryDeps = (*ProductionRecoveryDeps)(nil)
+
+func (d *ProductionRecoveryDeps) AcceptTrust() error {
+	if d.Workers == nil {
+		return fmt.Errorf("recovery: worker registry not available (nil dependency)")
+	}
+	return d.Workers.ResolveTrust("default")
+}
+
+func (d *ProductionRecoveryDeps) RedirectPrompt() error {
+	if d.Workers == nil {
+		return fmt.Errorf("recovery: worker registry not available (nil dependency)")
+	}
+	return d.Workers.SendPrompt("default", "")
+}
+
+func (d *ProductionRecoveryDeps) RebaseBranch() error {
+	cmd := exec.Command("git", "rebase", "--autostash")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git rebase: %s: %w", string(out), err)
+	}
+	return nil
+}
+
+func (d *ProductionRecoveryDeps) CleanBuild() error {
+	cmd := exec.Command("git", "clean", "-fdx")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git clean: %s: %w", string(out), err)
+	}
+	return nil
+}
+
+func (d *ProductionRecoveryDeps) RetryMcpHandshake(timeoutMs uint64) error {
+	if d.MCP == nil {
+		return fmt.Errorf("recovery: MCP registry not available (nil dependency)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- d.MCP.Reconnect("default")
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("MCP handshake timeout after %dms", timeoutMs)
+	}
+}
+
+func (d *ProductionRecoveryDeps) RestartPlugin(name string) error {
+	if d.Plugins == nil {
+		return fmt.Errorf("recovery: plugin manager not available (nil dependency)")
+	}
+	if err := d.Plugins.DisablePlugin(name); err != nil {
+		return fmt.Errorf("disable plugin %q: %w", name, err)
+	}
+	if err := d.Plugins.EnablePlugin(name); err != nil {
+		return fmt.Errorf("enable plugin %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *ProductionRecoveryDeps) RestartWorker() error {
+	if d.Workers == nil {
+		return fmt.Errorf("recovery: worker registry not available (nil dependency)")
+	}
+	return d.Workers.Restart("default")
+}
+
+// ---------------------------------------------------------------------------
+// FromLaneEvent
+// ---------------------------------------------------------------------------
+
+// FromLaneEvent maps a lane event type string to a FailureScenario.
+// Returns the scenario and true if a mapping exists, or (0, false) otherwise.
+func FromLaneEvent(eventType string) (FailureScenario, bool) {
+	switch eventType {
+	case "trust_prompt_unresolved":
+		return ScenarioTrustPromptUnresolved, true
+	case "prompt_misdelivery":
+		return ScenarioPromptMisdelivery, true
+	case "stale_branch":
+		return ScenarioStaleBranch, true
+	case "compile_failure":
+		return ScenarioCompileRedCrossCrate, true
+	case "mcp_handshake_failure":
+		return ScenarioMcpHandshakeFailure, true
+	case "plugin_startup_failure":
+		return ScenarioPartialPluginStartup, true
+	case "provider_failure":
+		return ScenarioProviderFailure, true
+	default:
+		return 0, false
 	}
 }

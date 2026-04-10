@@ -1,10 +1,15 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"sync"
+	"time"
 )
 
 // TransportType identifies the kind of MCP transport.
@@ -58,10 +63,15 @@ func NewTransport(cfg TransportConfig) (Transport, error) {
 // SDKTransport wraps an MCP SDK server subprocess, communicating via
 // Content-Length framed JSON-RPC over stdin/stdout.
 type SDKTransport struct {
-	name   string
-	cmd    *exec.Cmd
-	server *McpSdkServer
-	cancel context.CancelFunc
+	name      string
+	cmd       *exec.Cmd
+	cancel    context.CancelFunc
+	stdin     io.WriteCloser
+	stdout    *bufio.Reader
+	process   *os.Process
+	mu        sync.Mutex // protects stdin writes
+	responses chan Response
+	done      chan struct{}
 }
 
 // NewSDKTransport creates a transport that spawns a subprocess with an MCP SDK
@@ -71,39 +81,169 @@ func NewSDKTransport(name, command string, args []string, env map[string]string)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	cmd := exec.CommandContext(ctx, command, args...)
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), func() []string {
+			s := make([]string, 0, len(env))
+			for k, v := range env {
+				s = append(s, k+"="+v)
+			}
+			return s
+		}()...)
 	}
 
-	return &SDKTransport{
-		name:   name,
-		cmd:    cmd,
-		cancel: cancel,
-	}, nil
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("mcp sdk %q: stdin pipe: %w", name, err)
+	}
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("mcp sdk %q: stdout pipe: %w", name, err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("mcp sdk %q: start process: %w", name, err)
+	}
+
+	t := &SDKTransport{
+		name:      name,
+		cmd:       cmd,
+		cancel:    cancel,
+		stdin:     stdinPipe,
+		stdout:    bufio.NewReader(stdoutPipe),
+		process:   cmd.Process,
+		responses: make(chan Response, 16),
+		done:      make(chan struct{}),
+	}
+
+	// Reader goroutine: reads LSP-framed JSON-RPC responses from stdout.
+	go t.readLoop()
+
+	return t, nil
 }
 
+// readLoop reads Content-Length framed responses from the subprocess stdout
+// and sends them to the responses channel. On error or EOF it closes done.
+func (t *SDKTransport) readLoop() {
+	defer close(t.done)
+	for {
+		frame, err := ReadLSPFrameFrom(t.stdout)
+		if err != nil {
+			return
+		}
+		if frame == nil {
+			// Clean EOF.
+			return
+		}
+
+		var resp Response
+		if err := json.Unmarshal(frame, &resp); err != nil {
+			continue // skip malformed frames
+		}
+
+		select {
+		case t.responses <- resp:
+		case <-t.done:
+			return
+		}
+	}
+}
+
+// Send writes a JSON-RPC request to the subprocess stdin and waits for the
+// matching response from the reader goroutine.
 func (t *SDKTransport) Send(req Request) (Response, error) {
-	// The SDK transport is currently a placeholder for subprocess-based
-	// MCP SDK servers. Real implementation would pipe JSON-RPC frames
-	// to/from the subprocess. For now, return an unsupported error.
-	_ = json.RawMessage{}
-	return Response{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Error: &RPCError{
-			Code:    -32601,
-			Message: fmt.Sprintf("SDK transport %q: subprocess communication not yet wired", t.name),
-		},
-	}, nil
+	data, err := json.Marshal(req)
+	if err != nil {
+		return Response{}, fmt.Errorf("mcp sdk %q: marshal request: %w", t.name, err)
+	}
+
+	t.mu.Lock()
+	err = WriteLSPFrameTo(t.stdin, data)
+	t.mu.Unlock()
+	if err != nil {
+		return Response{}, fmt.Errorf("mcp sdk %q: write request: %w", t.name, err)
+	}
+
+	// Wait for a response with a timeout.
+	select {
+	case resp, ok := <-t.responses:
+		if !ok {
+			return Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error: &RPCError{
+					Code:    -32603,
+					Message: fmt.Sprintf("SDK transport %q: subprocess closed", t.name),
+				},
+			}, nil
+		}
+		return resp, nil
+	case <-t.done:
+		return Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error: &RPCError{
+				Code:    -32603,
+				Message: fmt.Sprintf("SDK transport %q: subprocess exited", t.name),
+			},
+		}, nil
+	case <-time.After(30 * time.Second):
+		return Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error: &RPCError{
+				Code:    -32603,
+				Message: fmt.Sprintf("SDK transport %q: response timeout", t.name),
+			},
+		}, nil
+	}
 }
 
+// Notify sends a JSON-RPC notification to the subprocess. Notifications do
+// not expect a response.
 func (t *SDKTransport) Notify(n Notification) error {
+	data, err := json.Marshal(n)
+	if err != nil {
+		return fmt.Errorf("mcp sdk %q: marshal notification: %w", t.name, err)
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := WriteLSPFrameTo(t.stdin, data); err != nil {
+		return fmt.Errorf("mcp sdk %q: write notification: %w", t.name, err)
+	}
 	return nil
 }
 
+// Close shuts down the subprocess. It closes stdin to signal EOF, waits
+// briefly for the process to exit, and kills it if still running.
 func (t *SDKTransport) Close() error {
+	// Close stdin to signal the subprocess to exit.
+	if t.stdin != nil {
+		t.stdin.Close()
+	}
+
+	// Wait briefly for the reader goroutine and process to finish.
+	select {
+	case <-t.done:
+	case <-time.After(3 * time.Second):
+	}
+
+	// Kill if still running.
+	if t.process != nil {
+		_ = t.process.Kill()
+	}
+
+	// Cancel the context (stops CommandContext from blocking).
 	if t.cancel != nil {
 		t.cancel()
 	}
+
+	// Reap the process.
+	_ = t.cmd.Wait()
+
 	return nil
 }

@@ -14,6 +14,10 @@ const (
 	CategoryConfig        CommandCategory = "config"
 	CategoryDiagnostics   CommandCategory = "diagnostics"
 	CategoryBuiltin       CommandCategory = "builtin"
+	CategoryPlugin        CommandCategory = "plugin"
+	CategoryCode          CommandCategory = "code"
+	CategoryUX            CommandCategory = "ux"
+	CategoryContext       CommandCategory = "context"
 	CategoryUncategorized CommandCategory = ""
 )
 
@@ -171,6 +175,37 @@ func (r *Registry) ResumeSupportedCommands() []Command {
 		result = append(result, cmd)
 	}
 	return result
+}
+
+// NewFullRegistry creates a registry with all command categories registered.
+// This is the standard way to create a fully-initialized command registry.
+func NewFullRegistry() *Registry {
+	r := NewRegistry()
+	RegisterSessionCommands(r)
+	RegisterStatusCommands(r)
+	RegisterConfigCommands(r)
+	RegisterDiagnosticCommands(r)
+	RegisterAuthCommands(r)
+	RegisterMCPCommand(r)
+	RegisterPluginCommands(r)
+	RegisterCodeCommands(r)
+	RegisterUXCommands(r)
+	RegisterContextCommands(r)
+	return r
+}
+
+// InitializeAll registers all command categories into an existing registry.
+func InitializeAll(r *Registry) {
+	RegisterSessionCommands(r)
+	RegisterStatusCommands(r)
+	RegisterConfigCommands(r)
+	RegisterDiagnosticCommands(r)
+	RegisterAuthCommands(r)
+	RegisterMCPCommand(r)
+	RegisterPluginCommands(r)
+	RegisterCodeCommands(r)
+	RegisterUXCommands(r)
+	RegisterContextCommands(r)
 }
 
 // ErrExit is returned by /exit and /quit to signal the REPL should stop.
