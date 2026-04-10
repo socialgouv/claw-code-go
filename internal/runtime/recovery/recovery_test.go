@@ -3,6 +3,7 @@ package recovery
 import (
 	"claw-code-go/internal/runtime/worker"
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -394,5 +395,156 @@ func TestRecoveryEventKinds(t *testing.T) {
 				t.Errorf("EventKind() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RecoveryDeps tests
+// ---------------------------------------------------------------------------
+
+// mockDeps implements RecoveryDeps and records calls.
+type mockDeps struct {
+	calls     []string
+	failAfter int // fail after this many calls (-1 = never fail)
+}
+
+func newMockDeps(failAfter int) *mockDeps {
+	return &mockDeps{failAfter: failAfter}
+}
+
+func (m *mockDeps) maybeErr(step string) error {
+	m.calls = append(m.calls, step)
+	if m.failAfter >= 0 && len(m.calls) > m.failAfter {
+		return fmt.Errorf("simulated failure at step %s", step)
+	}
+	return nil
+}
+
+func (m *mockDeps) AcceptTrust() error    { return m.maybeErr("accept_trust") }
+func (m *mockDeps) RedirectPrompt() error { return m.maybeErr("redirect_prompt") }
+func (m *mockDeps) RebaseBranch() error   { return m.maybeErr("rebase_branch") }
+func (m *mockDeps) CleanBuild() error     { return m.maybeErr("clean_build") }
+func (m *mockDeps) RetryMcpHandshake(timeoutMs uint64) error {
+	return m.maybeErr("retry_mcp_handshake")
+}
+func (m *mockDeps) RestartPlugin(name string) error { return m.maybeErr("restart_plugin") }
+func (m *mockDeps) RestartWorker() error            { return m.maybeErr("restart_worker") }
+
+func TestAttemptRecoveryWithDepsSucceeds(t *testing.T) {
+	t.Parallel()
+	ctx := NewRecoveryContext()
+	deps := newMockDeps(-1) // never fail
+	result := AttemptRecoveryWithDeps(ScenarioTrustPromptUnresolved, ctx, deps)
+
+	rec, ok := result.(Recovered)
+	if !ok {
+		t.Fatalf("expected Recovered, got %T", result)
+	}
+	if rec.StepsTaken != 1 {
+		t.Errorf("StepsTaken = %d, want 1", rec.StepsTaken)
+	}
+	if len(deps.calls) != 1 {
+		t.Errorf("len(calls) = %d, want 1", len(deps.calls))
+	}
+	if deps.calls[0] != "accept_trust" {
+		t.Errorf("calls[0] = %q, want accept_trust", deps.calls[0])
+	}
+}
+
+func TestAttemptRecoveryWithDepsMultiStep(t *testing.T) {
+	t.Parallel()
+	ctx := NewRecoveryContext()
+	deps := newMockDeps(-1)
+	result := AttemptRecoveryWithDeps(ScenarioStaleBranch, ctx, deps)
+
+	rec, ok := result.(Recovered)
+	if !ok {
+		t.Fatalf("expected Recovered, got %T", result)
+	}
+	if rec.StepsTaken != 2 {
+		t.Errorf("StepsTaken = %d, want 2", rec.StepsTaken)
+	}
+	if len(deps.calls) != 2 {
+		t.Fatalf("len(calls) = %d, want 2", len(deps.calls))
+	}
+	if deps.calls[0] != "rebase_branch" {
+		t.Errorf("calls[0] = %q, want rebase_branch", deps.calls[0])
+	}
+	if deps.calls[1] != "clean_build" {
+		t.Errorf("calls[1] = %q, want clean_build", deps.calls[1])
+	}
+}
+
+func TestAttemptRecoveryWithDepsFailsAtFirstStep(t *testing.T) {
+	t.Parallel()
+	ctx := NewRecoveryContext()
+	deps := newMockDeps(0) // fail on first call
+	result := AttemptRecoveryWithDeps(ScenarioStaleBranch, ctx, deps)
+
+	_, ok := result.(EscalationRequired)
+	if !ok {
+		t.Fatalf("expected EscalationRequired, got %T", result)
+	}
+
+	events := ctx.Events()
+	if len(events) != 2 {
+		t.Fatalf("len(Events) = %d, want 2", len(events))
+	}
+	if _, ok := events[1].(Escalated); !ok {
+		t.Errorf("events[1] type = %T, want Escalated", events[1])
+	}
+}
+
+func TestAttemptRecoveryWithDepsPartialFailure(t *testing.T) {
+	t.Parallel()
+	ctx := NewRecoveryContext()
+	deps := newMockDeps(1) // fail after first call
+	result := AttemptRecoveryWithDeps(ScenarioStaleBranch, ctx, deps)
+
+	pr, ok := result.(PartialRecovery)
+	if !ok {
+		t.Fatalf("expected PartialRecovery, got %T", result)
+	}
+	if len(pr.RecoveredSteps) != 1 {
+		t.Errorf("len(RecoveredSteps) = %d, want 1", len(pr.RecoveredSteps))
+	}
+	if len(pr.Remaining) != 1 {
+		t.Errorf("len(Remaining) = %d, want 1", len(pr.Remaining))
+	}
+}
+
+func TestAttemptRecoveryNilDepsSimulationPath(t *testing.T) {
+	t.Parallel()
+	// nil deps should use the simulation path (backward compat)
+	ctx := NewRecoveryContext()
+	result := AttemptRecoveryWithDeps(ScenarioProviderFailure, ctx, nil)
+
+	_, ok := result.(Recovered)
+	if !ok {
+		t.Fatalf("expected Recovered with nil deps, got %T", result)
+	}
+}
+
+func TestAttemptRecoveryWithDepsPluginStartup(t *testing.T) {
+	t.Parallel()
+	ctx := NewRecoveryContext()
+	deps := newMockDeps(-1)
+	result := AttemptRecoveryWithDeps(ScenarioPartialPluginStartup, ctx, deps)
+
+	rec, ok := result.(Recovered)
+	if !ok {
+		t.Fatalf("expected Recovered, got %T", result)
+	}
+	if rec.StepsTaken != 2 {
+		t.Errorf("StepsTaken = %d, want 2", rec.StepsTaken)
+	}
+	if len(deps.calls) != 2 {
+		t.Fatalf("len(calls) = %d, want 2", len(deps.calls))
+	}
+	if deps.calls[0] != "restart_plugin" {
+		t.Errorf("calls[0] = %q, want restart_plugin", deps.calls[0])
+	}
+	if deps.calls[1] != "retry_mcp_handshake" {
+		t.Errorf("calls[1] = %q, want retry_mcp_handshake", deps.calls[1])
 	}
 }

@@ -342,13 +342,39 @@ func RecipeFor(scenario FailureScenario) RecoveryRecipe {
 }
 
 // ---------------------------------------------------------------------------
+// RecoveryDeps
+// ---------------------------------------------------------------------------
+
+// RecoveryDeps is the interface for executing real recovery actions.
+// When nil is passed to AttemptRecovery, the recovery runs in simulation mode
+// (the existing failAtStep-based testing path). When non-nil, each step
+// dispatches to the corresponding method.
+type RecoveryDeps interface {
+	AcceptTrust() error
+	RedirectPrompt() error
+	RebaseBranch() error
+	CleanBuild() error
+	RetryMcpHandshake(timeoutMs uint64) error
+	RestartPlugin(name string) error
+	RestartWorker() error
+}
+
+// ---------------------------------------------------------------------------
 // AttemptRecovery
 // ---------------------------------------------------------------------------
 
 // AttemptRecovery executes the recovery recipe for the given scenario within
 // the provided context. It tracks attempts, honours failAtStep for testing,
 // and emits appropriate events.
+//
+// If deps is non-nil, each step is executed via the corresponding RecoveryDeps
+// method. If deps is nil, the simulation path (failAtStep) is used.
 func AttemptRecovery(scenario FailureScenario, ctx *RecoveryContext) RecoveryResult {
+	return AttemptRecoveryWithDeps(scenario, ctx, nil)
+}
+
+// AttemptRecoveryWithDeps executes recovery with optional real dependencies.
+func AttemptRecoveryWithDeps(scenario FailureScenario, ctx *RecoveryContext, deps RecoveryDeps) RecoveryResult {
 	recipe := RecipeFor(scenario)
 
 	// Check if max attempts already reached.
@@ -364,8 +390,9 @@ func AttemptRecovery(scenario FailureScenario, ctx *RecoveryContext) RecoveryRes
 	// Increment attempt counter.
 	ctx.attempts[scenario]++
 
-	// Execute steps (simulated).
-	for i := range recipe.Steps {
+	// Execute steps.
+	for i, step := range recipe.Steps {
+		// Simulation path: test-injected failure at a specific step.
 		if ctx.failAtStep != nil && i == *ctx.failAtStep {
 			var result RecoveryResult
 			if i == 0 {
@@ -385,6 +412,30 @@ func AttemptRecovery(scenario FailureScenario, ctx *RecoveryContext) RecoveryRes
 				)
 			}
 			return result
+		}
+
+		// Real execution path: dispatch to deps if available.
+		if deps != nil {
+			if err := executeStep(step, deps); err != nil {
+				var result RecoveryResult
+				if i == 0 {
+					result = EscalationRequired{Reason: fmt.Sprintf("recovery failed at step %q: %s", step.StepName(), err)}
+					ctx.events = append(ctx.events,
+						RecoveryAttempted{Scenario: scenario, Recipe: recipe, Result: result},
+						Escalated{},
+					)
+				} else {
+					result = PartialRecovery{
+						RecoveredSteps: recipe.Steps[:i],
+						Remaining:      recipe.Steps[i:],
+					}
+					ctx.events = append(ctx.events,
+						RecoveryAttempted{Scenario: scenario, Recipe: recipe, Result: result},
+						RecoveryFailed{},
+					)
+				}
+				return result
+			}
 		}
 	}
 
@@ -414,6 +465,30 @@ func FromWorkerFailureKind(kind string) FailureScenario {
 		return ScenarioProviderFailure
 	default:
 		return ScenarioProviderFailure
+	}
+}
+
+// executeStep dispatches a single recovery step to the deps interface.
+func executeStep(step RecoveryStep, deps RecoveryDeps) error {
+	switch s := step.(type) {
+	case AcceptTrustPrompt:
+		return deps.AcceptTrust()
+	case RedirectPromptToAgent:
+		return deps.RedirectPrompt()
+	case RebaseBranch:
+		return deps.RebaseBranch()
+	case CleanBuild:
+		return deps.CleanBuild()
+	case RetryMcpHandshake:
+		return deps.RetryMcpHandshake(s.Timeout)
+	case RestartPlugin:
+		return deps.RestartPlugin(s.Name)
+	case RestartWorker:
+		return deps.RestartWorker()
+	case EscalateToHuman:
+		return nil // escalation is handled by the caller
+	default:
+		return fmt.Errorf("unknown recovery step: %T", step)
 	}
 }
 
