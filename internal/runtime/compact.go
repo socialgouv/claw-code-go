@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -46,19 +47,48 @@ type CompactionState struct {
 }
 
 // EstimateTokens roughly estimates the number of tokens in a slice of messages
-// using a simple chars-per-token heuristic. Adds +1 per content block to match
-// Rust's token estimation which accounts for per-block overhead.
+// using a simple chars-per-token heuristic. Matches Rust's
+// estimate_message_tokens() with explicit ToolUse and ToolResult arms:
+//   - Text: text.len() / 4 + 1
+//   - ToolUse: (name.len() + input_json.len()) / 4 + 1
+//   - ToolResult: (tool_name.len() + output.len()) / 4 + 1
 func EstimateTokens(messages []api.Message) int {
 	var total int
 	for _, msg := range messages {
 		for _, cb := range msg.Content {
-			total += len(cb.Text)/charsPerToken + 1
-			for _, inner := range cb.Content {
-				total += len(inner.Text)/charsPerToken + 1
-			}
+			total += estimateBlockTokens(&cb)
 		}
 	}
 	return total
+}
+
+// estimateBlockTokens estimates tokens for a single content block.
+func estimateBlockTokens(cb *api.ContentBlock) int {
+	switch cb.Type {
+	case "tool_use":
+		// Rust: (name.len() + input.len()) / 4 + 1
+		inputLen := 0
+		if cb.Input != nil {
+			// Serialize input map to approximate JSON length
+			data, err := json.Marshal(cb.Input)
+			if err == nil {
+				inputLen = len(data)
+			}
+		}
+		return (len(cb.Name)+inputLen)/charsPerToken + 1
+	case "tool_result":
+		// Rust: (tool_name.len() + output.len()) / 4 + 1
+		// tool_name is not stored directly; use ToolUseID as proxy.
+		// Output is the nested text content.
+		outputLen := 0
+		for _, inner := range cb.Content {
+			outputLen += len(inner.Text)
+		}
+		return (len(cb.ToolUseID)+outputLen)/charsPerToken + 1
+	default:
+		// Text blocks and others
+		return len(cb.Text)/charsPerToken + 1
+	}
 }
 
 // ShouldCompact returns true when the session should be compacted.
@@ -652,6 +682,8 @@ func extractFileCandidates(content string) []string {
 }
 
 // interestingExtensions is the set of file extensions considered interesting.
+// Note: go, py, yaml, yml, toml are Go-only additions not in the Rust codebase.
+// This is an intentional divergence to better support Go-centric workflows.
 var interestingExtensions = map[string]bool{
 	"rs": true, "ts": true, "tsx": true, "js": true, "json": true,
 	"md": true, "go": true, "py": true, "yaml": true, "yml": true, "toml": true,

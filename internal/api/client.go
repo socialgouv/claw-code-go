@@ -122,7 +122,9 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 		}
 
 		if !retryable || attempt == defaultMaxRetries {
-			return nil, fmt.Errorf("%s", errMsg)
+			// Enrich 401 errors when sk-ant-* is used as Bearer token.
+			enriched := EnrichBearerAuthError(errMsg, resp.StatusCode, c.Auth)
+			return nil, fmt.Errorf("%s", enriched)
 		}
 
 		// Exponential backoff before next attempt.

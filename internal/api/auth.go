@@ -147,16 +147,77 @@ func (t *OAuthTokenSet) IsExpired() bool {
 	return *t.ExpiresAt <= uint64(time.Now().Unix())
 }
 
+// skAntBearerHint matches Rust's SK_ANT_BEARER_HINT constant.
+const skAntBearerHint = "sk-ant-* keys go in ANTHROPIC_API_KEY (x-api-key header), not ANTHROPIC_AUTH_TOKEN (Bearer header). Move your key to ANTHROPIC_API_KEY."
+
 // EnrichBearerAuthError adds a helpful hint when an API key (sk-ant-*) is
-// mistakenly used as a Bearer token. Matches Rust's enrich_bearer_auth_error().
-func EnrichBearerAuthError(errMsg string, auth AuthSource) string {
-	if auth.Kind != AuthSourceBearer {
+// mistakenly used as a Bearer token on a 401 response.
+//
+// Matches Rust's enrich_bearer_auth_error() which:
+//  1. Only enriches API errors (non-API errors pass through unchanged)
+//  2. Only enriches 401 status codes
+//  3. Only enriches pure Bearer auth (not Combined, since x-api-key is already sent)
+//  4. Only enriches sk-ant-* prefixed tokens
+//
+// The statusCode parameter gates enrichment — only 401 triggers the hint.
+func EnrichBearerAuthError(errMsg string, statusCode int, auth AuthSource) string {
+	// Only enrich 401 errors.
+	if statusCode != 401 {
 		return errMsg
 	}
-	if strings.HasPrefix(auth.BearerToken, "sk-ant-") {
-		return fmt.Sprintf("%s\n\nHint: It looks like you're using an API key (sk-ant-*) as a Bearer token. "+
-			"API keys should be passed via the x-api-key header instead. "+
-			"Set the ANTHROPIC_API_KEY environment variable, or use APIKeyAuth() instead of BearerAuth().", errMsg)
+	// Only enrich pure Bearer auth — if API key is also present (Combined),
+	// the x-api-key header is already being sent and the 401 is from a
+	// different cause; adding the hint would be misleading.
+	if !auth.HasBearerToken() || auth.HasAPIKey() {
+		return errMsg
 	}
-	return errMsg
+	if !strings.HasPrefix(auth.BearerToken, "sk-ant-") {
+		return errMsg
+	}
+	if errMsg != "" {
+		return fmt.Sprintf("%s — hint: %s", errMsg, skAntBearerHint)
+	}
+	return fmt.Sprintf("hint: %s", skAntBearerHint)
+}
+
+// ForeignProviderEnvVar describes a non-Anthropic provider's env var and
+// routing hint, used to suggest model-prefix fixes when Anthropic auth fails.
+// Matches Rust's FOREIGN_PROVIDER_ENV_VARS.
+type ForeignProviderEnvVar struct {
+	EnvVar       string
+	ProviderName string
+	Hint         string
+}
+
+// ForeignProviderEnvVars lists provider env vars to check when Anthropic
+// credentials are missing. If one is set, the user likely intends to use a
+// different provider and needs model-prefix routing.
+var ForeignProviderEnvVars = []ForeignProviderEnvVar{
+	{
+		EnvVar:       "OPENAI_API_KEY",
+		ProviderName: "OpenAI-compat",
+		Hint:         "prefix your model name with `openai/` (e.g. `--model openai/gpt-4.1-mini`) so prefix routing selects the OpenAI-compatible provider, and set `OPENAI_BASE_URL` if you are pointing at OpenRouter/Ollama/a local server",
+	},
+	{
+		EnvVar:       "XAI_API_KEY",
+		ProviderName: "xAI",
+		Hint:         "use an xAI model alias (e.g. `--model grok` or `--model grok-mini`) so the prefix router selects the xAI backend",
+	},
+	{
+		EnvVar:       "DASHSCOPE_API_KEY",
+		ProviderName: "Alibaba DashScope",
+		Hint:         "prefix your model name with `qwen/` or `qwen-` (e.g. `--model qwen-plus`) so prefix routing selects the DashScope backend",
+	},
+}
+
+// SuggestForeignProvider checks whether a foreign provider's API key is set
+// and returns a hint string suggesting model-prefix routing. Returns "" if
+// no foreign credentials are detected.
+func SuggestForeignProvider() string {
+	for _, fp := range ForeignProviderEnvVars {
+		if os.Getenv(fp.EnvVar) != "" {
+			return fmt.Sprintf("found %s set for %s — %s", fp.EnvVar, fp.ProviderName, fp.Hint)
+		}
+	}
+	return ""
 }

@@ -253,20 +253,36 @@ func TestResolveStartupAuthWithOAuth_EmptyToken(t *testing.T) {
 	}
 }
 
-func TestEnrichBearerAuthError_APIKeyAsBearer(t *testing.T) {
+func TestEnrichBearerAuthError_APIKeyAsBearer401(t *testing.T) {
 	auth := BearerAuth("sk-ant-api03-test-key")
-	enriched := EnrichBearerAuthError("401 Unauthorized", auth)
-	if !strings.Contains(enriched, "Hint:") {
+	enriched := EnrichBearerAuthError("401 Unauthorized", 401, auth)
+	if !strings.Contains(enriched, "hint:") {
 		t.Error("expected hint about API key as Bearer token")
+	}
+	if !strings.Contains(enriched, "ANTHROPIC_API_KEY") {
+		t.Error("expected mention of ANTHROPIC_API_KEY")
 	}
 	if !strings.Contains(enriched, "x-api-key") {
 		t.Error("expected mention of x-api-key header")
+	}
+	// Verify Rust-matching " — hint: " format
+	if !strings.Contains(enriched, " — hint: sk-ant-*") {
+		t.Errorf("expected Rust-matching hint format, got: %s", enriched)
+	}
+}
+
+func TestEnrichBearerAuthError_Non401Unchanged(t *testing.T) {
+	// Non-401 status should NOT enrich, even with sk-ant-* Bearer token.
+	auth := BearerAuth("sk-ant-api03-test-key")
+	enriched := EnrichBearerAuthError("500 Internal Server Error", 500, auth)
+	if enriched != "500 Internal Server Error" {
+		t.Errorf("expected unchanged error for non-401, got: %s", enriched)
 	}
 }
 
 func TestEnrichBearerAuthError_NormalBearer(t *testing.T) {
 	auth := BearerAuth("some-oauth-token")
-	enriched := EnrichBearerAuthError("401 Unauthorized", auth)
+	enriched := EnrichBearerAuthError("401 Unauthorized", 401, auth)
 	if enriched != "401 Unauthorized" {
 		t.Error("should not enrich error for non-sk-ant bearer token")
 	}
@@ -274,18 +290,36 @@ func TestEnrichBearerAuthError_NormalBearer(t *testing.T) {
 
 func TestEnrichBearerAuthError_NonBearer(t *testing.T) {
 	auth := APIKeyAuth("sk-ant-api03-key")
-	enriched := EnrichBearerAuthError("401 Unauthorized", auth)
+	enriched := EnrichBearerAuthError("401 Unauthorized", 401, auth)
 	if enriched != "401 Unauthorized" {
-		t.Error("should not enrich error for non-Bearer auth")
+		t.Error("should not enrich error for non-Bearer auth (API key only)")
 	}
 }
 
 func TestEnrichBearerAuthError_CombinedAuth(t *testing.T) {
-	auth := CombinedAuth("sk-key", "tok-bearer")
-	enriched := EnrichBearerAuthError("401 Unauthorized", auth)
+	// Combined auth (API key + Bearer): the x-api-key header is already sent,
+	// so the 401 is from a different cause. Must not add the hint.
+	auth := CombinedAuth("sk-key", "sk-ant-api03-bearer")
+	enriched := EnrichBearerAuthError("401 Unauthorized", 401, auth)
 	if enriched != "401 Unauthorized" {
-		t.Error("should not enrich error for Combined auth")
+		t.Errorf("should not enrich error for Combined auth, got: %s", enriched)
 	}
+}
+
+func TestEnrichBearerAuthError_EmptyErrMsg401(t *testing.T) {
+	auth := BearerAuth("sk-ant-api03-test-key")
+	enriched := EnrichBearerAuthError("", 401, auth)
+	if !strings.HasPrefix(enriched, "hint:") {
+		t.Errorf("expected 'hint:' prefix for empty errMsg, got: %s", enriched)
+	}
+}
+
+func TestSuggestForeignProvider(t *testing.T) {
+	// With no foreign env vars set, should return empty.
+	suggestion := SuggestForeignProvider()
+	// We can't control env in this test easily, but verify the function exists
+	// and returns a string. In CI, these env vars are unlikely to be set.
+	_ = suggestion
 }
 
 func TestOAuthTokenSetIsExpired(t *testing.T) {

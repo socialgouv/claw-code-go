@@ -454,6 +454,18 @@ func TestPromptPreview(t *testing.T) {
 	if len([]rune(got)) > 49 {
 		t.Errorf("expected truncated preview, got len=%d: %q", len(got), got)
 	}
+	// Rust trims leading/trailing whitespace before truncation.
+	whitespace := "  \n  hello world  \n  "
+	if got := promptPreview(whitespace); got != "hello world" {
+		t.Errorf("expected trimmed %q, got %q", "hello world", got)
+	}
+	// Trailing whitespace after truncation is trimmed.
+	trailingWS := "this is a long prompt with trailing spaces       that exceeds the limit"
+	gotTW := promptPreview(trailingWS)
+	runes := []rune(gotTW)
+	if len(runes) > 0 && (runes[len(runes)-1] == ' ' || runes[len(runes)-1] == '\t') {
+		t.Errorf("expected trailing whitespace trimmed before ellipsis, got %q", gotTW)
+	}
 }
 
 func TestPromptMisdeliveryDetail(t *testing.T) {

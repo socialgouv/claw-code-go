@@ -512,6 +512,52 @@ func TestTruncatesLongBlocksInSummary(t *testing.T) {
 	}
 }
 
+func TestEstimateTokensTextOnly(t *testing.T) {
+	messages := []api.Message{
+		makeTextMsg("user", "hello world"), // 11 chars / 4 + 1 = 3
+	}
+	tokens := EstimateTokens(messages)
+	if tokens != 3 {
+		t.Errorf("EstimateTokens text = %d, want 3", tokens)
+	}
+}
+
+func TestEstimateTokensToolUse(t *testing.T) {
+	// Rust: (name.len() + input_json.len()) / 4 + 1
+	messages := []api.Message{
+		makeToolUseMsg("assistant", "read_file"), // name=9, input={"arg":"value"} ~15 chars
+	}
+	tokens := EstimateTokens(messages)
+	// Should be (9 + len(json)) / 4 + 1, not just text-based
+	if tokens <= 0 {
+		t.Errorf("EstimateTokens tool_use = %d, want > 0", tokens)
+	}
+}
+
+func TestEstimateTokensToolResult(t *testing.T) {
+	// Rust: (tool_name.len() + output.len()) / 4 + 1
+	messages := []api.Message{
+		makeToolResultMsg("tool", "file contents here", false),
+	}
+	tokens := EstimateTokens(messages)
+	if tokens <= 0 {
+		t.Errorf("EstimateTokens tool_result = %d, want > 0", tokens)
+	}
+}
+
+func TestEstimateTokensMixedBlocks(t *testing.T) {
+	messages := []api.Message{
+		makeTextMsg("user", "Please fix the bug"),
+		makeToolUseMsg("assistant", "read_file"),
+		makeToolResultMsg("tool", "file contents here", false),
+		makeTextMsg("assistant", "I found the issue"),
+	}
+	tokens := EstimateTokens(messages)
+	if tokens < 4 {
+		t.Errorf("EstimateTokens mixed = %d, want >= 4 (one per block minimum)", tokens)
+	}
+}
+
 func TestSummarizeMessagesTimelineJoinsBlocks(t *testing.T) {
 	// Verify timeline entries join multiple blocks with " | " (matching Rust)
 	messages := []api.Message{
