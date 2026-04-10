@@ -96,6 +96,22 @@ func (r *Registry) AllAPITools() []api.Tool {
 	return result
 }
 
+// AddServerFromConfig connects to an MCP server using the given transport
+// configuration. It creates the transport via the shared transport factory,
+// then delegates to AddServer for the handshake and tool discovery.
+func (r *Registry) AddServerFromConfig(ctx context.Context, name string, cfg TransportConfig) error {
+	transport, err := NewTransport(cfg)
+	if err != nil {
+		return fmt.Errorf("mcp registry: create transport for %q: %w", name, err)
+	}
+	if err := r.AddServer(ctx, name, transport); err != nil {
+		// Close transport on handshake failure to avoid leaks.
+		transport.Close()
+		return err
+	}
+	return nil
+}
+
 // ServerNames returns the names of all registered servers.
 func (r *Registry) ServerNames() []string {
 	r.mu.RLock()
