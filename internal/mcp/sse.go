@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,7 +33,7 @@ func NewSSETransport(baseURL string, authHeader string) *SSETransport {
 }
 
 // Send POSTs the JSON-RPC request to the server's /message endpoint and returns the response.
-func (t *SSETransport) Send(req Request) (Response, error) {
+func (t *SSETransport) Send(ctx context.Context, req Request) (Response, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -41,7 +42,7 @@ func (t *SSETransport) Send(req Request) (Response, error) {
 		return Response{}, fmt.Errorf("mcp sse: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest(http.MethodPost, t.baseURL+"/message", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+"/message", bytes.NewReader(body))
 	if err != nil {
 		return Response{}, fmt.Errorf("mcp sse: build request: %w", err)
 	}

@@ -543,6 +543,7 @@ type ProductionRecoveryDeps struct {
 	MCP       MCPRegistryInterface
 	Plugins   PluginManagerInterface
 	EventSink func(RecoveryEvent)
+	WorkDir   string
 }
 
 var _ RecoveryDeps = (*ProductionRecoveryDeps)(nil)
@@ -563,6 +564,9 @@ func (d *ProductionRecoveryDeps) RedirectPrompt() error {
 
 func (d *ProductionRecoveryDeps) RebaseBranch() error {
 	cmd := exec.Command("git", "rebase", "--autostash")
+	if d.WorkDir != "" {
+		cmd.Dir = d.WorkDir
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git rebase: %s: %w", string(out), err)
@@ -572,6 +576,9 @@ func (d *ProductionRecoveryDeps) RebaseBranch() error {
 
 func (d *ProductionRecoveryDeps) CleanBuild() error {
 	cmd := exec.Command("git", "clean", "-fdx")
+	if d.WorkDir != "" {
+		cmd.Dir = d.WorkDir
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git clean: %s: %w", string(out), err)

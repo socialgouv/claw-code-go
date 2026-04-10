@@ -236,6 +236,39 @@ func (r *WorkerRegistry) SendPrompt(workerID string, prompt *string) (*Worker, e
 	return w.clone(), nil
 }
 
+// ReplayArmedPrompt sends the replay prompt if one is armed.
+// Returns (worker, nil) on success, error if no replay prompt is available.
+func (r *WorkerRegistry) ReplayArmedPrompt(workerID string) (*Worker, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	w, ok := r.workers[workerID]
+	if !ok {
+		return nil, ErrWorkerNotFound
+	}
+
+	if w.Status != StatusReadyForPrompt {
+		return nil, fmt.Errorf("%w: expected ready_for_prompt, got %s", ErrInvalidState, w.Status)
+	}
+	if w.ReplayPrompt == nil {
+		return nil, fmt.Errorf("%w: no replay prompt armed", ErrInvalidState)
+	}
+
+	effectivePrompt := *w.ReplayPrompt
+	w.PromptDeliveryAttempts++
+	w.PromptInFlight = true
+	w.LastPrompt = &effectivePrompt
+	w.ReplayPrompt = nil
+	w.Status = StatusRunning
+	w.appendEvent(EventRunning, fmt.Sprintf("replay prompt sent (attempt %d)", w.PromptDeliveryAttempts), &WorkerEventPayload{
+		Type:          "prompt_delivery",
+		PromptPreview: promptPreview(effectivePrompt),
+		RecoveryArmed: false,
+	})
+
+	return w.clone(), nil
+}
+
 // AwaitReady returns a snapshot of the worker's readiness state.
 func (r *WorkerRegistry) AwaitReady(workerID string) (*WorkerReadySnapshot, error) {
 	r.mu.Lock()
@@ -301,6 +334,28 @@ func (r *WorkerRegistry) Terminate(workerID string) (*Worker, error) {
 	w.appendEvent(EventFinished, "worker terminated", nil)
 
 	return w.clone(), nil
+}
+
+// IsDegraded returns true if the worker has been in its current state for longer
+// than the given threshold (in seconds) without any new events.
+func (r *WorkerRegistry) IsDegraded(workerID string, thresholdSecs uint64) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	w, ok := r.workers[workerID]
+	if !ok {
+		return false, ErrWorkerNotFound
+	}
+
+	// Only consider non-terminal states as potentially degraded.
+	switch w.Status {
+	case StatusFinished, StatusFailed:
+		return false, nil
+	}
+
+	now := nowSecs()
+	elapsed := now - w.UpdatedAt
+	return elapsed >= thresholdSecs, nil
 }
 
 // ObserveCompletion processes a completion signal from the provider.

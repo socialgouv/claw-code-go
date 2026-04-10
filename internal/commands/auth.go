@@ -3,29 +3,77 @@ package commands
 import (
 	"claw-code-go/internal/auth"
 	"fmt"
-	"strings"
 )
+
+// requireInteractiveLoop returns an error message and true if the loop is nil
+// or non-interactive, indicating the command should not proceed.
+func requireInteractiveLoop(loop interface{}) bool {
+	if loop == nil {
+		return true
+	}
+	type loginContext interface {
+		IsInteractive() bool
+	}
+	if lc, ok := loop.(loginContext); ok && !lc.IsInteractive() {
+		return true
+	}
+	return false
+}
 
 // RegisterAuthCommands adds the /auth command group to the registry.
 func RegisterAuthCommands(r *Registry) {
 	r.Register(Command{
 		Name:        "auth",
 		Description: "Authentication: /auth login | logout | status",
+		Category:    CategoryAuth,
 		Handler:     handleAuthCommand,
+	})
+
+	r.Register(Command{
+		Name:        "login",
+		Description: "Log in to the service",
+		Category:    CategoryAuth,
+		Handler: func(args string, loop interface{}) error {
+			if requireInteractiveLoop(loop) {
+				fmt.Println("Login requires an interactive session.")
+				return nil
+			}
+			return cmdAuthLogin()
+		},
+	})
+
+	r.Register(Command{
+		Name:        "logout",
+		Description: "Log out of the current session",
+		Category:    CategoryAuth,
+		Handler: func(args string, loop interface{}) error {
+			if loop == nil {
+				fmt.Println("Logout requires an interactive session.")
+				return nil
+			}
+			return cmdAuthLogout()
+		},
 	})
 }
 
-func handleAuthCommand(args string, _ interface{}) error {
-	parts := strings.Fields(args)
-	sub := "status"
-	if len(parts) > 0 {
-		sub = parts[0]
+func handleAuthCommand(args string, loop interface{}) error {
+	sub, _ := splitSubcommand(args)
+	if sub == "" {
+		sub = "status"
 	}
 
 	switch sub {
 	case "login":
+		if requireInteractiveLoop(loop) {
+			fmt.Println("Login requires an interactive session.")
+			return nil
+		}
 		return cmdAuthLogin()
 	case "logout":
+		if loop == nil {
+			fmt.Println("Logout requires an interactive session.")
+			return nil
+		}
 		return cmdAuthLogout()
 	case "status":
 		return cmdAuthStatus()

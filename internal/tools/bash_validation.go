@@ -552,6 +552,17 @@ func classifyGitCommand(command string) CommandIntent {
 // ValidateCommand runs the full validation pipeline on a bash command.
 // Returns the first non-Allow result, or Allow if all validations pass.
 func ValidateCommand(command string, mode permissions.PermissionMode, workspace string) ValidationResult {
+	// 0. Pipeline analysis: validate each segment independently.
+	segments := SplitPipeline(command)
+	if len(segments) > 1 {
+		for _, seg := range segments {
+			result := validateSingleCommand(seg.Command, mode, workspace)
+			if result.Kind != ValidationAllow {
+				return result
+			}
+		}
+	}
+
 	// 1. Mode-level validation (includes read-only checks).
 	result := ValidateMode(command, mode)
 	if result.Kind != ValidationAllow {
@@ -571,5 +582,50 @@ func ValidateCommand(command string, mode permissions.PermissionMode, workspace 
 	}
 
 	// 4. Path validation.
-	return ValidatePaths(command, workspace)
+	result = ValidatePaths(command, workspace)
+	if result.Kind != ValidationAllow {
+		return result
+	}
+
+	// 5. Sudo elevated flags.
+	if sudoResult := DetectSudoElevatedFlags(command); sudoResult != nil {
+		return *sudoResult
+	}
+
+	// 6. Archive extraction safety.
+	result = ValidateArchiveExtraction(command)
+	if result.Kind != ValidationAllow {
+		return result
+	}
+
+	// 7. Env var leak detection.
+	result = DetectEnvVarLeak(command)
+	if result.Kind != ValidationAllow {
+		return result
+	}
+
+	// 8. Network timeout warnings.
+	result = ValidateNetworkTimeout(command)
+	if result.Kind != ValidationAllow {
+		return result
+	}
+
+	return ValidationResult{Kind: ValidationAllow}
+}
+
+// validateSingleCommand validates a single pipeline segment.
+func validateSingleCommand(command string, mode permissions.PermissionMode, workspace string) ValidationResult {
+	result := ValidateMode(command, mode)
+	if result.Kind != ValidationAllow {
+		return result
+	}
+	result = ValidateSed(command, mode)
+	if result.Kind != ValidationAllow {
+		return result
+	}
+	result = CheckDestructive(command)
+	if result.Kind != ValidationAllow {
+		return result
+	}
+	return ValidationResult{Kind: ValidationAllow}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -20,24 +21,35 @@ type PluginTool struct {
 }
 
 // Execute runs the plugin tool with the given JSON input.
-// Sets env vars: ITERION_PLUGIN_ID, ITERION_PLUGIN_NAME, ITERION_TOOL_NAME,
-// ITERION_TOOL_INPUT (JSON), ITERION_PLUGIN_ROOT (if non-empty).
+// Sets env vars with CLAWD_ prefix (primary) and ITERION_ prefix (backward compat).
 // Passes input as JSON on stdin.
 // Returns stdout on success, error with stderr on non-zero exit.
 func (t *PluginTool) Execute(input json.RawMessage) (string, error) {
 	cmd := exec.Command(t.Command, t.Args...)
 
-	// Set environment variables (ITERION_ prefix for iterion, not CLAWD_).
+	// Set environment variables: CLAWD_ (primary) and ITERION_ (backward compat).
 	cmd.Env = append(cmd.Environ(),
+		// Primary CLAWD_ prefix
+		"CLAWD_PLUGIN_ID="+t.PluginID,
+		"CLAWD_PLUGIN_NAME="+t.PluginName,
+		"CLAWD_TOOL_NAME="+t.Definition.Name,
+		"CLAWD_TOOL_INPUT="+string(input),
+		// Backward-compat ITERION_ prefix
 		"ITERION_PLUGIN_ID="+t.PluginID,
 		"ITERION_PLUGIN_NAME="+t.PluginName,
 		"ITERION_TOOL_NAME="+t.Definition.Name,
 		"ITERION_TOOL_INPUT="+string(input),
 	)
 	if t.Root != "" {
-		cmd.Env = append(cmd.Env, "ITERION_PLUGIN_ROOT="+t.Root)
+		cmd.Env = append(cmd.Env,
+			"CLAWD_PLUGIN_ROOT="+t.Root,
+			"ITERION_PLUGIN_ROOT="+t.Root,
+		)
 		cmd.Dir = t.Root
 	}
+
+	// Emit deprecation warning for ITERION_ prefix on first use.
+	fmt.Fprintln(os.Stderr, "DEPRECATION WARNING: ITERION_* env vars are deprecated, use CLAWD_* instead")
 
 	// Pass input on stdin
 	cmd.Stdin = bytes.NewReader(input)

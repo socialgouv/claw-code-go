@@ -184,6 +184,159 @@ func TestReleaseNotesCommand(t *testing.T) {
 	}
 }
 
+// mockPromptInjector implements the promptInjector interface for testing.
+type mockPromptInjector struct {
+	injected string
+}
+
+func (m *mockPromptInjector) InjectPrompt(prompt string) error {
+	m.injected = prompt
+	return nil
+}
+
+func TestExplainCommand(t *testing.T) {
+	r := NewRegistry()
+	RegisterCodeCommands(r)
+
+	cmd, ok := r.Lookup("explain")
+	if !ok {
+		t.Fatal("explain command not registered")
+	}
+
+	t.Run("no args no loop", func(t *testing.T) {
+		err := cmd.Handler("", nil)
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+	})
+
+	t.Run("with target", func(t *testing.T) {
+		pi := &mockPromptInjector{}
+		err := cmd.Handler("main.go", pi)
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+		if !strings.Contains(pi.injected, "main.go") {
+			t.Fatalf("expected prompt to contain target, got: %s", pi.injected)
+		}
+	})
+}
+
+func TestRefactorCommand(t *testing.T) {
+	r := NewRegistry()
+	RegisterCodeCommands(r)
+
+	cmd, ok := r.Lookup("refactor")
+	if !ok {
+		t.Fatal("refactor command not registered")
+	}
+
+	err := cmd.Handler("", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	pi := &mockPromptInjector{}
+	err = cmd.Handler("utils.go", pi)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !strings.Contains(pi.injected, "utils.go") {
+		t.Fatalf("expected prompt to contain target, got: %s", pi.injected)
+	}
+}
+
+func TestDocsCommand(t *testing.T) {
+	r := NewRegistry()
+	RegisterCodeCommands(r)
+
+	cmd, ok := r.Lookup("docs")
+	if !ok {
+		t.Fatal("docs command not registered")
+	}
+
+	err := cmd.Handler("", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestFixCommand(t *testing.T) {
+	r := NewRegistry()
+	RegisterCodeCommands(r)
+
+	cmd, ok := r.Lookup("fix")
+	if !ok {
+		t.Fatal("fix command not registered")
+	}
+
+	err := cmd.Handler("", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestPerfCommand(t *testing.T) {
+	r := NewRegistry()
+	RegisterCodeCommands(r)
+
+	cmd, ok := r.Lookup("perf")
+	if !ok {
+		t.Fatal("perf command not registered")
+	}
+
+	pi := &mockPromptInjector{}
+	err := cmd.Handler("server.go", pi)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !strings.Contains(pi.injected, "server.go") {
+		t.Fatalf("expected prompt to contain target, got: %s", pi.injected)
+	}
+}
+
+func TestLintCommand(t *testing.T) {
+	r := NewRegistry()
+	RegisterCodeCommands(r)
+
+	cmd, ok := r.Lookup("lint")
+	if !ok {
+		t.Fatal("lint command not registered")
+	}
+
+	// In a temp dir with no project markers, should print "no linter found"
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	err := cmd.Handler("", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestBuildCommand(t *testing.T) {
+	r := NewRegistry()
+	RegisterCodeCommands(r)
+
+	cmd, ok := r.Lookup("build")
+	if !ok {
+		t.Fatal("build command not registered")
+	}
+
+	// In a temp dir with no project markers, should print "no build system found"
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	err := cmd.Handler("", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
 func TestRunGitSafeArgs(t *testing.T) {
 	// Verify that runGit uses exec.Command with separate args (no shell).
 	// We test by passing a string that would be dangerous in a shell context

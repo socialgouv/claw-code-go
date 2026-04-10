@@ -18,6 +18,8 @@ const (
 	CategoryCode          CommandCategory = "code"
 	CategoryUX            CommandCategory = "ux"
 	CategoryContext       CommandCategory = "context"
+	CategoryAuth          CommandCategory = "auth"
+	CategoryInteraction   CommandCategory = "interaction"
 	CategoryUncategorized CommandCategory = ""
 )
 
@@ -191,6 +193,8 @@ func NewFullRegistry() *Registry {
 	RegisterCodeCommands(r)
 	RegisterUXCommands(r)
 	RegisterContextCommands(r)
+	RegisterGitCommands(r)
+	RegisterInteractionCommands(r)
 	return r
 }
 
@@ -206,6 +210,8 @@ func InitializeAll(r *Registry) {
 	RegisterCodeCommands(r)
 	RegisterUXCommands(r)
 	RegisterContextCommands(r)
+	RegisterGitCommands(r)
+	RegisterInteractionCommands(r)
 }
 
 // ErrExit is returned by /exit and /quit to signal the REPL should stop.

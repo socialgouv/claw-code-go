@@ -256,6 +256,220 @@ func RegisterContextCommands(r *Registry) {
 	})
 
 	r.Register(Command{
+		Name:            "tool-details",
+		Description:     "Show detailed info about a specific tool",
+		ArgumentHint:    "<tool-name>",
+		ResumeSupported: true,
+		Category:        CategoryContext,
+		Handler: func(args string, loop interface{}) error {
+			name := strings.TrimSpace(args)
+			if name == "" {
+				fmt.Println("Usage: /tool-details <tool-name>")
+				return nil
+			}
+			type toolDetailer interface {
+				GetToolDetails(name string) (string, error)
+			}
+			if td, ok := loop.(toolDetailer); ok {
+				details, err := td.GetToolDetails(name)
+				if err != nil {
+					return fmt.Errorf("tool-details: %w", err)
+				}
+				fmt.Println(details)
+			} else {
+				fmt.Println("Tool details not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:            "map",
+		Description:     "Show a visual map of the codebase structure",
+		ArgumentHint:    "[depth]",
+		ResumeSupported: true,
+		Category:        CategoryContext,
+		Handler: func(args string, loop interface{}) error {
+			type codeMapper interface {
+				ShowCodeMap(depth int) (string, error)
+			}
+			depth := 3
+			if s := strings.TrimSpace(args); s != "" {
+				parsed, err := strconv.Atoi(s)
+				if err != nil || parsed < 1 {
+					return fmt.Errorf("map: invalid depth %q", s)
+				}
+				depth = parsed
+			}
+			if cm, ok := loop.(codeMapper); ok {
+				result, err := cm.ShowCodeMap(depth)
+				if err != nil {
+					return fmt.Errorf("map: %w", err)
+				}
+				fmt.Println(result)
+			} else {
+				fmt.Println("Code map not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:            "symbols",
+		Description:     "List symbols in a file",
+		ArgumentHint:    "<path>",
+		ResumeSupported: true,
+		Category:        CategoryContext,
+		Handler: func(args string, loop interface{}) error {
+			path := strings.TrimSpace(args)
+			if path == "" {
+				fmt.Println("Usage: /symbols <path>")
+				return nil
+			}
+			type symbolLister interface {
+				ListSymbols(path string) ([]string, error)
+			}
+			if sl, ok := loop.(symbolLister); ok {
+				symbols, err := sl.ListSymbols(path)
+				if err != nil {
+					return fmt.Errorf("symbols: %w", err)
+				}
+				if len(symbols) == 0 {
+					fmt.Println("No symbols found.")
+					return nil
+				}
+				fmt.Println("Symbols:")
+				for _, s := range symbols {
+					fmt.Printf("  %s\n", s)
+				}
+			} else {
+				fmt.Println("Symbol listing not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:         "references",
+		Description:  "Find all references to a symbol",
+		ArgumentHint: "<symbol>",
+		Category:     CategoryContext,
+		Handler: func(args string, loop interface{}) error {
+			symbol := strings.TrimSpace(args)
+			if symbol == "" {
+				fmt.Println("Usage: /references <symbol>")
+				return nil
+			}
+			type referenceFinder interface {
+				FindReferences(symbol string) ([]string, error)
+			}
+			if rf, ok := loop.(referenceFinder); ok {
+				refs, err := rf.FindReferences(symbol)
+				if err != nil {
+					return fmt.Errorf("references: %w", err)
+				}
+				if len(refs) == 0 {
+					fmt.Printf("No references found for %s\n", symbol)
+					return nil
+				}
+				fmt.Printf("References to %s:\n", symbol)
+				for _, r := range refs {
+					fmt.Printf("  %s\n", r)
+				}
+			} else {
+				fmt.Println("Reference finding not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:         "definition",
+		Description:  "Go to the definition of a symbol",
+		ArgumentHint: "<symbol>",
+		Category:     CategoryContext,
+		Handler: func(args string, loop interface{}) error {
+			symbol := strings.TrimSpace(args)
+			if symbol == "" {
+				fmt.Println("Usage: /definition <symbol>")
+				return nil
+			}
+			type definitionFinder interface {
+				FindDefinition(symbol string) (string, error)
+			}
+			if df, ok := loop.(definitionFinder); ok {
+				location, err := df.FindDefinition(symbol)
+				if err != nil {
+					return fmt.Errorf("definition: %w", err)
+				}
+				fmt.Println(location)
+			} else {
+				fmt.Println("Definition lookup not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:            "hover",
+		Description:     "Show hover information for a symbol",
+		ArgumentHint:    "<symbol>",
+		ResumeSupported: true,
+		Category:        CategoryContext,
+		Handler: func(args string, loop interface{}) error {
+			symbol := strings.TrimSpace(args)
+			if symbol == "" {
+				fmt.Println("Usage: /hover <symbol>")
+				return nil
+			}
+			type hoverProvider interface {
+				GetHoverInfo(symbol string) (string, error)
+			}
+			if hp, ok := loop.(hoverProvider); ok {
+				info, err := hp.GetHoverInfo(symbol)
+				if err != nil {
+					return fmt.Errorf("hover: %w", err)
+				}
+				fmt.Println(info)
+			} else {
+				fmt.Println("Hover information not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:            "diagnostics",
+		Description:     "Show LSP diagnostics for a file",
+		ArgumentHint:    "[path]",
+		ResumeSupported: true,
+		Category:        CategoryContext,
+		Handler: func(args string, loop interface{}) error {
+			type diagnosticsProvider interface {
+				GetDiagnostics(path string) ([]string, error)
+			}
+			path := strings.TrimSpace(args)
+			if dp, ok := loop.(diagnosticsProvider); ok {
+				diags, err := dp.GetDiagnostics(path)
+				if err != nil {
+					return fmt.Errorf("diagnostics: %w", err)
+				}
+				if len(diags) == 0 {
+					fmt.Println("No diagnostics.")
+					return nil
+				}
+				fmt.Println("Diagnostics:")
+				for _, d := range diags {
+					fmt.Printf("  %s\n", d)
+				}
+			} else {
+				fmt.Println("LSP diagnostics not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
 		Name:         "branch",
 		Description:  "Create/switch git branches",
 		ArgumentHint: "<branch-name>",

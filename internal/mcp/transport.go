@@ -153,8 +153,9 @@ func (t *SDKTransport) readLoop() {
 }
 
 // Send writes a JSON-RPC request to the subprocess stdin and waits for the
-// matching response from the reader goroutine.
-func (t *SDKTransport) Send(req Request) (Response, error) {
+// matching response from the reader goroutine. The provided context controls
+// the timeout/cancellation instead of a fixed 30s deadline.
+func (t *SDKTransport) Send(ctx context.Context, req Request) (Response, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return Response{}, fmt.Errorf("mcp sdk %q: marshal request: %w", t.name, err)
@@ -167,38 +168,72 @@ func (t *SDKTransport) Send(req Request) (Response, error) {
 		return Response{}, fmt.Errorf("mcp sdk %q: write request: %w", t.name, err)
 	}
 
-	// Wait for a response with a timeout.
-	select {
-	case resp, ok := <-t.responses:
-		if !ok {
+	// Wait for a response whose ID matches the request ID.
+	for {
+		select {
+		case resp, ok := <-t.responses:
+			if !ok {
+				return Response{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &RPCError{
+						Code:    -32603,
+						Message: fmt.Sprintf("SDK transport %q: subprocess closed", t.name),
+					},
+				}, nil
+			}
+			if !idsMatch(req.ID, resp.ID) {
+				// Not our response (e.g. unsolicited notification); skip it.
+				continue
+			}
+			return resp, nil
+		case <-t.done:
 			return Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Error: &RPCError{
 					Code:    -32603,
-					Message: fmt.Sprintf("SDK transport %q: subprocess closed", t.name),
+					Message: fmt.Sprintf("SDK transport %q: subprocess exited", t.name),
+				},
+			}, nil
+		case <-ctx.Done():
+			return Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error: &RPCError{
+					Code:    -32603,
+					Message: fmt.Sprintf("SDK transport %q: %v", t.name, ctx.Err()),
 				},
 			}, nil
 		}
-		return resp, nil
-	case <-t.done:
-		return Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error: &RPCError{
-				Code:    -32603,
-				Message: fmt.Sprintf("SDK transport %q: subprocess exited", t.name),
-			},
-		}, nil
-	case <-time.After(30 * time.Second):
-		return Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error: &RPCError{
-				Code:    -32603,
-				Message: fmt.Sprintf("SDK transport %q: response timeout", t.name),
-			},
-		}, nil
+	}
+}
+
+// idsMatch reports whether two JSON-RPC IDs are equal. IDs can be int, float64,
+// or string after JSON round-tripping, so we normalise numeric types before
+// comparison.
+func idsMatch(a, b any) bool {
+	return normalizeID(a) == normalizeID(b)
+}
+
+// normalizeID converts an ID value to a comparable form. JSON numbers
+// deserialised via any become float64; we keep that representation so
+// int(1) and float64(1) compare equal.
+func normalizeID(v any) any {
+	switch n := v.(type) {
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case float32:
+		return float64(n)
+	case json.Number:
+		if f, err := n.Float64(); err == nil {
+			return f
+		}
+		return n.String()
+	default:
+		return v
 	}
 }
 

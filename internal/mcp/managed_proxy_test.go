@@ -35,7 +35,7 @@ func TestManagedProxyTransportRoundTrip(t *testing.T) {
 		t.Fatalf("create transport: %v", err)
 	}
 
-	resp, err := transport.Send(Request{
+	resp, err := transport.Send(t.Context(), Request{
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "tools/list",
@@ -66,7 +66,7 @@ func TestManagedProxyTransportHTTPError(t *testing.T) {
 		t.Fatalf("create transport: %v", err)
 	}
 
-	_, err = transport.Send(Request{JSONRPC: "2.0", ID: 1, Method: "test"})
+	_, err = transport.Send(t.Context(), Request{JSONRPC: "2.0", ID: 1, Method: "test"})
 	if err == nil {
 		t.Fatal("expected error for 500 response")
 	}

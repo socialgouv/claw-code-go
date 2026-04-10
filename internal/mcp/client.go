@@ -47,7 +47,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 		Params:  params,
 	}
 
-	resp, err := c.transport.Send(req)
+	resp, err := c.transport.Send(ctx, req)
 	if err != nil {
 		return fmt.Errorf("mcp initialize: %w", err)
 	}
@@ -93,7 +93,7 @@ func (c *Client) ListTools(ctx context.Context) ([]MCPTool, error) {
 		Method:  "tools/list",
 	}
 
-	resp, err := c.transport.Send(req)
+	resp, err := c.transport.Send(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("mcp tools/list: %w", err)
 	}
@@ -129,7 +129,7 @@ func (c *Client) CallTool(ctx context.Context, name string, input map[string]any
 		},
 	}
 
-	resp, err := c.transport.Send(req)
+	resp, err := c.transport.Send(ctx, req)
 	if err != nil {
 		return MCPToolResult{}, fmt.Errorf("mcp tools/call %q: %w", name, err)
 	}

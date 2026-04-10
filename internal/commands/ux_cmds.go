@@ -211,6 +211,289 @@ func RegisterUXCommands(r *Registry) {
 	})
 
 	r.Register(Command{
+		Name:         "voice",
+		Description:  "Toggle voice input mode",
+		ArgumentHint: "[on|off]",
+		Category:     CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			tl, ok := loop.(toggleLoop)
+			if !ok {
+				fmt.Println("Voice input not available in this context.")
+				return nil
+			}
+			arg := strings.TrimSpace(strings.ToLower(args))
+			switch arg {
+			case "on":
+				tl.SetToggle("voice", true)
+				fmt.Println("Voice input enabled.")
+			case "off":
+				tl.SetToggle("voice", false)
+				fmt.Println("Voice input disabled.")
+			case "":
+				current := tl.GetToggle("voice")
+				tl.SetToggle("voice", !current)
+				if !current {
+					fmt.Println("Voice input enabled.")
+				} else {
+					fmt.Println("Voice input disabled.")
+				}
+			default:
+				fmt.Println("Usage: /voice [on|off]")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:        "share",
+		Description: "Share the current conversation",
+		Category:    CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type conversationSharer interface {
+				ShareConversation() (string, error)
+			}
+			if cs, ok := loop.(conversationSharer); ok {
+				url, err := cs.ShareConversation()
+				if err != nil {
+					return fmt.Errorf("share: %w", err)
+				}
+				fmt.Printf("Conversation shared: %s\n", url)
+			} else {
+				fmt.Println("Share not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:        "feedback",
+		Description: "Submit feedback about the current session",
+		Category:    CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type feedbackSubmitter interface {
+				SubmitFeedback(message string) error
+			}
+			if fs, ok := loop.(feedbackSubmitter); ok {
+				message := strings.TrimSpace(args)
+				if message == "" {
+					fmt.Println("Usage: /feedback <message>")
+					return nil
+				}
+				if err := fs.SubmitFeedback(message); err != nil {
+					return fmt.Errorf("feedback: %w", err)
+				}
+				fmt.Println("Feedback submitted. Thank you!")
+			} else {
+				fmt.Println("Feedback submission not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:            "stickers",
+		Description:     "Browse and manage sticker packs",
+		ResumeSupported: true,
+		Category:        CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type stickerManager interface {
+				ListStickers() ([]string, error)
+			}
+			if sm, ok := loop.(stickerManager); ok {
+				stickers, err := sm.ListStickers()
+				if err != nil {
+					return fmt.Errorf("stickers: %w", err)
+				}
+				if len(stickers) == 0 {
+					fmt.Println("No sticker packs available.")
+					return nil
+				}
+				fmt.Println("Sticker packs:")
+				for _, s := range stickers {
+					fmt.Printf("  %s\n", s)
+				}
+			} else {
+				fmt.Println("Stickers not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:            "insights",
+		Description:     "Show AI-generated insights about the session",
+		ResumeSupported: true,
+		Category:        CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type insightsProvider interface {
+				GetInsights() (string, error)
+			}
+			if ip, ok := loop.(insightsProvider); ok {
+				insights, err := ip.GetInsights()
+				if err != nil {
+					return fmt.Errorf("insights: %w", err)
+				}
+				fmt.Println(insights)
+			} else {
+				fmt.Println("Insights not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:            "thinkback",
+		Description:     "Replay the thinking process of the last response",
+		ResumeSupported: true,
+		Category:        CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type thinkbackProvider interface {
+				GetThinkback() (string, error)
+			}
+			if tp, ok := loop.(thinkbackProvider); ok {
+				thinking, err := tp.GetThinkback()
+				if err != nil {
+					return fmt.Errorf("thinkback: %w", err)
+				}
+				if thinking == "" {
+					fmt.Println("No thinking trace available for the last response.")
+				} else {
+					fmt.Println("Thinking trace:")
+					fmt.Println(thinking)
+				}
+			} else {
+				fmt.Println("Thinkback not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:        "desktop",
+		Description: "Open or manage the desktop app integration",
+		Category:    CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type desktopIntegration interface {
+				OpenDesktop() error
+			}
+			if di, ok := loop.(desktopIntegration); ok {
+				if err := di.OpenDesktop(); err != nil {
+					return fmt.Errorf("desktop: %w", err)
+				}
+				fmt.Println("Desktop app integration opened.")
+			} else {
+				fmt.Println("Desktop integration not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:         "ide",
+		Description:  "Open or configure IDE integration",
+		ArgumentHint: "[vscode|cursor]",
+		Category:     CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type ideIntegration interface {
+				OpenIDE(name string) error
+			}
+			ide := strings.TrimSpace(strings.ToLower(args))
+			if ide == "" {
+				ide = "vscode"
+			}
+			switch ide {
+			case "vscode", "cursor":
+				// valid
+			default:
+				return fmt.Errorf("ide: unknown IDE %q (use vscode or cursor)", ide)
+			}
+			if ii, ok := loop.(ideIntegration); ok {
+				if err := ii.OpenIDE(ide); err != nil {
+					return fmt.Errorf("ide: %w", err)
+				}
+				fmt.Printf("Opened %s integration.\n", ide)
+			} else {
+				fmt.Println("IDE integration not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:        "listen",
+		Description: "Listen for voice input",
+		Category:    CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type voiceListener interface {
+				ListenForVoice() (string, error)
+			}
+			if vl, ok := loop.(voiceListener); ok {
+				fmt.Println("Listening...")
+				text, err := vl.ListenForVoice()
+				if err != nil {
+					return fmt.Errorf("listen: %w", err)
+				}
+				fmt.Printf("Heard: %s\n", text)
+			} else {
+				fmt.Println("Voice listening not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:        "speak",
+		Description: "Read the last response aloud",
+		Category:    CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type speaker interface {
+				SpeakLastResponse() error
+			}
+			if sp, ok := loop.(speaker); ok {
+				if err := sp.SpeakLastResponse(); err != nil {
+					return fmt.Errorf("speak: %w", err)
+				}
+			} else {
+				fmt.Println("Speech output not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:         "format",
+		Description:  "Format the last response in a different style",
+		ArgumentHint: "[markdown|plain|json]",
+		Category:     CategoryUX,
+		Handler: func(args string, loop interface{}) error {
+			type responseFormatter interface {
+				FormatLastResponse(style string) (string, error)
+			}
+			style := strings.TrimSpace(strings.ToLower(args))
+			if style == "" {
+				fmt.Println("Usage: /format [markdown|plain|json]")
+				return nil
+			}
+			switch style {
+			case "markdown", "plain", "json":
+				// valid
+			default:
+				return fmt.Errorf("format: unknown style %q (use markdown, plain, or json)", style)
+			}
+			if rf, ok := loop.(responseFormatter); ok {
+				formatted, err := rf.FormatLastResponse(style)
+				if err != nil {
+					return fmt.Errorf("format: %w", err)
+				}
+				fmt.Println(formatted)
+			} else {
+				fmt.Println("Response formatting not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
 		Name:            "privacy-settings",
 		Description:     "View/modify privacy settings",
 		ResumeSupported: true,
@@ -226,10 +509,11 @@ func RegisterUXCommands(r *Registry) {
 	})
 
 	r.Register(Command{
-		Name:         "output-style",
-		Description:  "Switch output formatting",
-		ArgumentHint: "[style]",
-		Category:     CategoryUX,
+		Name:            "output-style",
+		Description:     "Switch output formatting style",
+		ArgumentHint:    "[style]",
+		ResumeSupported: true,
+		Category:        CategoryUX,
 		Handler: func(args string, loop interface{}) error {
 			style := strings.TrimSpace(strings.ToLower(args))
 			if style == "" {

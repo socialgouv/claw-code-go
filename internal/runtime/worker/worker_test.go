@@ -596,6 +596,130 @@ func TestEmitStateFileWritesJSON(t *testing.T) {
 	}
 }
 
+func TestNormalizePath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"/home/user/project/", "/home/user/project"},
+		{"/home/user/../user/project", "/home/user/project"},
+		{".", "."},
+		{"/", "/"},
+	}
+	for _, tt := range tests {
+		got := NormalizePath(tt.input)
+		if got != tt.want {
+			t.Errorf("NormalizePath(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestIsDegraded(t *testing.T) {
+	t.Parallel()
+	r := NewWorkerRegistry()
+	w := r.Create("/tmp", nil, false)
+
+	degraded, err := r.IsDegraded(w.WorkerID, 3600)
+	if err != nil {
+		t.Fatalf("IsDegraded: %v", err)
+	}
+	if degraded {
+		t.Error("expected not degraded (just created)")
+	}
+
+	// Unknown worker.
+	_, err = r.IsDegraded("nonexistent", 3600)
+	if err == nil {
+		t.Error("expected error for unknown worker")
+	}
+}
+
+func TestIsDegradedTerminalState(t *testing.T) {
+	t.Parallel()
+	r := NewWorkerRegistry()
+	w := r.Create("/tmp", nil, false)
+	r.Terminate(w.WorkerID)
+
+	degraded, _ := r.IsDegraded(w.WorkerID, 0) // threshold 0 = always degraded if not terminal
+	if degraded {
+		t.Error("terminal state should never be degraded")
+	}
+}
+
+func TestReplayArmedPrompt(t *testing.T) {
+	t.Parallel()
+	r := NewWorkerRegistry()
+	w := r.Create("/tmp", nil, true) // auto-recover enabled
+
+	r.Observe(w.WorkerID, "ready for input")
+	prompt := "Write code"
+	r.SendPrompt(w.WorkerID, &prompt)
+
+	// Simulate prompt misdelivery.
+	r.Observe(w.WorkerID, "Write code\ncommand not found")
+
+	w2 := r.Get(w.WorkerID)
+	if w2.ReplayPrompt == nil {
+		t.Fatal("expected replay prompt armed")
+	}
+
+	// Replay.
+	w3, err := r.ReplayArmedPrompt(w.WorkerID)
+	if err != nil {
+		t.Fatalf("ReplayArmedPrompt: %v", err)
+	}
+	if w3.Status != StatusRunning {
+		t.Errorf("expected Running, got %s", w3.Status)
+	}
+	if w3.LastPrompt == nil || *w3.LastPrompt != prompt {
+		t.Error("expected replayed prompt")
+	}
+	if w3.ReplayPrompt != nil {
+		t.Error("expected replay prompt cleared after replay")
+	}
+}
+
+func TestReplayArmedPromptNoReplay(t *testing.T) {
+	t.Parallel()
+	r := NewWorkerRegistry()
+	w := r.Create("/tmp", nil, false)
+	r.Observe(w.WorkerID, "ready for input")
+
+	_, err := r.ReplayArmedPrompt(w.WorkerID)
+	if err == nil {
+		t.Error("expected error when no replay prompt armed")
+	}
+}
+
+func TestObserveCompletionWithEndTurnAndTokens(t *testing.T) {
+	t.Parallel()
+	r := NewWorkerRegistry()
+	w := r.Create("/tmp", nil, false)
+
+	w2, err := r.ObserveCompletion(w.WorkerID, "end_turn", 500)
+	if err != nil {
+		t.Fatalf("ObserveCompletion: %v", err)
+	}
+	if w2.Status != StatusFinished {
+		t.Errorf("expected Finished, got %s", w2.Status)
+	}
+}
+
+func TestObserveCompletionMaxTokens(t *testing.T) {
+	t.Parallel()
+	r := NewWorkerRegistry()
+	w := r.Create("/tmp", nil, false)
+
+	w2, err := r.ObserveCompletion(w.WorkerID, "max_tokens", 1000)
+	if err != nil {
+		t.Fatalf("ObserveCompletion: %v", err)
+	}
+	if w2.Status != StatusFinished {
+		t.Errorf("expected Finished for max_tokens with tokens, got %s", w2.Status)
+	}
+}
+
 func TestConcurrentRegistryAccessExtended(t *testing.T) {
 	t.Parallel()
 	r := NewWorkerRegistry()

@@ -35,6 +35,60 @@ func RegisterPluginCommands(r *Registry) {
 	registerSandboxCommand(r)
 	registerInitCommand(r)
 	registerUpgradeCommand(r)
+	registerTemplatesCommand(r)
+}
+
+func registerTemplatesCommand(r *Registry) {
+	r.Register(Command{
+		Name:         "templates",
+		Description:  "List or apply prompt templates",
+		ArgumentHint: "[list|apply <name>]",
+		Category:     CategoryPlugin,
+		Handler: func(args string, loop interface{}) error {
+			type templateManager interface {
+				ListTemplates() ([]string, error)
+				ApplyTemplate(name string) (string, error)
+			}
+			tm, ok := loop.(templateManager)
+			if !ok {
+				fmt.Println("Template management not available in this context.")
+				return nil
+			}
+			sub, rest := splitSubcommand(args)
+			if sub == "" {
+				sub = "list"
+			}
+			switch sub {
+			case "list":
+				templates, err := tm.ListTemplates()
+				if err != nil {
+					return fmt.Errorf("templates: %w", err)
+				}
+				if len(templates) == 0 {
+					fmt.Println("No templates available.")
+					return nil
+				}
+				fmt.Println("Templates:")
+				for _, t := range templates {
+					fmt.Printf("  %s\n", t)
+				}
+			case "apply":
+				name := strings.TrimSpace(rest)
+				if name == "" {
+					fmt.Println("Usage: /templates apply <name>")
+					return nil
+				}
+				result, err := tm.ApplyTemplate(name)
+				if err != nil {
+					return fmt.Errorf("templates apply: %w", err)
+				}
+				fmt.Println(result)
+			default:
+				fmt.Println("Usage: /templates [list|apply <name>]")
+			}
+			return nil
+		},
+	})
 }
 
 func registerPluginCommand(r *Registry) {

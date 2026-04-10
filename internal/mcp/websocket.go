@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -40,7 +41,7 @@ func NewWebSocketTransport(url string, headers map[string]string) (*WebSocketTra
 }
 
 // Send writes a JSON-RPC request and reads the response.
-func (t *WebSocketTransport) Send(req Request) (Response, error) {
+func (t *WebSocketTransport) Send(_ context.Context, req Request) (Response, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

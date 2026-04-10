@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -238,5 +239,26 @@ func TestLspTransportDoneOnEOF(t *testing.T) {
 		// Expected.
 	case <-time.After(2 * time.Second):
 		t.Fatal("done channel not closed after EOF")
+	}
+}
+
+func TestReadLSPFrameCleanEOF(t *testing.T) {
+	t.Parallel()
+	// Empty reader -> clean EOF -> (nil, nil)
+	r := bufio.NewReader(strings.NewReader(""))
+	frame, err := readLSPFrame(r)
+	if frame != nil || err != nil {
+		t.Errorf("clean EOF: got (%v, %v), want (nil, nil)", frame, err)
+	}
+}
+
+func TestReadLSPFrameMidFrameEOF(t *testing.T) {
+	t.Parallel()
+	// Partial header then EOF -> should error
+	r := bufio.NewReader(strings.NewReader("Content-Length: 10\r\n\r\n"))
+	// The body is missing -> io.ErrUnexpectedEOF
+	_, err := readLSPFrame(r)
+	if err == nil {
+		t.Error("expected error for mid-frame EOF")
 	}
 }

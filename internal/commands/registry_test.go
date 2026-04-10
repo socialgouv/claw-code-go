@@ -238,6 +238,109 @@ func TestCategories(t *testing.T) {
 	}
 }
 
+func TestFullRegistryRustParityCommands(t *testing.T) {
+	r := NewFullRegistry()
+
+	// Every Rust command name from SLASH_COMMAND_SPECS should exist in Go.
+	rustCommands := []string{
+		"add-dir", "advisor", "agent", "agents", "alias", "allowed-tools", "api-key",
+		"approve", "autofix", "benchmark", "blame", "bookmarks", "branch", "brief",
+		"budget", "bughunter", "build", "cache", "changelog", "chat", "clear", "color",
+		"commit", "compact", "config", "context", "copy", "cost", "cron",
+		"debug-tool-call", "definition", "deny", "desktop", "diagnostics", "diff",
+		"docs", "doctor", "effort", "env", "exit", "explain", "export", "fast",
+		"feedback", "files", "fix", "focus", "format", "git", "help", "history",
+		"hooks", "hover", "ide", "image", "init", "insights", "issue", "keybindings",
+		"language", "lint", "listen", "log", "login", "logout", "macro", "map",
+		"max-tokens", "mcp", "memory", "metrics", "migrate", "model", "multi",
+		"notifications", "output-style", "parallel", "paste", "perf", "permissions",
+		"pin", "plan", "plugin", "pr", "privacy-settings", "profile", "project",
+		"providers", "rate-limit", "reasoning", "refactor", "references",
+		"release-notes", "rename", "reset", "resume", "retry", "review", "rewind",
+		"run", "sandbox", "screenshot", "search", "security-review", "session",
+		"share", "skills", "speak", "stash", "stats", "status", "stickers", "stop",
+		"subagent", "summary", "symbols", "system-prompt", "tag", "tasks", "team",
+		"telemetry", "teleport", "temperature", "templates", "terminal-setup", "test",
+		"theme", "thinkback", "tokens", "tool-details", "ultraplan", "undo", "unfocus",
+		"unpin", "upgrade", "usage", "version", "vim", "voice", "web", "workspace",
+	}
+
+	var missing []string
+	for _, name := range rustCommands {
+		if _, ok := r.Lookup(name); !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("missing %d Rust-parity commands: %v", len(missing), missing)
+	}
+}
+
+func TestFullRegistryNoDuplicatePrimaryNames(t *testing.T) {
+	r := NewFullRegistry()
+	cmds := r.List()
+	seen := make(map[string]int)
+	for _, cmd := range cmds {
+		name := cmd.Name
+		seen[name]++
+		if seen[name] > 1 {
+			t.Errorf("duplicate primary command name %q (seen %d times)", name, seen[name])
+		}
+	}
+}
+
+func TestFullRegistryAliasResolution(t *testing.T) {
+	r := NewFullRegistry()
+
+	// Test known aliases resolve to their primary command.
+	aliases := map[string]string{
+		"plugins":     "plugin",
+		"marketplace": "plugin",
+		"skill":       "skills",
+		"ws":          "workspace",
+		"temp":        "temperature",
+		"sysprompt":   "system-prompt",
+		"lang":        "language",
+		"term-setup":  "terminal-setup",
+		"yes":         "approve",
+		"y":           "approve",
+		"no":          "deny",
+		"n":           "deny",
+	}
+
+	for alias, primaryName := range aliases {
+		cmd, ok := r.Lookup(alias)
+		if !ok {
+			t.Errorf("alias %q not found in registry", alias)
+			continue
+		}
+		if cmd.Name != primaryName {
+			t.Errorf("alias %q resolved to %q, want %q", alias, cmd.Name, primaryName)
+		}
+	}
+}
+
+func TestResumeSupportedCommandsContainsExpected(t *testing.T) {
+	r := NewFullRegistry()
+	resumable := r.ResumeSupportedCommands()
+
+	expectedResumable := []string{"help", "history", "workspace", "status", "cost", "usage", "version", "stats", "tokens", "cache"}
+	resumeMap := make(map[string]bool)
+	for _, cmd := range resumable {
+		name := cmd.Name
+		if name[0] == '/' {
+			name = name[1:]
+		}
+		resumeMap[name] = true
+	}
+
+	for _, name := range expectedResumable {
+		if !resumeMap[name] {
+			t.Errorf("expected %q to be resume-supported, but it's not", name)
+		}
+	}
+}
+
 func TestHelpWithArgShowsDetail(t *testing.T) {
 	r := NewRegistry()
 	r.Register(Command{

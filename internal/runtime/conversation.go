@@ -21,20 +21,21 @@ const systemPromptBase = `You are Claude Code, an AI assistant for software engi
 
 // ConversationLoop manages the agentic conversation loop with tool use.
 type ConversationLoop struct {
-	Client         api.APIClient // provider-agnostic client interface
-	Session        *Session
-	Tools          []api.Tool
-	Permissions    *Permissions
-	PermManager    *permissions.Manager // Phase 5 permission manager (may be nil)
-	Config         *Config
-	MCPRegistry    *mcp.Registry          // MCP server registry (may be nil)
-	Compaction     CompactionState        // Phase 6 token tracking and compaction state
-	CtxAssembler   *clawctx.Assembler     // Phase 12 context assembler (may be nil)
-	Usage          *usage.Tracker         // Phase 13 per-session token usage tracker
-	TelemetrySink  apikit.TelemetrySink   // Telemetry event sink (may be nil)
-	Tracer         *apikit.SessionTracer  // Session telemetry tracer (may be nil)
-	PluginRegistry *plugin.PluginRegistry // Plugin registry (may be nil)
-	HookRunner     *hooks.HookRunner      // Hook runner (may be nil; wired from config + plugin hooks)
+	Client          api.APIClient // provider-agnostic client interface
+	Session         *Session
+	Tools           []api.Tool
+	Permissions     *Permissions
+	PermManager     *permissions.Manager // Phase 5 permission manager (may be nil)
+	Config          *Config
+	MCPRegistry     *mcp.Registry          // MCP server registry (may be nil)
+	Compaction      CompactionState        // Phase 6 token tracking and compaction state
+	CtxAssembler    *clawctx.Assembler     // Phase 12 context assembler (may be nil)
+	Usage           *usage.Tracker         // Phase 13 per-session token usage tracker
+	TelemetrySink   apikit.TelemetrySink   // Telemetry event sink (may be nil)
+	Tracer          *apikit.SessionTracer  // Session telemetry tracer (may be nil)
+	PluginRegistry  *plugin.PluginRegistry // Plugin registry (may be nil)
+	HookRunner      *hooks.HookRunner      // Hook runner (may be nil; wired from config + plugin hooks)
+	CommandRegistry interface{}            // Slash command registry (may be nil; *commands.Registry)
 }
 
 // NewConversationLoop creates a new conversation loop with the given client.

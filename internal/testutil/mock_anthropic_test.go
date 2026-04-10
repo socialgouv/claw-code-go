@@ -127,6 +127,133 @@ func TestNonStreamingResponse(t *testing.T) {
 	}
 }
 
+func TestRateLimited429Scenario(t *testing.T) {
+	svc := SpawnMockService()
+	defer svc.Close()
+
+	body := fmt.Sprintf(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"test %srate_limited_429"}]}]}`, ScenarioPrefix)
+
+	resp, err := http.Post(svc.BaseURL()+"/v1/messages", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d", resp.StatusCode)
+	}
+	if ra := resp.Header.Get("Retry-After"); ra != "30" {
+		t.Fatalf("expected Retry-After: 30, got %s", ra)
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(respBody), "rate_limit_error") {
+		t.Fatal("expected rate_limit_error in response body")
+	}
+}
+
+func TestAuthFailure401Scenario(t *testing.T) {
+	svc := SpawnMockService()
+	defer svc.Close()
+
+	body := fmt.Sprintf(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"test %sauth_failure_401"}]}]}`, ScenarioPrefix)
+
+	resp, err := http.Post(svc.BaseURL()+"/v1/messages", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(respBody), "authentication_error") {
+		t.Fatal("expected authentication_error in response body")
+	}
+}
+
+func TestAuthForbidden403Scenario(t *testing.T) {
+	svc := SpawnMockService()
+	defer svc.Close()
+
+	body := fmt.Sprintf(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"test %sauth_forbidden_403"}]}]}`, ScenarioPrefix)
+
+	resp, err := http.Post(svc.BaseURL()+"/v1/messages", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(respBody), "permission_error") {
+		t.Fatal("expected permission_error in response body")
+	}
+}
+
+func TestContextWindowExceededScenario(t *testing.T) {
+	svc := SpawnMockService()
+	defer svc.Close()
+
+	body := fmt.Sprintf(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"test %scontext_window_exceeded"}]}]}`, ScenarioPrefix)
+
+	resp, err := http.Post(svc.BaseURL()+"/v1/messages", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(respBody), "prompt is too long") {
+		t.Fatal("expected context window error message in response body")
+	}
+}
+
+func TestChunkedSSEScenario(t *testing.T) {
+	svc := SpawnMockService()
+	defer svc.Close()
+
+	body := fmt.Sprintf(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"test %schunked_sse"}]}]}`, ScenarioPrefix)
+
+	resp, err := http.Post(svc.BaseURL()+"/v1/messages", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("expected text/event-stream, got %s", ct)
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	respStr := string(respBody)
+
+	// Should contain multiple content_block_delta events
+	count := strings.Count(respStr, "content_block_delta")
+	if count < 6 {
+		t.Fatalf("expected at least 6 content_block_delta events, got %d", count)
+	}
+
+	// Should contain all chunks
+	for _, chunk := range []string{"Chunk", " one.", " two.", " three."} {
+		if !strings.Contains(respStr, chunk) {
+			t.Fatalf("missing chunk %q in response", chunk)
+		}
+	}
+}
+
 func TestScenarioParsing(t *testing.T) {
 	tests := []struct {
 		input string

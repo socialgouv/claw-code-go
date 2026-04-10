@@ -31,6 +31,11 @@ const (
 	ScenarioPluginToolRoundtrip
 	ScenarioAutoCompactTriggered
 	ScenarioTokenCostReporting
+	ScenarioRateLimited429
+	ScenarioAuthFailure401
+	ScenarioAuthForbidden403
+	ScenarioContextWindowExceeded
+	ScenarioChunkedSSE
 )
 
 var scenarioNames = map[Scenario]string{
@@ -46,6 +51,11 @@ var scenarioNames = map[Scenario]string{
 	ScenarioPluginToolRoundtrip:          "plugin_tool_roundtrip",
 	ScenarioAutoCompactTriggered:         "auto_compact_triggered",
 	ScenarioTokenCostReporting:           "token_cost_reporting",
+	ScenarioRateLimited429:               "rate_limited_429",
+	ScenarioAuthFailure401:               "auth_failure_401",
+	ScenarioAuthForbidden403:             "auth_forbidden_403",
+	ScenarioContextWindowExceeded:        "context_window_exceeded",
+	ScenarioChunkedSSE:                   "chunked_sse",
 }
 
 var scenarioLookup = func() map[string]Scenario {
@@ -133,35 +143,65 @@ func (s *MockAnthropicService) handleRequest(w http.ResponseWriter, r *http.Requ
 	}
 	defer r.Body.Close()
 
-	var req messageRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
-
 	scenario, ok := detectScenario(body)
 	if !ok {
 		http.Error(w, "missing parity scenario", http.StatusBadRequest)
 		return
 	}
 
-	headers := make(map[string]string)
-	for key := range r.Header {
-		headers[strings.ToLower(key)] = r.Header.Get(key)
+	// Handle error scenarios before body parsing.
+	switch scenario {
+	case ScenarioRateLimited429:
+		s.captureRequest(r, body, scenario, false)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"type":"error","error":{"type":"rate_limit_error","message":"Rate limited. Please retry after 30 seconds."}}`)
+		return
+	case ScenarioAuthFailure401:
+		s.captureRequest(r, body, scenario, false)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"Invalid API key provided."}}`)
+		return
+	case ScenarioAuthForbidden403:
+		s.captureRequest(r, body, scenario, false)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"type":"error","error":{"type":"permission_error","message":"Your API key does not have permission to use this resource."}}`)
+		return
+	case ScenarioContextWindowExceeded:
+		s.captureRequest(r, body, scenario, false)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 200015 tokens > 200000 maximum"}}`)
+		return
 	}
 
-	s.mu.Lock()
-	s.requests = append(s.requests, CapturedRequest{
-		Method:   r.Method,
-		Path:     r.URL.Path,
-		Headers:  headers,
-		Scenario: scenario.Name(),
-		Stream:   req.Stream,
-		RawBody:  string(body),
-	})
-	s.mu.Unlock()
+	var req messageRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	s.captureRequest(r, body, scenario, req.Stream)
 
 	requestID := requestIDFor(scenario)
+
+	if scenario == ScenarioChunkedSSE {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Request-Id", requestID)
+		w.WriteHeader(http.StatusOK)
+		flusher, canFlush := w.(http.Flusher)
+		events := buildChunkedSSEEvents()
+		for _, event := range events {
+			fmt.Fprint(w, event)
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		return
+	}
 
 	if req.Stream {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -177,6 +217,23 @@ func (s *MockAnthropicService) handleRequest(w http.ResponseWriter, r *http.Requ
 	respBody := buildMessageResponse(body, scenario)
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, respBody)
+}
+
+func (s *MockAnthropicService) captureRequest(r *http.Request, body []byte, scenario Scenario, stream bool) {
+	headers := make(map[string]string)
+	for key := range r.Header {
+		headers[strings.ToLower(key)] = r.Header.Get(key)
+	}
+	s.mu.Lock()
+	s.requests = append(s.requests, CapturedRequest{
+		Method:   r.Method,
+		Path:     r.URL.Path,
+		Headers:  headers,
+		Scenario: scenario.Name(),
+		Stream:   stream,
+		RawBody:  string(body),
+	})
+	s.mu.Unlock()
 }
 
 func detectScenario(rawBody []byte) (Scenario, bool) {
@@ -571,4 +628,57 @@ func textResponseJSONWithUsage(id, text string, inputTokens, outputTokens int) s
 	}
 	b, _ := json.Marshal(resp)
 	return string(b)
+}
+
+// buildChunkedSSEEvents returns individual SSE events for the chunked SSE scenario,
+// simulating slow network delivery by returning separate chunks.
+func buildChunkedSSEEvents() []string {
+	var events []string
+	msg := map[string]interface{}{
+		"type": "message_start",
+		"message": map[string]interface{}{
+			"id":            "msg_chunked_sse",
+			"type":          "message",
+			"role":          "assistant",
+			"content":       []interface{}{},
+			"model":         DefaultModel,
+			"stop_reason":   nil,
+			"stop_sequence": nil,
+			"usage":         usageJSON(10, 0),
+		},
+	}
+	events = append(events, marshalSSEEvent("message_start", msg))
+
+	events = append(events, marshalSSEEvent("content_block_start", map[string]interface{}{
+		"type":          "content_block_start",
+		"index":         0,
+		"content_block": map[string]interface{}{"type": "text", "text": ""},
+	}))
+
+	// Split text across multiple small deltas
+	chunks := []string{"Chunk", " one.", " Chunk", " two.", " Chunk", " three."}
+	for _, chunk := range chunks {
+		events = append(events, marshalSSEEvent("content_block_delta", map[string]interface{}{
+			"type":  "content_block_delta",
+			"index": 0,
+			"delta": map[string]interface{}{"type": "text_delta", "text": chunk},
+		}))
+	}
+
+	events = append(events, marshalSSEEvent("content_block_stop", map[string]interface{}{
+		"type":  "content_block_stop",
+		"index": 0,
+	}))
+	events = append(events, marshalSSEEvent("message_delta", map[string]interface{}{
+		"type":  "message_delta",
+		"delta": map[string]interface{}{"stop_reason": "end_turn", "stop_sequence": nil},
+		"usage": usageJSON(10, 6),
+	}))
+	events = append(events, marshalSSEEvent("message_stop", map[string]interface{}{"type": "message_stop"}))
+	return events
+}
+
+func marshalSSEEvent(eventType string, data interface{}) string {
+	jsonBytes, _ := json.Marshal(data)
+	return fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, string(jsonBytes))
 }

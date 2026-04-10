@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -65,7 +66,7 @@ func NewStdioTransport(command string, args []string, env []string) (*StdioTrans
 }
 
 // Send writes a JSON-RPC request to the server's stdin and reads the response from stdout.
-func (t *StdioTransport) Send(req Request) (Response, error) {
+func (t *StdioTransport) Send(_ context.Context, req Request) (Response, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

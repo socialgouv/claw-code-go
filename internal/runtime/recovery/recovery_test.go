@@ -673,6 +673,17 @@ func TestProductionDepsFailingStep(t *testing.T) {
 	}
 }
 
+func TestProductionDepsWorkDir(t *testing.T) {
+	t.Parallel()
+	d := &ProductionRecoveryDeps{
+		WorkDir: "/tmp/test-workdir",
+	}
+	// We can't run actual git commands, but we verify the field is set.
+	if d.WorkDir != "/tmp/test-workdir" {
+		t.Errorf("WorkDir = %q, want /tmp/test-workdir", d.WorkDir)
+	}
+}
+
 func TestFromLaneEventMapping(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

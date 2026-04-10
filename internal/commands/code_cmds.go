@@ -7,6 +7,69 @@ import (
 	"strings"
 )
 
+// promptInjector is the loop interface for commands that inject a prompt
+// back into the conversation rather than printing directly.
+type promptInjector interface {
+	InjectPrompt(prompt string) error
+}
+
+// injectOrPrint tries to inject prompt into the conversation loop.
+// Falls back to printing the prompt to stdout.
+func injectOrPrint(loop interface{}, prompt string) error {
+	if pi, ok := loop.(promptInjector); ok {
+		return pi.InjectPrompt(prompt)
+	}
+	fmt.Println(prompt)
+	return nil
+}
+
+// promptCommandHandler returns a handler for simple prompt-injection commands
+// like /explain, /refactor, /docs, /fix, /perf. basePrompt is used when no
+// target argument is provided; targetFmt is a format string with one %s for
+// the target.
+func promptCommandHandler(basePrompt, targetFmt string) func(args string, loop interface{}) error {
+	return func(args string, loop interface{}) error {
+		target := strings.TrimSpace(args)
+		prompt := basePrompt
+		if target != "" {
+			prompt = fmt.Sprintf(targetFmt, target)
+		}
+		return injectOrPrint(loop, prompt)
+	}
+}
+
+// toolSpec describes a project marker file and the tool command to run.
+type toolSpec struct {
+	marker  string
+	command string
+	args    []string
+}
+
+// detectAndRunTool finds the first matching project tool and runs it.
+// Returns true if a tool was found and executed.
+func detectAndRunTool(specs []toolSpec, label string) (bool, error) {
+	for _, s := range specs {
+		if _, err := os.Stat(s.marker); err != nil {
+			continue
+		}
+		if _, err := exec.LookPath(s.command); err != nil {
+			continue
+		}
+		fmt.Printf("%s with %s...\n", label, s.command)
+		cmd := exec.Command(s.command, s.args...)
+		out, err := cmd.CombinedOutput()
+		result := strings.TrimSpace(string(out))
+		if err != nil {
+			return true, fmt.Errorf("%s (%s) failed:\n%s\n%w", label, s.command, result, err)
+		}
+		if result != "" {
+			fmt.Println(result)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 // runGit executes a git command with separate arguments (never shell-interpolated)
 // and returns the trimmed combined output.
 func runGit(args ...string) (string, error) {
@@ -36,33 +99,19 @@ func RegisterCodeCommands(r *Registry) {
 				return nil
 			}
 
-			diff, err := runGit("diff", "--cached", "--stat")
+			fullDiff, err := runGit("diff", "--cached")
 			if err != nil {
 				return fmt.Errorf("commit: %w", err)
 			}
-			if diff == "" {
+			if fullDiff == "" {
 				fmt.Println("No staged changes. Use `git add` to stage files first.")
 				return nil
 			}
 
-			// Try the optional commitLoop interface for AI-generated messages.
-			type commitLoop interface {
-				GenerateCommitMessage(diff string) (string, error)
-			}
-			if cl, ok := loop.(commitLoop); ok {
-				msg, err := cl.GenerateCommitMessage(diff)
-				if err != nil {
-					return fmt.Errorf("commit: generate message: %w", err)
-				}
-				fmt.Println(msg)
-				return nil
-			}
+			stat, _ := runGit("diff", "--cached", "--stat")
+			prompt := fmt.Sprintf("Based on the following staged changes, generate a concise git commit message following conventional commit format.\n\n```diff\n%s\n```\n\nStat summary:\n%s", fullDiff, stat)
 
-			// Fallback: print the diff stats as a template.
-			fmt.Println("Staged changes:")
-			fmt.Println(diff)
-			fmt.Println("\nDraft a commit message based on the above changes.")
-			return nil
+			return injectOrPrint(loop, prompt)
 		},
 	})
 
@@ -98,14 +147,9 @@ func RegisterCodeCommands(r *Registry) {
 				title = branch
 			}
 
-			fmt.Printf("## Pull Request: %s\n\n", title)
-			fmt.Printf("**Branch:** %s\n\n", branch)
-			fmt.Println("### Recent commits")
-			fmt.Println(log)
-			fmt.Println("\n### Diff summary")
-			fmt.Println(diff)
-			fmt.Println("\nDraft a PR description based on the above context.")
-			return nil
+			prompt := fmt.Sprintf("Create a pull request for branch '%s' with the title '%s'.\n\nRecent commits:\n%s\n\nDiff summary:\n%s\n\nGenerate a PR title and description with a ## Summary section and ## Test plan checklist.", branch, title, log, diff)
+
+			return injectOrPrint(loop, prompt)
 		},
 	})
 
@@ -181,17 +225,9 @@ func RegisterCodeCommands(r *Registry) {
 				return nil
 			}
 
-			fmt.Println("## Code Review")
-			fmt.Println()
-			fmt.Println("Review the following diff for:")
-			fmt.Println("  - Correctness and logic errors")
-			fmt.Println("  - Code style and readability")
-			fmt.Println("  - Performance concerns")
-			fmt.Println("  - Test coverage gaps")
-			fmt.Println("\n```diff")
-			fmt.Println(diff)
-			fmt.Println("```")
-			return nil
+			prompt := fmt.Sprintf("Review the following diff for correctness, logic errors, code style, readability, performance concerns, and test coverage gaps.\n\n```diff\n%s\n```", diff)
+
+			return injectOrPrint(loop, prompt)
 		},
 	})
 
@@ -302,6 +338,192 @@ func RegisterCodeCommands(r *Registry) {
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {
 				return fmt.Errorf("test: %w", err)
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:         "explain",
+		Description:  "Explain code in the current context",
+		ArgumentHint: "[file or code reference]",
+		Category:     CategoryCode,
+		Handler:      promptCommandHandler("Please explain the code", "Please explain the code in %s"),
+	})
+
+	r.Register(Command{
+		Name:         "refactor",
+		Description:  "Refactor code in the current context",
+		ArgumentHint: "[file or code reference]",
+		Category:     CategoryCode,
+		Handler:      promptCommandHandler("Please refactor the code for better readability, maintainability, and performance", "Please refactor the code in %s for better readability, maintainability, and performance"),
+	})
+
+	r.Register(Command{
+		Name:         "docs",
+		Description:  "Generate documentation for code",
+		ArgumentHint: "[file or code reference]",
+		Category:     CategoryCode,
+		Handler:      promptCommandHandler("Please generate documentation for the code", "Please generate documentation for %s"),
+	})
+
+	r.Register(Command{
+		Name:         "fix",
+		Description:  "Fix code issues",
+		ArgumentHint: "[file or description]",
+		Category:     CategoryCode,
+		Handler:      promptCommandHandler("Please identify and fix issues in the code", "Please identify and fix issues in %s"),
+	})
+
+	r.Register(Command{
+		Name:         "perf",
+		Description:  "Analyze code for performance issues",
+		ArgumentHint: "[file or code reference]",
+		Category:     CategoryCode,
+		Handler:      promptCommandHandler("Please analyze the code for performance issues and suggest optimizations", "Please analyze %s for performance issues and suggest optimizations"),
+	})
+
+	r.Register(Command{
+		Name:        "lint",
+		Description: "Run linting on the project",
+		Category:    CategoryCode,
+		Handler: func(args string, loop interface{}) error {
+			found, err := detectAndRunTool([]toolSpec{
+				{"go.mod", "go", []string{"vet", "./..."}},
+				{"package.json", "npm", []string{"run", "lint"}},
+				{"Cargo.toml", "cargo", []string{"clippy"}},
+				{"pyproject.toml", "python", []string{"-m", "flake8"}},
+			}, "Linting")
+			if err != nil {
+				fmt.Println(err)
+				return nil
+			}
+			if !found {
+				fmt.Println("No supported linter found. Supported: go vet, npm lint, cargo clippy, flake8")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:        "build",
+		Description: "Run the project build command",
+		Category:    CategoryCode,
+		Handler: func(args string, loop interface{}) error {
+			found, err := detectAndRunTool([]toolSpec{
+				{"go.mod", "go", []string{"build", "./..."}},
+				{"Cargo.toml", "cargo", []string{"build"}},
+				{"package.json", "npm", []string{"run", "build"}},
+				{"Makefile", "make", nil},
+			}, "Building")
+			if err != nil {
+				return err
+			}
+			if !found {
+				fmt.Println("No supported build system found.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:         "run",
+		Description:  "Run a command in the project context",
+		ArgumentHint: "<command>",
+		Category:     CategoryCode,
+		Handler: func(args string, loop interface{}) error {
+			command := strings.TrimSpace(args)
+			if command == "" {
+				fmt.Println("Usage: /run <command>")
+				return nil
+			}
+			type commandRunner interface {
+				RunCommand(command string) (string, error)
+			}
+			if cr, ok := loop.(commandRunner); ok {
+				output, err := cr.RunCommand(command)
+				if err != nil {
+					return fmt.Errorf("run: %w", err)
+				}
+				if output != "" {
+					fmt.Println(output)
+				}
+			} else {
+				fmt.Printf("Running: %s\n", command)
+				cmd := exec.Command("sh", "-c", command)
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				if err := cmd.Run(); err != nil {
+					return fmt.Errorf("run: %w", err)
+				}
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:        "chat",
+		Description: "Switch to free-form chat mode",
+		Category:    CategoryCode,
+		Handler: func(args string, loop interface{}) error {
+			type chatMode interface {
+				SetChatMode(on bool)
+			}
+			if cm, ok := loop.(chatMode); ok {
+				cm.SetChatMode(true)
+				fmt.Println("Switched to free-form chat mode.")
+			} else {
+				fmt.Println("Chat mode switching not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:         "web",
+		Description:  "Fetch and summarize a web page",
+		ArgumentHint: "<url>",
+		Category:     CategoryCode,
+		Handler: func(args string, loop interface{}) error {
+			url := strings.TrimSpace(args)
+			if url == "" {
+				fmt.Println("Usage: /web <url>")
+				return nil
+			}
+			type webFetcher interface {
+				FetchAndSummarize(url string) (string, error)
+			}
+			if wf, ok := loop.(webFetcher); ok {
+				summary, err := wf.FetchAndSummarize(url)
+				if err != nil {
+					return fmt.Errorf("web: %w", err)
+				}
+				fmt.Println(summary)
+			} else {
+				fmt.Println("Web fetching not available in this context.")
+			}
+			return nil
+		},
+	})
+
+	r.Register(Command{
+		Name:         "autofix",
+		Description:  "Auto-fix all fixable diagnostics",
+		ArgumentHint: "[path]",
+		Category:     CategoryCode,
+		Handler: func(args string, loop interface{}) error {
+			type autofixer interface {
+				Autofix(path string) (string, error)
+			}
+			path := strings.TrimSpace(args)
+			if af, ok := loop.(autofixer); ok {
+				result, err := af.Autofix(path)
+				if err != nil {
+					return fmt.Errorf("autofix: %w", err)
+				}
+				fmt.Println(result)
+			} else {
+				fmt.Println("Autofix not available in this context.")
 			}
 			return nil
 		},

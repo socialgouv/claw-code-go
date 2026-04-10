@@ -47,7 +47,7 @@ func TestWebSocketTransportRoundTrip(t *testing.T) {
 	}
 	defer transport.Close()
 
-	resp, err := transport.Send(Request{
+	resp, err := transport.Send(t.Context(), Request{
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "test/echo",

@@ -22,6 +22,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// version is set by ldflags at build time.
+var version = "dev"
+
 func main() {
 	// Route diagnostic subcommands before flag parsing.
 	if len(os.Args) > 1 {
@@ -52,8 +55,14 @@ func main() {
 	resumeFlag := flag.String("resume", "", "Resume a previous session (session ID, 'latest', 'last', or path)")
 	printFlag := flag.Bool("print", false, "Single-shot non-interactive output mode")
 	compactFlag := flag.Bool("compact", false, "Enable compact output format")
-	_ = replFlag
-	_ = compactFlag // wired below
+	taskFlag := flag.String("task", "", "Task name for pre-configured task mode")
+	noSaveFlag := flag.Bool("no-save", false, "Don't save session to disk")
+	verboseFlag := flag.Bool("verbose", false, "Enable verbose output")
+	quietFlag := flag.Bool("quiet", false, "Suppress non-essential output")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
+	workDirFlag := flag.String("work-dir", "", "Set working directory")
+	baseCommitFlag := flag.String("base-commit", "", "Base commit for diff context")
+	reasoningEffortFlag := flag.String("reasoning-effort", "", "Reasoning effort level (low, medium, high)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: claw-code-go [subcommand] [options]\n\n")
@@ -76,6 +85,18 @@ func main() {
 
 	flag.Parse()
 
+	if *versionFlag {
+		fmt.Println(version)
+		return
+	}
+
+	if *workDirFlag != "" {
+		if err := os.Chdir(*workDirFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: cannot change to directory %s: %v\n", *workDirFlag, err)
+			os.Exit(1)
+		}
+	}
+
 	cfg := runtime.LoadConfig()
 
 	if *modelFlag != "" {
@@ -83,6 +104,29 @@ func main() {
 	}
 	if *sessionDirFlag != "" {
 		cfg.SessionDir = *sessionDirFlag
+	}
+	if *compactFlag {
+		cfg.Compact = true
+	}
+	// *replFlag is accepted for compatibility but REPL is the default.
+	_ = replFlag
+	if *verboseFlag {
+		cfg.Verbose = true
+	}
+	if *quietFlag {
+		cfg.Quiet = true
+	}
+	if *noSaveFlag {
+		cfg.NoSave = true
+	}
+	if *taskFlag != "" {
+		cfg.Task = *taskFlag
+	}
+	if *baseCommitFlag != "" {
+		cfg.BaseCommit = *baseCommitFlag
+	}
+	if *reasoningEffortFlag != "" {
+		cfg.ReasoningEffort = *reasoningEffortFlag
 	}
 
 	// --dangerously-skip-permissions overrides permission mode to full access.
@@ -176,7 +220,7 @@ func main() {
 		go func() {
 			<-sigCh
 			fmt.Fprintln(os.Stdout, "\nInterrupted. Saving session...")
-			saveSessionSilent(cfg.SessionDir, loop)
+			maybeSaveSession(cfg, loop)
 			os.Exit(0)
 		}()
 
@@ -185,7 +229,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		saveSessionSilent(cfg.SessionDir, loop)
+		maybeSaveSession(cfg, loop)
 		return
 	}
 
@@ -288,11 +332,9 @@ func resolveTelemetryPath(cfg *runtime.Config) string {
 
 // runTUI starts the Bubble Tea TUI for interactive use.
 func runTUI(cfg *runtime.Config, loop *runtime.ConversationLoop) {
-	// Register slash commands (available for future non-TUI REPL mode).
-	registry := commands.NewRegistry()
-	commands.RegisterAuthCommands(registry)
-	commands.RegisterMCPCommand(registry)
-	_ = registry
+	// Register slash commands — fully initialized with all categories.
+	registry := commands.NewFullRegistry()
+	loop.CommandRegistry = registry
 
 	// Save session on SIGTERM (Ctrl+C is handled by Bubble Tea itself).
 	sigCh := make(chan os.Signal, 1)
@@ -300,7 +342,7 @@ func runTUI(cfg *runtime.Config, loop *runtime.ConversationLoop) {
 	go func() {
 		<-sigCh
 		shutdownPlugins(loop)
-		saveSessionSilent(cfg.SessionDir, loop)
+		maybeSaveSession(cfg, loop)
 		os.Exit(0)
 	}()
 
@@ -314,7 +356,7 @@ func runTUI(cfg *runtime.Config, loop *runtime.ConversationLoop) {
 
 	// Shutdown plugins and save session after the TUI exits.
 	shutdownPlugins(loop)
-	saveSessionSilent(cfg.SessionDir, loop)
+	maybeSaveSession(cfg, loop)
 }
 
 // shutdownPlugins gracefully shuts down the plugin registry if present.
@@ -326,9 +368,12 @@ func shutdownPlugins(loop *runtime.ConversationLoop) {
 	}
 }
 
-// saveSessionSilent saves the session, printing only to stderr on failure.
-func saveSessionSilent(dir string, loop *runtime.ConversationLoop) {
-	if err := runtime.SaveSession(dir, loop.Session); err != nil {
+// maybeSaveSession saves the session unless --no-save is active.
+func maybeSaveSession(cfg *runtime.Config, loop *runtime.ConversationLoop) {
+	if cfg.NoSave {
+		return
+	}
+	if err := runtime.SaveSession(cfg.SessionDir, loop.Session); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not save session: %v\n", err)
 	}
 }

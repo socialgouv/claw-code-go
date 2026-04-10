@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -213,6 +214,31 @@ func detectObservedShellCwd(screenText string) string {
 }
 
 // ---------------------------------------------------------------------------
+// Path normalization
+// ---------------------------------------------------------------------------
+
+// NormalizePath normalizes a path for comparison: expand ~ to $HOME, clean, remove trailing slash.
+func NormalizePath(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			p = filepath.Join(home, p[2:])
+		}
+	} else if p == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			p = home
+		}
+	}
+	p = filepath.Clean(p)
+	// Remove trailing separator unless root.
+	if len(p) > 1 && strings.HasSuffix(p, string(filepath.Separator)) {
+		p = p[:len(p)-1]
+	}
+	return p
+}
+
+// ---------------------------------------------------------------------------
 // Path matching
 // ---------------------------------------------------------------------------
 
@@ -277,8 +303,8 @@ func isShellPrompt(trimmed string) bool {
 }
 
 func cwdMatchesObservedTarget(expectedCwd, observedCwd string) bool {
-	expected := filepath.Clean(expectedCwd)
-	observed := filepath.Clean(observedCwd)
+	expected := NormalizePath(expectedCwd)
+	observed := NormalizePath(observedCwd)
 
 	if expected == observed {
 		return true

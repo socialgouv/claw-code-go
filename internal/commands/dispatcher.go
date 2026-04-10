@@ -65,6 +65,8 @@ func AllCategories() []CommandCategory {
 		CategoryCode,
 		CategoryUX,
 		CategoryContext,
+		CategoryAuth,
+		CategoryInteraction,
 	}
 	sort.Slice(cats, func(i, j int) bool {
 		return string(cats[i]) < string(cats[j])

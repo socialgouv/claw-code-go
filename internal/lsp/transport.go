@@ -251,6 +251,9 @@ func (t *LspTransport) readLoop() {
 		if err != nil {
 			return
 		}
+		if frame == nil {
+			return // clean EOF
+		}
 
 		var resp jsonRPCResponse
 		if err := json.Unmarshal(frame, &resp); err != nil {
@@ -298,13 +301,19 @@ func writeLSPFrame(w io.Writer, payload []byte) error {
 }
 
 // readLSPFrame reads a Content-Length framed message from r.
+// Returns (nil, nil) on clean EOF before any headers have been read.
 func readLSPFrame(r *bufio.Reader) ([]byte, error) {
 	contentLength := -1
+	firstHeader := true
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
+			if err == io.EOF && firstHeader {
+				return nil, nil // clean EOF before any headers
+			}
 			return nil, err
 		}
+		firstHeader = false
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
 			break

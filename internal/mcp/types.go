@@ -1,5 +1,7 @@
 package mcp
 
+import "context"
+
 // --- JSON-RPC 2.0 ---
 
 // Request is a JSON-RPC 2.0 request object.
@@ -118,7 +120,7 @@ type MCPToolContent struct {
 
 // Transport is the interface for communicating with an MCP server.
 type Transport interface {
-	Send(req Request) (Response, error)
+	Send(ctx context.Context, req Request) (Response, error)
 	Notify(n Notification) error
 	Close() error
 }

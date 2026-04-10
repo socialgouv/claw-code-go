@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,7 +31,7 @@ func NewManagedProxyTransport(url string, id string) (*ManagedProxyTransport, er
 }
 
 // Send POSTs the JSON-RPC request to the proxy and returns the response.
-func (t *ManagedProxyTransport) Send(req Request) (Response, error) {
+func (t *ManagedProxyTransport) Send(ctx context.Context, req Request) (Response, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -39,7 +40,7 @@ func (t *ManagedProxyTransport) Send(req Request) (Response, error) {
 		return Response{}, fmt.Errorf("mcp managed_proxy: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest(http.MethodPost, t.url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.url, bytes.NewReader(body))
 	if err != nil {
 		return Response{}, fmt.Errorf("mcp managed_proxy: build request: %w", err)
 	}

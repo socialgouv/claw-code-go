@@ -11,10 +11,10 @@ func TestFullRegistryCommandCount(t *testing.T) {
 	r := NewFullRegistry()
 	count := r.Count()
 
-	// We expect at least 35 commands from this batch (the plan target).
-	// Current implementation: 5 builtins + 4 session + 4 status + 5 config +
-	// 2 diagnostic + 1 auth + 1 mcp + 10 plugin + 8 code + 10 ux + 7 context = 57
-	const minExpected = 35
+	// Rust has 141 commands; Go has additional Go-only commands (quit, session-list,
+	// auth, billing, benchmarks, benchmark, output-style).
+	// Minimum expected: 141 (Rust parity).
+	const minExpected = 141
 	if count < minExpected {
 		t.Errorf("expected at least %d commands, got %d", minExpected, count)
 	}
@@ -35,6 +35,8 @@ func TestAllCategoriesHaveCommands(t *testing.T) {
 		CategoryCode,
 		CategoryUX,
 		CategoryContext,
+		CategoryAuth,
+		CategoryInteraction,
 	}
 
 	for _, cat := range expectedCategories {

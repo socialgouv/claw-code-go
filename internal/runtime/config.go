@@ -72,6 +72,22 @@ type Config struct {
 	PluginExternalDirs []string
 	// EnabledPlugins maps plugin IDs to their enabled state.
 	EnabledPlugins map[string]bool
+
+	// CLI behavior flags.
+	// Compact enables compact output format.
+	Compact bool
+	// Verbose enables verbose output.
+	Verbose bool
+	// Quiet suppresses non-essential output.
+	Quiet bool
+	// NoSave disables session persistence.
+	NoSave bool
+	// Task is the task name for pre-configured task mode.
+	Task string
+	// BaseCommit is the base commit for diff context.
+	BaseCommit string
+	// ReasoningEffort is the reasoning effort level (low, medium, high).
+	ReasoningEffort string
 }
 
 // LoadConfig reads configuration from layered settings files and environment

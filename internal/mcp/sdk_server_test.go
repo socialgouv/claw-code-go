@@ -282,6 +282,23 @@ func TestNotificationIsIgnored(t *testing.T) {
 	}
 }
 
+func TestResponseIDMatchesRequestID(t *testing.T) {
+	t.Parallel()
+	s := testServer()
+
+	// Integer ID
+	resp := s.Dispatch("initialize", 42, nil)
+	if resp.ID != 42 {
+		t.Errorf("response ID = %v, want 42", resp.ID)
+	}
+
+	// String ID
+	resp = s.Dispatch("initialize", "abc-123", nil)
+	if resp.ID != "abc-123" {
+		t.Errorf("response ID = %v, want abc-123", resp.ID)
+	}
+}
+
 func TestContextCancellation(t *testing.T) {
 	t.Parallel()
 
