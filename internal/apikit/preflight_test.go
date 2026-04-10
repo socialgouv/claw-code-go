@@ -163,6 +163,34 @@ func TestPreflightSaturatingOverflow(t *testing.T) {
 	}
 }
 
+func TestMaxTokensForModelWithOverride(t *testing.T) {
+	// Without override: uses model default.
+	got := MaxTokensForModelWithOverride("opus", nil)
+	if got != 32_000 {
+		t.Errorf("without override: got %d, want 32000", got)
+	}
+
+	// With override: prefers plugin value.
+	override := uint32(16_000)
+	got = MaxTokensForModelWithOverride("opus", &override)
+	if got != 16_000 {
+		t.Errorf("with override: got %d, want 16000", got)
+	}
+
+	// Override on unknown model.
+	override = uint32(4_096)
+	got = MaxTokensForModelWithOverride("unknown-model", &override)
+	if got != 4_096 {
+		t.Errorf("override on unknown: got %d, want 4096", got)
+	}
+
+	// Nil override on unknown model falls back to 64k.
+	got = MaxTokensForModelWithOverride("unknown-model", nil)
+	if got != 64_000 {
+		t.Errorf("nil override on unknown: got %d, want 64000", got)
+	}
+}
+
 func TestEstimateSerializedTokens(t *testing.T) {
 	// Simple string
 	tokens := EstimateSerializedTokens("hello world")

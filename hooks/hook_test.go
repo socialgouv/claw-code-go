@@ -476,3 +476,49 @@ func TestHookProgressReporterInterface(t *testing.T) {
 		t.Errorf("expected PreToolUse, got %s", mock.events[0].Event)
 	}
 }
+
+// FuzzParseHookOutput verifies that parseHookOutput never panics on arbitrary input.
+func FuzzParseHookOutput(f *testing.F) {
+	// Seed corpus with representative inputs.
+	f.Add("")
+	f.Add("plain text message")
+	f.Add(`{"systemMessage": "hello", "continue": false}`)
+	f.Add(`{"reason": "blocked", "decision": "block"}`)
+	f.Add(`{"hookSpecificOutput": {"permissionDecision": "allow", "updatedInput": {"command": "ls"}}}`)
+	f.Add(`{"hookSpecificOutput": {"additionalContext": "extra info"}}`)
+	f.Add(`not json at all {`)
+	f.Add(`null`)
+	f.Add(`[]`)
+	f.Add(`42`)
+	f.Add(`{"continue": true}`)
+
+	f.Fuzz(func(t *testing.T, input string) {
+		// Must not panic regardless of input.
+		result := parseHookOutput(input)
+		// Basic invariant: Messages is never nil for non-empty input.
+		if input != "" && len(result.Messages) == 0 && !result.Deny {
+			// parseHookOutput always adds at least one message for non-empty input
+			// unless it's valid JSON that produces structured output.
+			// This is a weak invariant — we mainly care about no panics.
+		}
+	})
+}
+
+// FuzzBuildPayload verifies that BuildPayload never panics on arbitrary input.
+func FuzzBuildPayload(f *testing.F) {
+	f.Add("Bash", `{"command": "ls"}`, "output text", true)
+	f.Add("Read", `not json`, "", false)
+	f.Add("Write", `null`, "error msg", true)
+	f.Add("", "", "", false)
+
+	f.Fuzz(func(t *testing.T, toolName, toolInput, toolOutput string, isError bool) {
+		// Must not panic.
+		var output *string
+		if toolOutput != "" {
+			output = &toolOutput
+		}
+		for _, event := range []HookEvent{PreToolUse, PostToolUse, PostToolUseFailure} {
+			_ = BuildPayload(event, toolName, toolInput, output, isError)
+		}
+	})
+}

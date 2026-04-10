@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"claw-code-go/hooks"
 	"claw-code-go/internal/api"
 	"claw-code-go/internal/apikit"
 	clawctx "claw-code-go/internal/context"
@@ -33,6 +34,7 @@ type ConversationLoop struct {
 	TelemetrySink  apikit.TelemetrySink   // Telemetry event sink (may be nil)
 	Tracer         *apikit.SessionTracer  // Session telemetry tracer (may be nil)
 	PluginRegistry *plugin.PluginRegistry // Plugin registry (may be nil)
+	HookRunner     *hooks.HookRunner      // Hook runner (may be nil; wired from config + plugin hooks)
 }
 
 // NewConversationLoop creates a new conversation loop with the given client.
@@ -752,6 +754,7 @@ func (loop *ConversationLoop) MessageCount() int {
 }
 
 // ExecuteTool dispatches to the appropriate tool implementation.
+// When HookRunner is set, pre-tool and post-tool hooks wrap the execution.
 func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api.ContentBlock {
 	if !CheckPermission(loop.Permissions, name) {
 		return api.ContentBlock{
@@ -759,6 +762,41 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 			Content: []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("Permission denied for tool: %s", name)}},
 			IsError: true,
 		}
+	}
+
+	// Serialize input for hook payload.
+	inputJSON, _ := json.Marshal(input)
+	inputStr := string(inputJSON)
+
+	// --- PreToolUse hooks ---
+	if loop.HookRunner != nil {
+		hookResult := loop.HookRunner.RunPreToolUse(name, inputStr)
+		if hookResult.IsDenied() || hookResult.IsFailed() {
+			msg := strings.Join(hookResult.Messages, "\n")
+			if msg == "" {
+				msg = fmt.Sprintf("Hook denied tool %s", name)
+			}
+			return api.ContentBlock{
+				Type:    "tool_result",
+				Content: []api.ContentBlock{{Type: "text", Text: msg}},
+				IsError: true,
+			}
+		}
+		// Apply input mutation from hooks.
+		if hookResult.UpdatedInput != "" {
+			var updatedMap map[string]any
+			if err := json.Unmarshal([]byte(hookResult.UpdatedInput), &updatedMap); err == nil {
+				input = updatedMap
+				inputStr = hookResult.UpdatedInput
+			}
+		}
+	}
+
+	// --- Telemetry: record tool execution start ---
+	if loop.Tracer != nil {
+		loop.Tracer.Record("tool_execute_start", map[string]any{
+			"tool_name": name,
+		})
 	}
 
 	var result string
@@ -799,6 +837,7 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 				mcpResult, mcpErr := client.CallTool(context.Background(), name, input)
 				if mcpErr != nil {
 					fmt.Fprintf(os.Stderr, "[MCP tool %s error]: %v\n", name, mcpErr)
+					loop.runPostToolHooks(name, inputStr, fmt.Sprintf("Error: %v", mcpErr), true)
 					return api.ContentBlock{
 						Type:    "tool_result",
 						Content: []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("Error: %v", mcpErr)}},
@@ -807,6 +846,7 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 				}
 				text := mcpResultText(mcpResult)
 				fmt.Fprintf(os.Stdout, "%s\n", text)
+				loop.runPostToolHooks(name, inputStr, text, mcpResult.IsError)
 				return api.ContentBlock{
 					Type:    "tool_result",
 					Content: []api.ContentBlock{{Type: "text", Text: text}},
@@ -826,12 +866,35 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 		fmt.Fprintf(os.Stdout, "%s\n", result)
 	}
 
+	// --- PostToolUse / PostToolUseFailure hooks ---
+	loop.runPostToolHooks(name, inputStr, text, isError)
+
+	// --- Telemetry: record tool execution end ---
+	if loop.Tracer != nil {
+		loop.Tracer.Record("tool_execute_end", map[string]any{
+			"tool_name": name,
+			"is_error":  isError,
+		})
+	}
+
 	return api.ContentBlock{
 		Type: "tool_result",
 		Content: []api.ContentBlock{
 			{Type: "text", Text: text},
 		},
 		IsError: isError,
+	}
+}
+
+// runPostToolHooks runs PostToolUse or PostToolUseFailure hooks if a HookRunner is configured.
+func (loop *ConversationLoop) runPostToolHooks(toolName, toolInput, toolOutput string, isError bool) {
+	if loop.HookRunner == nil {
+		return
+	}
+	if isError {
+		loop.HookRunner.RunPostToolUseFailure(toolName, toolInput, toolOutput)
+	} else {
+		loop.HookRunner.RunPostToolUse(toolName, toolInput, toolOutput, false)
 	}
 }
 
@@ -955,4 +1018,82 @@ func (loop *ConversationLoop) MCPList() string {
 		}
 	}
 	return sb.String()
+}
+
+// InitHooksFromConfig creates a HookRunner from the config's hook commands
+// merged with any plugin-provided hooks. This wires the hooks system into
+// the execution loop so that PreToolUse/PostToolUse/PostToolUseFailure hooks
+// run around every tool dispatch.
+func (loop *ConversationLoop) InitHooksFromConfig(configHooks hooks.HookConfig) {
+	merged := configHooks
+
+	// Merge plugin hooks if a PluginRegistry is available.
+	if loop.PluginRegistry != nil {
+		pluginHooks, err := loop.PluginRegistry.AggregatedHooks()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[hooks] warning: failed to aggregate plugin hooks: %v\n", err)
+		} else {
+			merged = hooks.MergeConfigs(merged, hooks.HookConfig{
+				PreToolUse:         pluginHooks.PreToolUse,
+				PostToolUse:        pluginHooks.PostToolUse,
+				PostToolUseFailure: pluginHooks.PostToolUseFailure,
+			})
+		}
+	}
+
+	// Only create a runner if there are hooks to run.
+	if len(merged.PreToolUse) > 0 || len(merged.PostToolUse) > 0 || len(merged.PostToolUseFailure) > 0 {
+		loop.HookRunner = hooks.NewHookRunner(merged)
+	}
+}
+
+// InitTelemetry sets up the telemetry sink and session tracer.
+// If path is empty, telemetry is disabled (NopTelemetrySink).
+func (loop *ConversationLoop) InitTelemetry(path string) {
+	if path == "" {
+		loop.TelemetrySink = apikit.NopTelemetrySink{}
+		return
+	}
+
+	sink, err := apikit.NewJsonlTelemetrySink(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[telemetry] warning: failed to open sink at %s: %v\n", path, err)
+		loop.TelemetrySink = apikit.NopTelemetrySink{}
+		return
+	}
+
+	loop.TelemetrySink = sink
+	if loop.Session != nil {
+		loop.Tracer = apikit.NewSessionTracer(loop.Session.ID, sink)
+	}
+}
+
+// InitPlugins discovers and initializes plugins, wiring their tools and hooks.
+func (loop *ConversationLoop) InitPlugins(registry *plugin.PluginRegistry) {
+	if registry == nil {
+		return
+	}
+	loop.PluginRegistry = registry
+
+	// Register plugin tools as API tools.
+	pluginTools, err := registry.AggregatedTools()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[plugins] warning: failed to aggregate tools: %v\n", err)
+		return
+	}
+	for _, pt := range pluginTools {
+		var schema api.InputSchema
+		if pt.Definition.InputSchema != nil {
+			// Best-effort parse of the raw JSON schema into InputSchema.
+			_ = json.Unmarshal(pt.Definition.InputSchema, &schema)
+		}
+		if schema.Type == "" {
+			schema.Type = "object"
+		}
+		loop.Tools = append(loop.Tools, api.Tool{
+			Name:        pt.Definition.Name,
+			Description: pt.Definition.Description,
+			InputSchema: schema,
+		})
+	}
 }

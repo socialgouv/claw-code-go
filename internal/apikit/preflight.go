@@ -84,6 +84,16 @@ func saturatingAddU32(a, b uint32) uint32 {
 	return sum
 }
 
+// MaxTokensForModelWithOverride returns the max output tokens for a model,
+// preferring a plugin-provided override when set. Matches Rust's
+// max_tokens_for_model_with_override(model, plugin_override).
+func MaxTokensForModelWithOverride(model string, pluginOverride *uint32) uint32 {
+	if pluginOverride != nil {
+		return *pluginOverride
+	}
+	return MaxTokensForModel(model)
+}
+
 // EstimateSerializedTokens estimates token count by serializing to JSON and
 // dividing by 4 (rough heuristic matching Rust's implementation).
 func EstimateSerializedTokens(value any) uint32 {

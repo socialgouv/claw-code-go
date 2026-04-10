@@ -1,6 +1,9 @@
 package apikit
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestModelRegistryLookup(t *testing.T) {
 	reg := &ModelRegistry{}
@@ -158,5 +161,75 @@ func TestDefaultModelRegistrySingleton(t *testing.T) {
 	r2 := DefaultModelRegistry()
 	if r1 != r2 {
 		t.Error("DefaultModelRegistry should return the same singleton")
+	}
+}
+
+func TestModelRegistryConcurrentAccess(t *testing.T) {
+	// Verify the RWMutex-based registry is safe under concurrent read+write.
+	reg := &ModelRegistry{}
+
+	const goroutines = 50
+	done := make(chan struct{})
+
+	// Half the goroutines read, half write.
+	for i := 0; i < goroutines; i++ {
+		go func(idx int) {
+			defer func() { done <- struct{}{} }()
+			if idx%2 == 0 {
+				// Reader: lookup known and unknown models.
+				_ = reg.LookupModel("opus")
+				_ = reg.ResolveAlias("sonnet")
+				_ = reg.LookupModel("unknown-model")
+			} else {
+				// Writer: register a new model.
+				reg.RegisterModel(ModelEntry{
+					Canonical:     fmt.Sprintf("test-model-%d", idx),
+					Provider:      ProviderOpenAI,
+					MaxOutput:     8_000,
+					ContextWindow: 128_000,
+					Aliases:       []string{fmt.Sprintf("tm%d", idx)},
+				})
+			}
+		}(i)
+	}
+
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+
+	// Verify at least one registered model is findable.
+	entry := reg.LookupModel("tm1")
+	if entry == nil {
+		t.Error("expected to find concurrently registered model")
+	}
+}
+
+func TestModelRegistryRegisterAndLookupConcurrently(t *testing.T) {
+	// Stress test: concurrent RegisterModel and LookupModel must not panic.
+	reg := &ModelRegistry{}
+
+	const N = 100
+	done := make(chan struct{}, N*2)
+
+	for i := 0; i < N; i++ {
+		go func(idx int) {
+			defer func() { done <- struct{}{} }()
+			reg.RegisterModel(ModelEntry{
+				Canonical:     fmt.Sprintf("concurrent-%d", idx),
+				Provider:      ProviderAnthropic,
+				MaxOutput:     16_000,
+				ContextWindow: 200_000,
+				Aliases:       []string{fmt.Sprintf("c%d", idx)},
+			})
+		}(i)
+		go func(idx int) {
+			defer func() { done <- struct{}{} }()
+			_ = reg.LookupModel(fmt.Sprintf("c%d", idx))
+			_ = reg.ResolveAlias(fmt.Sprintf("concurrent-%d", idx))
+		}(i)
+	}
+
+	for i := 0; i < N*2; i++ {
+		<-done
 	}
 }

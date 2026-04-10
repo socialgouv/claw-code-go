@@ -1474,6 +1474,38 @@ func TestPluginManagerSyncBundledEmptyRoot(t *testing.T) {
 	}
 }
 
+// FuzzPluginManifestDecode verifies that manifest JSON decoding never panics.
+func FuzzPluginManifestDecode(f *testing.F) {
+	// Seed corpus with representative JSON inputs.
+	f.Add(`{"name":"test","version":"1.0","description":"test plugin","permissions":["read"],"defaultEnabled":true}`)
+	f.Add(`{"name":"","version":"","description":""}`)
+	f.Add(`{}`)
+	f.Add(`null`)
+	f.Add(`[]`)
+	f.Add(`not json at all`)
+	f.Add(`{"name":"p","version":"1","description":"d","hooks":{"PreToolUse":["./a.sh"]}}`)
+	f.Add(`{"name":"p","version":"1","description":"d","tools":[{"name":"t","description":"d","inputSchema":{},"command":"./t.sh"}]}`)
+	f.Add(`{"name":"p","version":"1","description":"d","skills":["oops"]}`)
+
+	f.Fuzz(func(t *testing.T, input string) {
+		// Write the input to a temp file and try to load it.
+		dir := t.TempDir()
+		path := filepath.Join(dir, "plugin.json")
+		if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+			t.Skip("cannot write temp file")
+		}
+
+		// Must not panic — errors are fine.
+		m, err := LoadManifest(path)
+		if err != nil {
+			return // expected for most fuzz inputs
+		}
+
+		// If parsing succeeded, validate doesn't panic.
+		_ = ValidateManifest(m, "", KindExternal)
+	})
+}
+
 func TestPluginManifestGoldenFixture(t *testing.T) {
 	goldenPath := "../testdata/golden/plugin_manifest.json"
 	m, err := LoadManifest(goldenPath)
