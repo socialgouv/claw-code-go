@@ -4,7 +4,7 @@ import "encoding/json"
 
 // RuntimeFeatureConfig holds extracted feature-specific configuration
 // from the merged settings. This provides typed access to hook commands,
-// plugin settings, permission rules, and provider fallback chains.
+// plugin settings, permission rules, provider fallback chains, and sandbox.
 type RuntimeFeatureConfig struct {
 	Hooks             RuntimeHookConfig
 	Plugins           RuntimePluginConfig
@@ -14,6 +14,16 @@ type RuntimeFeatureConfig struct {
 	PermissionRules   RuntimePermissionRuleConfig
 	ProviderFallbacks ProviderFallbackConfig
 	TrustedRoots      []string
+	Sandbox           RuntimeSandboxConfig
+}
+
+// RuntimeSandboxConfig holds sandbox-related settings extracted from config.
+type RuntimeSandboxConfig struct {
+	Enabled               *bool    `json:"enabled,omitempty"`
+	NamespaceRestrictions *bool    `json:"namespaceRestrictions,omitempty"`
+	NetworkIsolation      *bool    `json:"networkIsolation,omitempty"`
+	FilesystemMode        string   `json:"filesystemMode,omitempty"`
+	AllowedMounts         []string `json:"allowedMounts,omitempty"`
 }
 
 // RuntimeHookConfig holds the hook command lists extracted from settings.
@@ -187,6 +197,40 @@ func ExtractFeatureConfig(data []byte) RuntimeFeatureConfig {
 	// Trusted roots
 	if v, ok := raw["trustedRoots"]; ok {
 		json.Unmarshal(v, &cfg.TrustedRoots)
+	}
+
+	// Sandbox
+	if v, ok := raw["sandbox"]; ok {
+		var sandbox map[string]json.RawMessage
+		if json.Unmarshal(v, &sandbox) == nil {
+			if e, ok2 := sandbox["enabled"]; ok2 {
+				var b bool
+				if json.Unmarshal(e, &b) == nil {
+					cfg.Sandbox.Enabled = &b
+				}
+			}
+			if nr, ok2 := sandbox["namespaceRestrictions"]; ok2 {
+				var b bool
+				if json.Unmarshal(nr, &b) == nil {
+					cfg.Sandbox.NamespaceRestrictions = &b
+				}
+			}
+			if ni, ok2 := sandbox["networkIsolation"]; ok2 {
+				var b bool
+				if json.Unmarshal(ni, &b) == nil {
+					cfg.Sandbox.NetworkIsolation = &b
+				}
+			}
+			if fm, ok2 := sandbox["filesystemMode"]; ok2 {
+				var s string
+				if json.Unmarshal(fm, &s) == nil {
+					cfg.Sandbox.FilesystemMode = s
+				}
+			}
+			if am, ok2 := sandbox["allowedMounts"]; ok2 {
+				json.Unmarshal(am, &cfg.Sandbox.AllowedMounts)
+			}
+		}
 	}
 
 	return cfg
