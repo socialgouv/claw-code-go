@@ -592,7 +592,7 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 				return "", 0, 0, ctx.Err()
 			}
 
-			result := loop.ExecuteToolQuiet(tb.name, inputMap)
+			result := loop.ExecuteTool(tb.name, inputMap)
 			result.ToolUseID = tb.id
 			toolResults = append(toolResults, result)
 
@@ -616,7 +616,8 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 	return stopReason, inputTokens, outputTokens, nil
 }
 
-// ExecuteToolQuiet dispatches to the appropriate tool without printing to stdout/stderr.
+// Deprecated: ExecuteToolQuiet is kept for backward compatibility. New code
+// should use ExecuteTool which includes hooks, plugin dispatch, and telemetry.
 func (loop *ConversationLoop) ExecuteToolQuiet(name string, input map[string]any) api.ContentBlock {
 	if !CheckPermission(loop.Permissions, name) {
 		return api.ContentBlock{

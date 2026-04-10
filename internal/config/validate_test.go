@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -213,5 +214,130 @@ func TestValidateSettingsJSONCaseInsensitiveSuggestion(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected case-insensitive suggestion 'model' for 'Model'")
+	}
+}
+
+func TestValidateSettingsJSONAllSections(t *testing.T) {
+	data := []byte(`{
+		"model": "claude-sonnet-4-20250514",
+		"hooks": {"PreToolUse": ["cmd"]},
+		"permissions": {"defaultMode": "default", "allow": [], "deny": [], "ask": []},
+		"plugins": {"enabled": {}, "externalDirectories": [], "installRoot": "/p", "registryPath": "/r", "bundledRoot": "/b", "maxOutputTokens": 1000},
+		"sandbox": {"enabled": true, "namespaceRestrictions": false, "networkIsolation": true, "filesystemMode": "full", "allowedMounts": []},
+		"oauth": {"clientId": "abc", "authorizeUrl": "https://x", "tokenUrl": "https://y", "callbackPort": 8080, "scopes": []}
+	}`)
+	result := ValidateSettingsJSON(data, "settings.json")
+	if !result.IsClean() {
+		t.Errorf("expected clean result for valid config with all sections, got:\n%s", FormatDiagnostics(&result))
+	}
+}
+
+func TestValidateSettingsJSONNonJSONFormat(t *testing.T) {
+	data := []byte(`not json`)
+	result := ValidateSettingsJSON(data, "settings.json")
+	if !result.HasErrors() {
+		t.Fatal("expected error for non-JSON input")
+	}
+}
+
+func TestCheckUnsupportedFormatYAML(t *testing.T) {
+	result := checkUnsupportedFormat([]byte("---\nmodel: claude"))
+	if result == "" {
+		t.Error("expected YAML detection")
+	}
+}
+
+func TestCheckUnsupportedFormatJSON(t *testing.T) {
+	result := checkUnsupportedFormat([]byte(`{"model": "x"}`))
+	if result != "" {
+		t.Errorf("expected no detection for JSON, got %q", result)
+	}
+}
+
+func TestValidateConfigFileNonExistent(t *testing.T) {
+	result := ValidateConfigFile("/nonexistent/path/settings.json")
+	if !result.HasErrors() {
+		t.Fatal("expected error for non-existent file")
+	}
+}
+
+func TestValidateConfigFileTmpValid(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := tmpDir + "/settings.json"
+	if err := os.WriteFile(path, []byte(`{"model": "test"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result := ValidateConfigFile(path)
+	if !result.IsClean() {
+		t.Errorf("expected clean result, got:\n%s", FormatDiagnostics(&result))
+	}
+}
+
+func TestValidateSettingsJSONMultipleDeprecated(t *testing.T) {
+	data := []byte(`{"permissionMode": "default", "enabledPlugins": {}}`)
+	result := ValidateSettingsJSON(data, "settings.json")
+	if len(result.Warnings) < 2 {
+		t.Errorf("expected at least 2 deprecation warnings, got %d", len(result.Warnings))
+	}
+}
+
+func TestFormatDiagnosticsMultiLine(t *testing.T) {
+	result := &ValidationResult{
+		Errors: []ConfigDiagnostic{
+			{Path: "a.json", Field: "x", Kind: WrongTypeDiag{Expected: "string", Got: "number"}},
+			{Path: "a.json", Field: "y", Kind: UnknownKeyDiag{}},
+		},
+		Warnings: []ConfigDiagnostic{
+			{Path: "a.json", Field: "z", Kind: DeprecatedDiag{Replacement: "new_z"}},
+		},
+	}
+	out := FormatDiagnostics(result)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 {
+		t.Errorf("expected 3 diagnostic lines, got %d: %s", len(lines), out)
+	}
+}
+
+func TestValidateMCPServerEntries(t *testing.T) {
+	data := []byte(`{
+		"mcpServers": {
+			"myserver": {
+				"transport": "stdio",
+				"command": "node",
+				"args": ["server.js"],
+				"unknownField": true
+			}
+		}
+	}`)
+	result := ValidateSettingsJSON(data, "test.json")
+	if len(result.Errors) == 0 {
+		t.Error("expected error for unknown MCP server entry field")
+	}
+	foundUnknown := false
+	for _, d := range result.Errors {
+		if strings.Contains(d.Field, "unknownField") {
+			foundUnknown = true
+		}
+	}
+	if !foundUnknown {
+		t.Error("expected unknown key diagnostic for 'unknownField' in MCP server entry")
+	}
+}
+
+func TestValidateMCPServerValidEntries(t *testing.T) {
+	data := []byte(`{
+		"mcpServers": {
+			"myserver": {
+				"transport": "stdio",
+				"command": "node",
+				"args": ["server.js"]
+			}
+		}
+	}`)
+	result := ValidateSettingsJSON(data, "test.json")
+	for _, d := range result.Errors {
+		if strings.Contains(d.Field, "mcpServers.myserver") {
+			t.Errorf("unexpected error for valid MCP server entry: %s", d)
+		}
 	}
 }

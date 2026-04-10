@@ -1,0 +1,398 @@
+package recovery
+
+import (
+	"claw-code-go/internal/runtime/worker"
+	"encoding/json"
+	"testing"
+)
+
+func TestRecipeForAllScenarios(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		scenario        FailureScenario
+		wantStepNames   []string
+		wantMaxAttempts uint32
+		wantEscalation  EscalationPolicy
+	}{
+		{
+			ScenarioTrustPromptUnresolved,
+			[]string{"accept_trust_prompt"},
+			1,
+			PolicyAlertHuman,
+		},
+		{
+			ScenarioPromptMisdelivery,
+			[]string{"redirect_prompt_to_agent"},
+			1,
+			PolicyAlertHuman,
+		},
+		{
+			ScenarioStaleBranch,
+			[]string{"rebase_branch", "clean_build"},
+			1,
+			PolicyAlertHuman,
+		},
+		{
+			ScenarioCompileRedCrossCrate,
+			[]string{"clean_build"},
+			1,
+			PolicyAlertHuman,
+		},
+		{
+			ScenarioMcpHandshakeFailure,
+			[]string{"retry_mcp_handshake"},
+			1,
+			PolicyAbort,
+		},
+		{
+			ScenarioPartialPluginStartup,
+			[]string{"restart_plugin", "retry_mcp_handshake"},
+			1,
+			PolicyLogAndContinue,
+		},
+		{
+			ScenarioProviderFailure,
+			[]string{"restart_worker"},
+			1,
+			PolicyAlertHuman,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.scenario.String(), func(t *testing.T) {
+			t.Parallel()
+			recipe := RecipeFor(tt.scenario)
+
+			if recipe.Scenario != tt.scenario {
+				t.Errorf("Scenario = %v, want %v", recipe.Scenario, tt.scenario)
+			}
+			if recipe.MaxAttempts != tt.wantMaxAttempts {
+				t.Errorf("MaxAttempts = %d, want %d", recipe.MaxAttempts, tt.wantMaxAttempts)
+			}
+			if recipe.EscalationPolicy != tt.wantEscalation {
+				t.Errorf("EscalationPolicy = %v, want %v", recipe.EscalationPolicy, tt.wantEscalation)
+			}
+			if len(recipe.Steps) != len(tt.wantStepNames) {
+				t.Fatalf("len(Steps) = %d, want %d", len(recipe.Steps), len(tt.wantStepNames))
+			}
+			for i, step := range recipe.Steps {
+				if step.StepName() != tt.wantStepNames[i] {
+					t.Errorf("Steps[%d].StepName() = %q, want %q", i, step.StepName(), tt.wantStepNames[i])
+				}
+			}
+		})
+	}
+}
+
+func TestAllScenariosMaxAttemptsOne(t *testing.T) {
+	t.Parallel()
+	for _, s := range AllScenarios() {
+		recipe := RecipeFor(s)
+		if recipe.MaxAttempts != 1 {
+			t.Errorf("RecipeFor(%v).MaxAttempts = %d, want 1", s, recipe.MaxAttempts)
+		}
+	}
+}
+
+func TestAttemptRecoveryFreshRecovered(t *testing.T) {
+	t.Parallel()
+	ctx := NewRecoveryContext()
+	result := AttemptRecovery(ScenarioTrustPromptUnresolved, ctx)
+
+	rec, ok := result.(Recovered)
+	if !ok {
+		t.Fatalf("expected Recovered, got %T", result)
+	}
+	if rec.StepsTaken != 1 {
+		t.Errorf("StepsTaken = %d, want 1", rec.StepsTaken)
+	}
+	if rec.ResultKind() != "recovered" {
+		t.Errorf("ResultKind = %q, want %q", rec.ResultKind(), "recovered")
+	}
+
+	// Check events: RecoveryAttempted + RecoverySucceeded
+	events := ctx.Events()
+	if len(events) != 2 {
+		t.Fatalf("len(Events) = %d, want 2", len(events))
+	}
+	if _, ok := events[0].(RecoveryAttempted); !ok {
+		t.Errorf("events[0] type = %T, want RecoveryAttempted", events[0])
+	}
+	if _, ok := events[1].(RecoverySucceeded); !ok {
+		t.Errorf("events[1] type = %T, want RecoverySucceeded", events[1])
+	}
+}
+
+func TestAttemptRecoveryExceedsMaxAttempts(t *testing.T) {
+	t.Parallel()
+	ctx := NewRecoveryContext()
+
+	// First attempt succeeds.
+	r1 := AttemptRecovery(ScenarioProviderFailure, ctx)
+	if _, ok := r1.(Recovered); !ok {
+		t.Fatalf("first attempt: expected Recovered, got %T", r1)
+	}
+
+	// Second attempt should escalate (max_attempts=1).
+	r2 := AttemptRecovery(ScenarioProviderFailure, ctx)
+	esc, ok := r2.(EscalationRequired)
+	if !ok {
+		t.Fatalf("second attempt: expected EscalationRequired, got %T", r2)
+	}
+	if esc.ResultKind() != "escalation_required" {
+		t.Errorf("ResultKind = %q, want %q", esc.ResultKind(), "escalation_required")
+	}
+
+	// Should have Escalated event.
+	events := ctx.Events()
+	lastEvent := events[len(events)-1]
+	if _, ok := lastEvent.(Escalated); !ok {
+		t.Errorf("last event type = %T, want Escalated", lastEvent)
+	}
+}
+
+func TestAttemptRecoveryFailAtStepZero(t *testing.T) {
+	t.Parallel()
+	ctx := NewRecoveryContextWithFailAt(0)
+	result := AttemptRecovery(ScenarioStaleBranch, ctx)
+
+	_, ok := result.(EscalationRequired)
+	if !ok {
+		t.Fatalf("expected EscalationRequired, got %T", result)
+	}
+
+	// Should have RecoveryFailed event.
+	events := ctx.Events()
+	if len(events) != 2 {
+		t.Fatalf("len(Events) = %d, want 2", len(events))
+	}
+	if _, ok := events[1].(RecoveryFailed); !ok {
+		t.Errorf("events[1] type = %T, want RecoveryFailed", events[1])
+	}
+}
+
+func TestAttemptRecoveryFailAtStepOnePartial(t *testing.T) {
+	t.Parallel()
+	// StaleBranch has 2 steps: [RebaseBranch, CleanBuild]
+	ctx := NewRecoveryContextWithFailAt(1)
+	result := AttemptRecovery(ScenarioStaleBranch, ctx)
+
+	pr, ok := result.(PartialRecovery)
+	if !ok {
+		t.Fatalf("expected PartialRecovery, got %T", result)
+	}
+	if len(pr.RecoveredSteps) != 1 {
+		t.Errorf("len(RecoveredSteps) = %d, want 1", len(pr.RecoveredSteps))
+	}
+	if len(pr.Remaining) != 1 {
+		t.Errorf("len(Remaining) = %d, want 1", len(pr.Remaining))
+	}
+	if pr.RecoveredSteps[0].StepName() != "rebase_branch" {
+		t.Errorf("RecoveredSteps[0] = %q, want %q", pr.RecoveredSteps[0].StepName(), "rebase_branch")
+	}
+	if pr.Remaining[0].StepName() != "clean_build" {
+		t.Errorf("Remaining[0] = %q, want %q", pr.Remaining[0].StepName(), "clean_build")
+	}
+	if pr.ResultKind() != "partial_recovery" {
+		t.Errorf("ResultKind = %q, want %q", pr.ResultKind(), "partial_recovery")
+	}
+}
+
+func TestFromWorkerFailureKind(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		kind string
+		want FailureScenario
+	}{
+		{"trust_gate", ScenarioTrustPromptUnresolved},
+		{"prompt_delivery", ScenarioPromptMisdelivery},
+		{"protocol", ScenarioMcpHandshakeFailure},
+		{"provider", ScenarioProviderFailure},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			t.Parallel()
+			got := FromWorkerFailureKind(tt.kind)
+			if got != tt.want {
+				t.Errorf("FromWorkerFailureKind(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFromWorkerFailure(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		kind worker.WorkerFailureKind
+		want FailureScenario
+	}{
+		{worker.FailureTrustGate, ScenarioTrustPromptUnresolved},
+		{worker.FailurePromptDelivery, ScenarioPromptMisdelivery},
+		{worker.FailureProtocol, ScenarioMcpHandshakeFailure},
+		{worker.FailureProvider, ScenarioProviderFailure},
+	}
+	for _, tt := range tests {
+		got := FromWorkerFailure(tt.kind)
+		if got != tt.want {
+			t.Errorf("FromWorkerFailure(%v) = %v, want %v", tt.kind, got, tt.want)
+		}
+	}
+}
+
+func TestEventsAccumulateAcrossScenarios(t *testing.T) {
+	t.Parallel()
+	ctx := NewRecoveryContext()
+
+	AttemptRecovery(ScenarioTrustPromptUnresolved, ctx)
+	AttemptRecovery(ScenarioProviderFailure, ctx)
+	AttemptRecovery(ScenarioMcpHandshakeFailure, ctx)
+
+	// Each successful attempt emits 2 events (Attempted + Succeeded).
+	events := ctx.Events()
+	if len(events) != 6 {
+		t.Errorf("len(Events) = %d, want 6", len(events))
+	}
+
+	// Verify attempt counts.
+	if ctx.AttemptCount(ScenarioTrustPromptUnresolved) != 1 {
+		t.Errorf("AttemptCount(TrustPromptUnresolved) = %d, want 1", ctx.AttemptCount(ScenarioTrustPromptUnresolved))
+	}
+	if ctx.AttemptCount(ScenarioProviderFailure) != 1 {
+		t.Errorf("AttemptCount(ProviderFailure) = %d, want 1", ctx.AttemptCount(ScenarioProviderFailure))
+	}
+}
+
+func TestCorrectEscalationPolicies(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		scenario FailureScenario
+		want     EscalationPolicy
+	}{
+		{ScenarioTrustPromptUnresolved, PolicyAlertHuman},
+		{ScenarioPromptMisdelivery, PolicyAlertHuman},
+		{ScenarioStaleBranch, PolicyAlertHuman},
+		{ScenarioCompileRedCrossCrate, PolicyAlertHuman},
+		{ScenarioMcpHandshakeFailure, PolicyAbort},
+		{ScenarioPartialPluginStartup, PolicyLogAndContinue},
+		{ScenarioProviderFailure, PolicyAlertHuman},
+	}
+	for _, tt := range tests {
+		t.Run(tt.scenario.String(), func(t *testing.T) {
+			t.Parallel()
+			recipe := RecipeFor(tt.scenario)
+			if recipe.EscalationPolicy != tt.want {
+				t.Errorf("EscalationPolicy = %v, want %v", recipe.EscalationPolicy, tt.want)
+			}
+		})
+	}
+}
+
+func TestAllScenariosCount(t *testing.T) {
+	t.Parallel()
+	scenarios := AllScenarios()
+	if len(scenarios) != 7 {
+		t.Errorf("len(AllScenarios()) = %d, want 7", len(scenarios))
+	}
+}
+
+func TestFailureScenarioJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, s := range AllScenarios() {
+		t.Run(s.String(), func(t *testing.T) {
+			t.Parallel()
+			data, err := json.Marshal(s)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var got FailureScenario
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if got != s {
+				t.Errorf("round-trip: got %v, want %v", got, s)
+			}
+		})
+	}
+}
+
+func TestEscalationPolicyJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	policies := []EscalationPolicy{PolicyAlertHuman, PolicyLogAndContinue, PolicyAbort}
+	for _, p := range policies {
+		t.Run(p.String(), func(t *testing.T) {
+			t.Parallel()
+			data, err := json.Marshal(p)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var got EscalationPolicy
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if got != p {
+				t.Errorf("round-trip: got %v, want %v", got, p)
+			}
+		})
+	}
+}
+
+func TestPartialPluginStartupRecipeDetails(t *testing.T) {
+	t.Parallel()
+	recipe := RecipeFor(ScenarioPartialPluginStartup)
+	if len(recipe.Steps) != 2 {
+		t.Fatalf("len(Steps) = %d, want 2", len(recipe.Steps))
+	}
+
+	rp, ok := recipe.Steps[0].(RestartPlugin)
+	if !ok {
+		t.Fatalf("Steps[0] type = %T, want RestartPlugin", recipe.Steps[0])
+	}
+	if rp.Name != "stalled" {
+		t.Errorf("RestartPlugin.Name = %q, want %q", rp.Name, "stalled")
+	}
+
+	mcp, ok := recipe.Steps[1].(RetryMcpHandshake)
+	if !ok {
+		t.Fatalf("Steps[1] type = %T, want RetryMcpHandshake", recipe.Steps[1])
+	}
+	if mcp.Timeout != 3000 {
+		t.Errorf("RetryMcpHandshake.Timeout = %d, want 3000", mcp.Timeout)
+	}
+}
+
+func TestMcpHandshakeRecipeTimeout(t *testing.T) {
+	t.Parallel()
+	recipe := RecipeFor(ScenarioMcpHandshakeFailure)
+	if len(recipe.Steps) != 1 {
+		t.Fatalf("len(Steps) = %d, want 1", len(recipe.Steps))
+	}
+	mcp, ok := recipe.Steps[0].(RetryMcpHandshake)
+	if !ok {
+		t.Fatalf("Steps[0] type = %T, want RetryMcpHandshake", recipe.Steps[0])
+	}
+	if mcp.Timeout != 5000 {
+		t.Errorf("RetryMcpHandshake.Timeout = %d, want 5000", mcp.Timeout)
+	}
+}
+
+func TestRecoveryEventKinds(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		event RecoveryEvent
+		want  string
+	}{
+		{RecoveryAttempted{}, "recovery_attempted"},
+		{RecoverySucceeded{}, "recovery_succeeded"},
+		{RecoveryFailed{}, "recovery_failed"},
+		{Escalated{}, "escalated"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.event.EventKind(); got != tt.want {
+				t.Errorf("EventKind() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

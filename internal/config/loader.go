@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -75,6 +76,19 @@ func Load() *Settings {
 		}
 		patch.RawJSON = data
 		merge(s, &patch)
+
+		// Validate and emit warnings to stderr (non-fatal).
+		vr := ValidateSettingsJSON(data, path)
+		if vr.HasWarnings() {
+			for _, w := range vr.Warnings {
+				fmt.Fprintf(os.Stderr, "config warning: %s\n", w)
+			}
+		}
+		if vr.HasErrors() {
+			for _, e := range vr.Errors {
+				fmt.Fprintf(os.Stderr, "config error: %s\n", e)
+			}
+		}
 	}
 
 	return s

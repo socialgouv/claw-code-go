@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -144,6 +145,15 @@ var oauthFields = []fieldSpec{
 	{"scopes", "array"},
 }
 
+var mcpServerEntryFields = []fieldSpec{
+	{"name", "string"},
+	{"transport", "string"},
+	{"command", "string"},
+	{"args", "array"},
+	{"url", "string"},
+	{"env", "object"},
+}
+
 // Deprecated field mappings (old key → replacement).
 var deprecatedFields = map[string]string{
 	"permissionMode": "permissions.defaultMode",
@@ -247,6 +257,19 @@ func ValidateSettingsJSON(data []byte, filePath string) ValidationResult {
 				Line:  findKeyLine(data, "oauth"),
 				Kind:  WrongTypeDiag{Expected: "object", Got: jsonTypeName(oauthRaw)},
 			})
+		}
+	}
+
+	// Validate individual MCP server entries.
+	if mcpRaw, ok := raw["mcpServers"]; ok {
+		var servers map[string]json.RawMessage
+		if json.Unmarshal(mcpRaw, &servers) == nil {
+			for serverName, serverRaw := range servers {
+				var entry map[string]json.RawMessage
+				if json.Unmarshal(serverRaw, &entry) == nil {
+					validateObjectKeys(entry, mcpServerEntryFields, "mcpServers."+serverName+".", filePath, data, &result)
+				}
+			}
 		}
 	}
 
@@ -385,6 +408,54 @@ func findKeyLine(source []byte, key string) int {
 		}
 	}
 	return 0
+}
+
+// ValidateConfigFile reads and validates a settings file, returning diagnostics.
+func ValidateConfigFile(path string) ValidationResult {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ValidationResult{
+			Errors: []ConfigDiagnostic{{
+				Path:  path,
+				Field: "<file>",
+				Kind:  WrongTypeDiag{Expected: "readable file", Got: err.Error()},
+			}},
+		}
+	}
+	if unsupported := checkUnsupportedFormat(data); unsupported != "" {
+		return ValidationResult{
+			Errors: []ConfigDiagnostic{{
+				Path:  path,
+				Field: "<root>",
+				Kind:  WrongTypeDiag{Expected: "JSON object", Got: unsupported},
+			}},
+		}
+	}
+	return ValidateSettingsJSON(data, path)
+}
+
+// checkUnsupportedFormat detects non-JSON config formats and returns a
+// description of the detected format, or "" if it looks like valid JSON.
+func checkUnsupportedFormat(data []byte) string {
+	s := strings.TrimSpace(string(data))
+	if len(s) == 0 {
+		return ""
+	}
+	// YAML detection: starts with "---" or contains "key: value" patterns
+	if strings.HasPrefix(s, "---") {
+		return "YAML format (only JSON is supported)"
+	}
+	// TOML detection: starts with "[section]" or "key = value"
+	if len(s) > 0 && s[0] == '[' {
+		// Could be JSON array — let JSON parser handle that
+		return ""
+	}
+	// INI-style detection
+	if strings.Contains(s, " = ") && !strings.HasPrefix(s, "{") {
+		// Heuristic: non-JSON with "key = value" pattern
+		return "INI/TOML format (only JSON is supported)"
+	}
+	return ""
 }
 
 // jsonTypeName returns the JSON type name for a raw JSON value.

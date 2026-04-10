@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 const (
@@ -15,6 +16,13 @@ const (
 	anthropicVersion       = "2023-06-01"
 	anthropicBetaHeader    = "anthropic-beta"
 	anthropicVersionHeader = "anthropic-version"
+
+	// defaultMaxRetries is the maximum number of retry attempts for retryable
+	// HTTP errors (429, 5xx). The first attempt is attempt 1.
+	defaultMaxRetries = 3
+
+	// retryBaseDelay is the initial backoff delay between retries.
+	retryBaseDelay = 500 * time.Millisecond
 )
 
 // Client is the Anthropic HTTP API client.
@@ -47,7 +55,9 @@ func (c *Client) WithTracer(tracer *apikit.SessionTracer) *Client {
 }
 
 // StreamResponse sends a streaming message request and returns a channel of StreamEvents.
-// The channel is closed when the stream ends or an error occurs.
+// The channel is closed when the stream ends or an error occurs. Retryable
+// failures (429, 5xx) are retried up to defaultMaxRetries times with
+// exponential backoff. Each attempt is tracked in telemetry.
 func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (<-chan StreamEvent, error) {
 	req.Stream = true
 
@@ -56,52 +66,73 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.BaseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
+	var resp *http.Response
+	var lastErr error
 
-	// Apply authentication headers. Prefer structured Auth; fall back to legacy fields.
-	if c.Auth.Kind != AuthSourceNone {
-		c.Auth.ApplyToRequest(httpReq)
-	} else if c.OAuthToken != "" {
-		httpReq.Header.Set("authorization", "Bearer "+c.OAuthToken)
-	} else {
-		httpReq.Header.Set("x-api-key", c.APIKey)
-	}
-	httpReq.Header.Set(anthropicVersionHeader, anthropicVersion)
-	httpReq.Header.Set("content-type", "application/json")
-	httpReq.Header.Set("accept", "text/event-stream")
-
-	// Telemetry: record request started
-	if c.Tracer != nil {
-		c.Tracer.RecordHTTPRequestStarted(1, "POST", "/v1/messages", nil)
-	}
-
-	resp, err := c.HTTPClient.Do(httpReq)
-	if err != nil {
-		if c.Tracer != nil {
-			c.Tracer.RecordHTTPRequestFailed(1, "POST", "/v1/messages", err.Error(), false, nil)
+	for attempt := uint32(1); attempt <= defaultMaxRetries; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			c.BaseURL+"/v1/messages", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
 		}
-		return nil, fmt.Errorf("do request: %w", err)
-	}
 
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
+		// Apply authentication headers. Prefer structured Auth; fall back to legacy fields.
+		if c.Auth.Kind != AuthSourceNone {
+			c.Auth.ApplyToRequest(httpReq)
+		} else if c.OAuthToken != "" {
+			httpReq.Header.Set("authorization", "Bearer "+c.OAuthToken)
+		} else {
+			httpReq.Header.Set("x-api-key", c.APIKey)
+		}
+		httpReq.Header.Set(anthropicVersionHeader, anthropicVersion)
+		httpReq.Header.Set("content-type", "application/json")
+		httpReq.Header.Set("accept", "text/event-stream")
+
+		// Telemetry: record request started
+		if c.Tracer != nil {
+			c.Tracer.RecordHTTPRequestStarted(attempt, "POST", "/v1/messages", nil)
+		}
+
+		resp, lastErr = c.HTTPClient.Do(httpReq)
+		if lastErr != nil {
+			if c.Tracer != nil {
+				c.Tracer.RecordHTTPRequestFailed(attempt, "POST", "/v1/messages", lastErr.Error(), false, nil)
+			}
+			// Transport errors are not retryable.
+			return nil, fmt.Errorf("do request: %w", lastErr)
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			// Telemetry: record request succeeded
+			requestID := resp.Header.Get("x-request-id")
+			if c.Tracer != nil {
+				c.Tracer.RecordHTTPRequestSucceeded(attempt, "POST", "/v1/messages", uint16(resp.StatusCode), requestID, nil)
+			}
+			break
+		}
+
+		// Non-OK status: read error body and check retryability.
 		errBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		errMsg := fmt.Sprintf("API error %d: %s", resp.StatusCode, string(errBody))
-		if c.Tracer != nil {
-			retryable := isRetryableStatus(resp.StatusCode)
-			c.Tracer.RecordHTTPRequestFailed(1, "POST", "/v1/messages", errMsg, retryable, nil)
-		}
-		return nil, fmt.Errorf("%s", errMsg)
-	}
+		retryable := isRetryableStatus(resp.StatusCode)
 
-	// Telemetry: record request succeeded
-	requestID := resp.Header.Get("x-request-id")
-	if c.Tracer != nil {
-		c.Tracer.RecordHTTPRequestSucceeded(1, "POST", "/v1/messages", uint16(resp.StatusCode), requestID, nil)
+		if c.Tracer != nil {
+			c.Tracer.RecordHTTPRequestFailed(attempt, "POST", "/v1/messages", errMsg, retryable, nil)
+		}
+
+		if !retryable || attempt == defaultMaxRetries {
+			return nil, fmt.Errorf("%s", errMsg)
+		}
+
+		// Exponential backoff before next attempt.
+		delay := retryBaseDelay * time.Duration(1<<(attempt-1))
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		lastErr = fmt.Errorf("%s", errMsg)
 	}
 
 	ch := make(chan StreamEvent, 64)

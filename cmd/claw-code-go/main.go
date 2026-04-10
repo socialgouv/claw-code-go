@@ -1,17 +1,21 @@
 package main
 
 import (
+	"claw-code-go/hooks"
 	"claw-code-go/internal/auth"
 	"claw-code-go/internal/commands"
 	"claw-code-go/internal/compat"
+	"claw-code-go/internal/config"
 	"claw-code-go/internal/permissions"
 	"claw-code-go/internal/runtime"
 	"claw-code-go/internal/tui"
+	"claw-code-go/plugin"
 	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -103,33 +107,8 @@ func main() {
 
 	loop := runtime.NewConversationLoop(cfg, realClient)
 
-	// Wire up the permission manager (Phase 11).
-	// CLI --permission-mode flag overrides the config-file value when set to a
-	// non-default value. cfg.PermissionMode comes from the layered settings files.
-	resolvedPermMode := cfg.PermissionMode
-	if *permModeFlag != "default" {
-		resolvedPermMode = *permModeFlag
-	}
-	permMode, err := permissions.ParsePermissionMode(resolvedPermMode)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v; using default mode\n", err)
-		permMode = permissions.ModeDefault
-	}
-	cfg.PermissionMode = permMode.String() // normalise back into Config
-
-	ruleset, rErr := permissions.LoadRuleset(".claude/settings.json")
-	if rErr != nil {
-		ruleset = &permissions.Ruleset{}
-	}
-	// Merge allowedTools/blockedTools from layered config into the ruleset.
-	if len(cfg.AllowedTools) > 0 || len(cfg.BlockedTools) > 0 {
-		extra := permissions.RulesetFromLists(cfg.AllowedTools, cfg.BlockedTools)
-		ruleset.Rules = append(ruleset.Rules, extra.Rules...)
-	}
-	loop.PermManager = permissions.NewManager(permMode, ruleset)
-
-	// Connect to MCP servers defined in config (non-fatal errors printed inside).
-	loop.InitMCPFromConfig(context.Background())
+	// Bootstrap wires hooks, plugins, telemetry, and permissions in the correct order.
+	bootstrap(cfg, loop, *permModeFlag)
 
 	if *sessionFlag != "" {
 		sess, err := runtime.LoadSession(cfg.SessionDir, *sessionFlag)
@@ -170,6 +149,99 @@ func main() {
 	runTUI(cfg, loop)
 }
 
+// bootstrap initializes the runtime subsystems in the correct order:
+//  1. Permission manager (from CLI flags + config)
+//  2. MCP servers (from config)
+//  3. Telemetry sink and session tracer
+//  4. Plugin discovery, registry, and tool wiring
+//  5. Hooks (from config + plugin-provided hooks)
+//  6. Plugin lifecycle shutdown is deferred to cleanup
+//
+// Each subsystem is initialized with nil-guards so that a minimal config
+// (no hooks, no plugins, no telemetry) works without panics.
+func bootstrap(cfg *runtime.Config, loop *runtime.ConversationLoop, permModeFlag string) {
+	// 1. Permission manager.
+	resolvedPermMode := cfg.PermissionMode
+	if permModeFlag != "default" {
+		resolvedPermMode = permModeFlag
+	}
+	permMode, err := permissions.ParsePermissionMode(resolvedPermMode)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v; using default mode\n", err)
+		permMode = permissions.ModeDefault
+	}
+	cfg.PermissionMode = permMode.String()
+
+	ruleset, rErr := permissions.LoadRuleset(".claude/settings.json")
+	if rErr != nil {
+		ruleset = &permissions.Ruleset{}
+	}
+	if len(cfg.AllowedTools) > 0 || len(cfg.BlockedTools) > 0 {
+		extra := permissions.RulesetFromLists(cfg.AllowedTools, cfg.BlockedTools)
+		ruleset.Rules = append(ruleset.Rules, extra.Rules...)
+	}
+	loop.PermManager = permissions.NewManager(permMode, ruleset)
+
+	// 2. MCP servers.
+	loop.InitMCPFromConfig(context.Background())
+
+	// 3. Telemetry — JSONL when directory configured, NopSink fallback.
+	telemetryPath := resolveTelemetryPath(cfg)
+	loop.InitTelemetry(telemetryPath)
+
+	// 4. Extract feature config for hooks and plugins.
+	var featureCfg config.RuntimeFeatureConfig
+	if s := config.Load(); len(s.RawJSON) > 0 {
+		featureCfg = config.ExtractFeatureConfig(s.RawJSON)
+	}
+
+	// 5. Plugin discovery and initialization.
+	var pluginRegistry *plugin.PluginRegistry
+	homeDir, _ := os.UserHomeDir()
+	configHome := filepath.Join(homeDir, ".claw-code")
+	pluginMgr, pmErr := plugin.NewPluginManager(plugin.PluginManagerConfig{
+		ConfigHome:     configHome,
+		BundledRoot:    cfg.PluginBundledRoot,
+		InstallRoot:    cfg.PluginInstallRoot,
+		ExternalDirs:   cfg.PluginExternalDirs,
+		EnabledPlugins: cfg.EnabledPlugins,
+	})
+	if pmErr != nil {
+		fmt.Fprintf(os.Stderr, "[plugins] warning: plugin manager init failed: %v\n", pmErr)
+	} else {
+		discovered, failures := pluginMgr.DiscoverPlugins()
+		for _, f := range failures {
+			fmt.Fprintf(os.Stderr, "[plugins] warning: failed to load %s: %v\n", f.PluginRoot, f.Err)
+		}
+		if len(discovered) > 0 {
+			pluginRegistry = plugin.NewPluginRegistry(discovered)
+		}
+	}
+	loop.InitPlugins(pluginRegistry)
+
+	// 6. Hooks — config hooks merged with plugin-provided hooks.
+	hookCfg := hooks.HookConfig{
+		PreToolUse:         featureCfg.Hooks.PreToolUse,
+		PostToolUse:        featureCfg.Hooks.PostToolUse,
+		PostToolUseFailure: featureCfg.Hooks.PostToolUseFailure,
+	}
+	loop.InitHooksFromConfig(hookCfg)
+}
+
+// resolveTelemetryPath returns the JSONL telemetry file path, or "" to disable.
+func resolveTelemetryPath(cfg *runtime.Config) string {
+	// Use CLAUDE_CODE_TELEMETRY_DIR env var if set.
+	if dir := os.Getenv("CLAUDE_CODE_TELEMETRY_DIR"); dir != "" {
+		return filepath.Join(dir, "events.jsonl")
+	}
+	// Default: ~/.claw-code/telemetry/events.jsonl
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(homeDir, ".claw-code", "telemetry", "events.jsonl")
+}
+
 // runTUI starts the Bubble Tea TUI for interactive use.
 func runTUI(cfg *runtime.Config, loop *runtime.ConversationLoop) {
 	// Register slash commands (available for future non-TUI REPL mode).
@@ -183,6 +255,7 @@ func runTUI(cfg *runtime.Config, loop *runtime.ConversationLoop) {
 	signal.Notify(sigCh, syscall.SIGTERM)
 	go func() {
 		<-sigCh
+		shutdownPlugins(loop)
 		saveSessionSilent(cfg.SessionDir, loop)
 		os.Exit(0)
 	}()
@@ -195,8 +268,18 @@ func runTUI(cfg *runtime.Config, loop *runtime.ConversationLoop) {
 		os.Exit(1)
 	}
 
-	// Save session after the TUI exits (covers Ctrl+C via tea.Quit).
+	// Shutdown plugins and save session after the TUI exits.
+	shutdownPlugins(loop)
 	saveSessionSilent(cfg.SessionDir, loop)
+}
+
+// shutdownPlugins gracefully shuts down the plugin registry if present.
+func shutdownPlugins(loop *runtime.ConversationLoop) {
+	if loop.PluginRegistry != nil {
+		if err := loop.PluginRegistry.Shutdown(); err != nil {
+			fmt.Fprintf(os.Stderr, "[plugins] warning: shutdown error: %v\n", err)
+		}
+	}
 }
 
 // saveSessionSilent saves the session, printing only to stderr on failure.

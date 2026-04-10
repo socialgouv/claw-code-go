@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"claw-code-go/internal/api"
 )
@@ -349,4 +351,403 @@ func extractSummaryTimeline(summary string) []string {
 		timeline = append(timeline, trimmed)
 	}
 	return timeline
+}
+
+// ---------------------------------------------------------------------------
+// Pure-function compaction pipeline (no LLM calls)
+// ---------------------------------------------------------------------------
+
+// CompactionConfig controls pure-function compaction behavior.
+type CompactionConfig struct {
+	PreserveRecentMessages int // default 4
+	MaxEstimatedTokens     int // default 10000
+}
+
+// DefaultCompactionConfig returns the default compaction configuration.
+func DefaultCompactionConfig() CompactionConfig {
+	return CompactionConfig{PreserveRecentMessages: 4, MaxEstimatedTokens: 10000}
+}
+
+// CompactionResult holds the output of a pure-function compaction.
+type CompactionResult struct {
+	Summary             string
+	FormattedSummary    string
+	CompactedMessages   []api.Message // new message list after compaction
+	RemovedMessageCount int
+}
+
+// ShouldCompactPure checks if messages should be compacted based on config.
+// It looks at compactable messages (after any existing compacted prefix)
+// and checks: len > preserve_recent AND estimated_tokens >= max_estimated_tokens.
+func ShouldCompactPure(messages []api.Message, cfg CompactionConfig) bool {
+	compactable := compactableMessages(messages)
+	if len(compactable) <= cfg.PreserveRecentMessages {
+		return false
+	}
+	return EstimateTokens(compactable) >= cfg.MaxEstimatedTokens
+}
+
+// compactableMessages returns the subset of messages eligible for compaction,
+// skipping any leading system message that is an existing compacted summary.
+func compactableMessages(messages []api.Message) []api.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	if extractExistingCompactedSummary(messages[0]) != "" {
+		return messages[1:]
+	}
+	return messages
+}
+
+// CompactSessionPure performs pure-function compaction without LLM.
+// Returns nil if compaction is not needed.
+func CompactSessionPure(messages []api.Message, cfg CompactionConfig) *CompactionResult {
+	if !ShouldCompactPure(messages, cfg) {
+		return nil
+	}
+
+	compactable := compactableMessages(messages)
+	keepCount := cfg.PreserveRecentMessages
+	if keepCount > len(compactable) {
+		keepCount = len(compactable)
+	}
+
+	toSummarize := compactable[:len(compactable)-keepCount]
+	recent := compactable[len(compactable)-keepCount:]
+
+	summary := SummarizeMessages(toSummarize)
+
+	// Merge with any existing compacted summary from the first message.
+	existingSummary := ""
+	if len(messages) > 0 {
+		existingSummary = extractExistingCompactedSummary(messages[0])
+	}
+	mergedSummary := summary
+	if existingSummary != "" {
+		mergedSummary = MergeCompactSummaries(existingSummary, summary)
+	}
+
+	formatted := FormatCompactSummary(mergedSummary)
+	continuationMsg := GetContinuationMessage(mergedSummary, true, keepCount > 0)
+
+	newMessages := make([]api.Message, 0, 1+len(recent))
+	newMessages = append(newMessages, continuationMsg)
+	newMessages = append(newMessages, recent...)
+
+	removedCount := len(messages) - len(recent)
+
+	return &CompactionResult{
+		Summary:             mergedSummary,
+		FormattedSummary:    formatted,
+		CompactedMessages:   newMessages,
+		RemovedMessageCount: removedCount,
+	}
+}
+
+// SummarizeMessages produces a <summary>...</summary> structured summary
+// of the given messages using pure heuristics (no LLM call).
+func SummarizeMessages(messages []api.Message) string {
+	// 1. Count messages by role.
+	roleCounts := map[string]int{}
+	for _, msg := range messages {
+		roleCounts[msg.Role]++
+	}
+
+	// 2. Extract unique tool names.
+	toolSet := map[string]bool{}
+	for _, msg := range messages {
+		for _, cb := range msg.Content {
+			if cb.Type == "tool_use" && cb.Name != "" {
+				toolSet[cb.Name] = true
+			}
+			if cb.Type == "tool_result" {
+				for _, inner := range cb.Content {
+					if inner.Type == "tool_use" && inner.Name != "" {
+						toolSet[inner.Name] = true
+					}
+				}
+			}
+		}
+	}
+	var toolNames []string
+	for name := range toolSet {
+		toolNames = append(toolNames, name)
+	}
+	sort.Strings(toolNames)
+
+	// 3. Build summary.
+	var sb strings.Builder
+	sb.WriteString("<summary>\n")
+	sb.WriteString("Conversation summary:\n")
+
+	// Scope line.
+	sb.WriteString(fmt.Sprintf("- Scope: %d earlier messages compacted (user=%d, assistant=%d, tool=%d).\n",
+		len(messages), roleCounts["user"], roleCounts["assistant"], roleCounts["tool"]))
+
+	// Tools mentioned.
+	if len(toolNames) > 0 {
+		sb.WriteString("- Tools mentioned: ")
+		sb.WriteString(strings.Join(toolNames, ", "))
+		sb.WriteString(".\n")
+	}
+
+	// 4. Recent user requests.
+	recentRequests := collectRecentRoleSummaries(messages, "user", 3)
+	if len(recentRequests) > 0 {
+		sb.WriteString("- Recent user requests:\n")
+		for _, r := range recentRequests {
+			sb.WriteString("  - ")
+			sb.WriteString(r)
+			sb.WriteString("\n")
+		}
+	}
+
+	// 5. Pending work.
+	pending := inferPendingWork(messages)
+	if len(pending) > 0 {
+		sb.WriteString("- Pending work:\n")
+		for _, p := range pending {
+			sb.WriteString("  - ")
+			sb.WriteString(p)
+			sb.WriteString("\n")
+		}
+	}
+
+	// 6. Key files.
+	keyFiles := collectKeyFiles(messages)
+	if len(keyFiles) > 0 {
+		sb.WriteString("- Key files referenced: ")
+		sb.WriteString(strings.Join(keyFiles, ", "))
+		sb.WriteString(".\n")
+	}
+
+	// 7. Current work.
+	currentWork := inferCurrentWork(messages)
+	if currentWork != "" {
+		sb.WriteString("- Current work: ")
+		sb.WriteString(currentWork)
+		sb.WriteString("\n")
+	}
+
+	// 8. Timeline.
+	sb.WriteString("- Key timeline:\n")
+	for _, msg := range messages {
+		var parts []string
+		for _, cb := range msg.Content {
+			line := summarizeBlock(cb)
+			if line != "" {
+				parts = append(parts, line)
+			}
+		}
+		if len(parts) > 0 {
+			sb.WriteString("  - ")
+			sb.WriteString(msg.Role)
+			sb.WriteString(": ")
+			sb.WriteString(strings.Join(parts, " | "))
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("</summary>")
+	return sb.String()
+}
+
+// collectRecentRoleSummaries returns the most recent summaries from messages
+// matching the given role, in chronological order.
+func collectRecentRoleSummaries(messages []api.Message, role string, limit int) []string {
+	var results []string
+	for i := len(messages) - 1; i >= 0 && len(results) < limit; i-- {
+		if messages[i].Role != role {
+			continue
+		}
+		text := firstTextBlock(messages[i])
+		if text == "" {
+			continue
+		}
+		results = append(results, truncateSummary(text, 160))
+	}
+	// Reverse for chronological order.
+	for i, j := 0, len(results)-1; i < j; i, j = i+1, j-1 {
+		results[i], results[j] = results[j], results[i]
+	}
+	return results
+}
+
+// inferPendingWork extracts messages containing work-related keywords.
+func inferPendingWork(messages []api.Message) []string {
+	keywords := []string{"todo", "next", "pending", "follow up", "remaining"}
+	var results []string
+	for i := len(messages) - 1; i >= 0 && len(results) < 3; i-- {
+		text := firstTextBlock(messages[i])
+		if text == "" {
+			continue
+		}
+		lower := strings.ToLower(text)
+		for _, kw := range keywords {
+			if strings.Contains(lower, kw) {
+				results = append(results, truncateSummary(text, 160))
+				break
+			}
+		}
+	}
+	// Reverse for chronological order.
+	for i, j := 0, len(results)-1; i < j; i, j = i+1, j-1 {
+		results[i], results[j] = results[j], results[i]
+	}
+	return results
+}
+
+// collectKeyFiles extracts file paths from all messages, sorted and deduplicated.
+func collectKeyFiles(messages []api.Message) []string {
+	var allText strings.Builder
+	for _, msg := range messages {
+		for _, cb := range msg.Content {
+			if cb.Text != "" {
+				allText.WriteString(cb.Text)
+				allText.WriteString(" ")
+			}
+			for _, inner := range cb.Content {
+				if inner.Text != "" {
+					allText.WriteString(inner.Text)
+					allText.WriteString(" ")
+				}
+			}
+		}
+	}
+	candidates := extractFileCandidates(allText.String())
+	// Sort and deduplicate.
+	sort.Strings(candidates)
+	var deduped []string
+	seen := map[string]bool{}
+	for _, c := range candidates {
+		if !seen[c] {
+			seen[c] = true
+			deduped = append(deduped, c)
+		}
+	}
+	if len(deduped) > 8 {
+		deduped = deduped[:8]
+	}
+	return deduped
+}
+
+// punctuationTrimChars is the set of characters trimmed from path candidates.
+const punctuationTrimChars = ",.;:()'\"` \t\r\n"
+
+// extractFileCandidates splits content by whitespace and returns tokens that
+// look like file paths (contain "/" and have an interesting extension).
+func extractFileCandidates(content string) []string {
+	var results []string
+	for _, token := range strings.Fields(content) {
+		cleaned := strings.Trim(token, punctuationTrimChars)
+		if cleaned == "" {
+			continue
+		}
+		if strings.Contains(cleaned, "/") && hasInterestingExtension(cleaned) {
+			results = append(results, cleaned)
+		}
+	}
+	return results
+}
+
+// interestingExtensions is the set of file extensions considered interesting.
+var interestingExtensions = map[string]bool{
+	"rs": true, "ts": true, "tsx": true, "js": true, "json": true,
+	"md": true, "go": true, "py": true, "yaml": true, "yml": true, "toml": true,
+}
+
+// hasInterestingExtension returns true if the path ends with a known extension.
+func hasInterestingExtension(path string) bool {
+	idx := strings.LastIndex(path, ".")
+	if idx < 0 || idx == len(path)-1 {
+		return false
+	}
+	ext := path[idx+1:]
+	return interestingExtensions[ext]
+}
+
+// inferCurrentWork returns a truncated description of the most recent work
+// by finding the last non-empty text block in the messages.
+func inferCurrentWork(messages []api.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		text := firstTextBlock(messages[i])
+		if text != "" {
+			return truncateSummary(text, 200)
+		}
+	}
+	return ""
+}
+
+// summarizeBlock produces a one-line summary of a content block.
+func summarizeBlock(block api.ContentBlock) string {
+	switch block.Type {
+	case "text":
+		if strings.TrimSpace(block.Text) == "" {
+			return ""
+		}
+		return truncateSummary(strings.TrimSpace(block.Text), 160)
+	case "tool_use":
+		inputStr := fmt.Sprintf("%v", block.Input)
+		return truncateSummary(fmt.Sprintf("tool_use %s(%s)", block.Name, inputStr), 160)
+	case "tool_result":
+		var output string
+		for _, inner := range block.Content {
+			if inner.Text != "" {
+				output = inner.Text
+				break
+			}
+		}
+		prefix := "tool_result"
+		if block.Name != "" {
+			prefix = fmt.Sprintf("tool_result %s:", block.Name)
+		}
+		if block.IsError {
+			return truncateSummary(fmt.Sprintf("%s error %s", prefix, output), 160)
+		}
+		return truncateSummary(fmt.Sprintf("%s %s", prefix, output), 160)
+	default:
+		return ""
+	}
+}
+
+// firstTextBlock returns the text of the first text-type content block
+// with non-empty trimmed text in the message.
+func firstTextBlock(msg api.Message) string {
+	for _, cb := range msg.Content {
+		if cb.Type == "text" && strings.TrimSpace(cb.Text) != "" {
+			return strings.TrimSpace(cb.Text)
+		}
+	}
+	return ""
+}
+
+// truncateSummary truncates content to maxChars runes, appending "..." if truncated.
+func truncateSummary(content string, maxChars int) string {
+	if utf8.RuneCountInString(content) <= maxChars {
+		return content
+	}
+	runes := []rune(content)
+	return string(runes[:maxChars]) + "…"
+}
+
+// extractExistingCompactedSummary checks if the message is a system-role message
+// with the continuation preamble, and extracts the embedded summary.
+func extractExistingCompactedSummary(msg api.Message) string {
+	if msg.Role != "system" {
+		return ""
+	}
+	text := firstTextBlock(msg)
+	if text == "" {
+		return ""
+	}
+	if !strings.HasPrefix(text, compactContinuationPreamble) {
+		return ""
+	}
+	// Strip preamble.
+	extracted := strings.TrimPrefix(text, compactContinuationPreamble)
+	// Strip recent messages note.
+	extracted = strings.Replace(extracted, compactRecentMessagesNote, "", 1)
+	// Strip direct resume instruction.
+	extracted = strings.Replace(extracted, compactDirectResumeInstruction, "", 1)
+	return strings.TrimSpace(extracted)
 }
