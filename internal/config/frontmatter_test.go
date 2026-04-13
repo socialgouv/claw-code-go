@@ -68,6 +68,11 @@ func TestParseFrontmatter(t *testing.T) {
 			wantTools:    []string{"edit", "bash"},
 			wantBody:     "Real content.",
 		},
+		{
+			name:     "horizontal rule not on line 1 is not frontmatter",
+			input:    "# Heading\n\n---\n\nSome text after a horizontal rule.",
+			wantBody: "# Heading\n\n---\n\nSome text after a horizontal rule.",
+		},
 	}
 
 	for _, tt := range tests {

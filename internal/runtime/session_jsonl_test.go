@@ -3,6 +3,7 @@ package runtime
 import (
 	"claw-code-go/internal/api"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -356,6 +357,46 @@ func TestRenderJSONLSnapshotWithPromptHistory(t *testing.T) {
 	if parsed.PromptHistory[0].TimestampMs != 100 {
 		t.Errorf("PromptHistory[0].TimestampMs: got %d", parsed.PromptHistory[0].TimestampMs)
 	}
+}
+
+func requireSessionError(t *testing.T, err error, wantKind SessionErrorKind) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var sessErr *SessionError
+	if !errors.As(err, &sessErr) {
+		t.Fatalf("expected *SessionError, got %T: %v", err, err)
+	}
+	if sessErr.Kind != wantKind {
+		t.Errorf("Kind = %v, want %v", sessErr.Kind, wantKind)
+	}
+}
+
+func TestSessionJSONLReturnsStructuredErrors(t *testing.T) {
+	t.Run("AppendMessageRecord on open failure", func(t *testing.T) {
+		err := AppendMessageRecord("/nonexistent/dir/session.jsonl", api.Message{
+			Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "hi"}},
+		})
+		requireSessionError(t, err, SessionErrIO)
+	})
+
+	t.Run("LoadSessionAuto on missing file", func(t *testing.T) {
+		_, err := LoadSessionAuto(t.TempDir(), "nonexistent-session")
+		requireSessionError(t, err, SessionErrIO)
+	})
+
+	t.Run("LoadSessionAuto on invalid JSON", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "bad-session.json"), []byte("{not json"), 0o644)
+		_, err := LoadSessionAuto(dir, "bad-session")
+		requireSessionError(t, err, SessionErrJSON)
+	})
+
+	t.Run("SaveSessionJSONL on bad dir", func(t *testing.T) {
+		err := SaveSessionJSONL("/dev/null/impossible", NewSession())
+		requireSessionError(t, err, SessionErrIO)
+	})
 }
 
 func TestSaveSessionJSONLRotation(t *testing.T) {

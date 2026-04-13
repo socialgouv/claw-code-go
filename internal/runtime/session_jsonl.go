@@ -20,17 +20,6 @@ const (
 	MaxRotatedFiles  = 3
 )
 
-// --- JSONL record types ---
-
-// jsonlRecord is the discriminated union for JSONL records.
-// The Type field determines which payload fields are populated.
-type jsonlRecord struct {
-	Type string `json:"type"`
-	// Payload is the raw JSON for the specific record type.
-	// We use json.RawMessage to keep serialization separate from domain types.
-	Payload json.RawMessage `json:"-"`
-}
-
 // metaRecord holds session metadata (first line of JSONL).
 type metaRecord struct {
 	Type          string       `json:"type"`
@@ -78,7 +67,7 @@ func RenderJSONLSnapshot(s *Session) (string, error) {
 		Fork:        s.Fork,
 	}
 	if err := writeJSONLine(&sb, meta); err != nil {
-		return "", fmt.Errorf("render meta: %w", err)
+		return "", NewSessionJSONError("render_meta", err)
 	}
 
 	// Compaction record (if any).
@@ -90,7 +79,7 @@ func RenderJSONLSnapshot(s *Session) (string, error) {
 			Summary:             s.CompactionSummary,
 		}
 		if err := writeJSONLine(&sb, comp); err != nil {
-			return "", fmt.Errorf("render compaction: %w", err)
+			return "", NewSessionJSONError("render_compaction", err)
 		}
 	}
 
@@ -102,7 +91,7 @@ func RenderJSONLSnapshot(s *Session) (string, error) {
 			Text:        ph.Text,
 		}
 		if err := writeJSONLine(&sb, rec); err != nil {
-			return "", fmt.Errorf("render prompt_history: %w", err)
+			return "", NewSessionJSONError("render_prompt_history", err)
 		}
 	}
 
@@ -113,7 +102,7 @@ func RenderJSONLSnapshot(s *Session) (string, error) {
 			Message: msg,
 		}
 		if err := writeJSONLine(&sb, rec); err != nil {
-			return "", fmt.Errorf("render message: %w", err)
+			return "", NewSessionJSONError("render_message", err)
 		}
 	}
 
@@ -210,7 +199,7 @@ func ParseJSONL(data []byte) (*Session, error) {
 func AppendMessageRecord(path string, msg api.Message) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return fmt.Errorf("open session file: %w", err)
+		return NewSessionIOError("open", path, err)
 	}
 	defer f.Close()
 
@@ -220,10 +209,12 @@ func AppendMessageRecord(path string, msg api.Message) error {
 	}
 	data, err := json.Marshal(rec)
 	if err != nil {
-		return fmt.Errorf("marshal message record: %w", err)
+		return NewSessionJSONError("marshal_message", err)
 	}
-	_, err = fmt.Fprintf(f, "%s\n", data)
-	return err
+	if _, err := fmt.Fprintf(f, "%s\n", data); err != nil {
+		return NewSessionIOError("append", path, err)
+	}
+	return nil
 }
 
 // RotateSessionFileIfNeeded rotates the session file if it exceeds RotateAfterBytes.
@@ -235,7 +226,7 @@ func RotateSessionFileIfNeeded(path string) (bool, error) {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, err
+		return false, NewSessionIOError("stat", path, err)
 	}
 
 	if info.Size() < int64(RotateAfterBytes) {
@@ -248,7 +239,7 @@ func RotateSessionFileIfNeeded(path string) (bool, error) {
 	rotatedPath := fmt.Sprintf("%s.rot-%d%s", base, time.Now().UnixMilli(), ext)
 
 	if err := os.Rename(path, rotatedPath); err != nil {
-		return false, fmt.Errorf("rotate session file: %w", err)
+		return false, NewSessionIOError("rotate", path, err)
 	}
 
 	return true, nil
@@ -264,7 +255,7 @@ func CleanupRotatedLogs(path string, maxKeep int) error {
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		return NewSessionIOError("list_rotated", dir, err)
 	}
 
 	var rotated []string
@@ -286,7 +277,7 @@ func CleanupRotatedLogs(path string, maxKeep int) error {
 	toRemove := rotated[:len(rotated)-maxKeep]
 	for _, p := range toRemove {
 		if err := os.Remove(p); err != nil {
-			return fmt.Errorf("cleanup rotated log %s: %w", p, err)
+			return NewSessionIOError("cleanup_rotated", p, err)
 		}
 	}
 
@@ -296,36 +287,36 @@ func CleanupRotatedLogs(path string, maxKeep int) error {
 // SaveSessionJSONL persists a session to disk in JSONL format using atomic write.
 func SaveSessionJSONL(dir string, s *Session) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create session dir: %w", err)
+		return NewSessionIOError("create_dir", dir, err)
 	}
 
 	s.UpdatedAt = time.Now()
 
 	snapshot, err := RenderJSONLSnapshot(s)
 	if err != nil {
-		return fmt.Errorf("render JSONL: %w", err)
+		return err // already a SessionError from RenderJSONLSnapshot
 	}
 
 	path := filepath.Join(dir, s.ID+".jsonl")
 
 	// Rotate if current file exceeds threshold.
 	if _, err := RotateSessionFileIfNeeded(path); err != nil {
-		return fmt.Errorf("rotate session file: %w", err)
+		return err // already a SessionError from RotateSessionFileIfNeeded
 	}
 
 	// Atomic write: write to temp file, then rename.
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(snapshot), 0o644); err != nil {
-		return fmt.Errorf("write temp session file: %w", err)
+		return NewSessionIOError("write", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath) // cleanup on failure
-		return fmt.Errorf("rename session file: %w", err)
+		return NewSessionIOError("rename", path, err)
 	}
 
 	// Cleanup old rotated files.
 	if err := CleanupRotatedLogs(path, MaxRotatedFiles); err != nil {
-		return fmt.Errorf("cleanup rotated logs: %w", err)
+		return err // already a SessionError from CleanupRotatedLogs
 	}
 
 	return nil
@@ -343,12 +334,12 @@ func LoadSessionAuto(dir, id string) (*Session, error) {
 	jsonPath := filepath.Join(dir, id+".json")
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {
-		return nil, fmt.Errorf("read session file: %w", err)
+		return nil, NewSessionIOError("read", jsonPath, err)
 	}
 
 	var s Session
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("unmarshal session: %w", err)
+		return nil, NewSessionJSONError("unmarshal", err)
 	}
 
 	return &s, nil
