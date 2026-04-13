@@ -265,35 +265,43 @@ func (r *Registry) List(statusFilter *TaskStatus) []Task {
 	return result
 }
 
+// getMutable looks up a task by ID and rejects terminal-state mutations.
+// Caller must hold r.mu.
+func (r *Registry) getMutable(taskID string) (*Task, error) {
+	t, ok := r.tasks[taskID]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, taskID)
+	}
+	if t.Status.IsTerminal() {
+		return nil, fmt.Errorf("%w: task %s is already %s", ErrTerminalState, taskID, t.Status)
+	}
+	return t, nil
+}
+
 // Stop marks a task as stopped. Returns ErrTerminalState if already terminal.
 func (r *Registry) Stop(taskID string) (Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	t, ok := r.tasks[taskID]
-	if !ok {
-		return Task{}, fmt.Errorf("%w: %s", ErrNotFound, taskID)
+	t, err := r.getMutable(taskID)
+	if err != nil {
+		return Task{}, err
 	}
-
-	if t.Status.IsTerminal() {
-		return Task{}, fmt.Errorf("%w: task %s is already in terminal state: %s", ErrTerminalState, taskID, t.Status)
-	}
-
 	t.Status = StatusStopped
 	t.UpdatedAt = nowSecs()
 	return t.clone(), nil
 }
 
-// Update adds a user message to the task.
+// Update adds a user message to the task. Returns ErrTerminalState if the task
+// is already in a terminal state.
 func (r *Registry) Update(taskID string, message string) (Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	t, ok := r.tasks[taskID]
-	if !ok {
-		return Task{}, fmt.Errorf("%w: %s", ErrNotFound, taskID)
+	t, err := r.getMutable(taskID)
+	if err != nil {
+		return Task{}, err
 	}
-
 	t.Messages = append(t.Messages, TaskMessage{
 		Role:      "user",
 		Content:   message,
@@ -329,14 +337,15 @@ func (r *Registry) AppendOutput(taskID string, output string) error {
 	return nil
 }
 
-// SetStatus updates the task's status.
+// SetStatus updates the task's status. Returns ErrTerminalState if the task is
+// already in a terminal state (Completed, Failed, Stopped).
 func (r *Registry) SetStatus(taskID string, status TaskStatus) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	t, ok := r.tasks[taskID]
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrNotFound, taskID)
+	t, err := r.getMutable(taskID)
+	if err != nil {
+		return err
 	}
 	t.Status = status
 	t.UpdatedAt = nowSecs()

@@ -2,6 +2,7 @@ package task
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -289,7 +290,7 @@ func TestCreateWithoutDescription(t *testing.T) {
 	reg := NewRegistry()
 	task := reg.Create("Do the thing", nil)
 
-	if !startsWith(task.TaskID, "task_") {
+	if !strings.HasPrefix(task.TaskID, "task_") {
 		t.Errorf("TaskID = %q, want prefix task_", task.TaskID)
 	}
 	if task.Description != nil {
@@ -378,6 +379,78 @@ func TestConcurrentRegistryAccess(t *testing.T) {
 	}
 }
 
-func startsWith(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+func TestSetStatusRejectsTerminalState(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry()
+
+	for _, terminal := range []TaskStatus{StatusCompleted, StatusFailed, StatusStopped} {
+		t.Run(terminal.String(), func(t *testing.T) {
+			task := reg.Create("terminal guard", nil)
+			// Move to terminal state first (bypass guard via internal create+stop path).
+			if terminal == StatusStopped {
+				_, err := reg.Stop(task.TaskID)
+				if err != nil {
+					t.Fatalf("Stop() error: %v", err)
+				}
+			} else {
+				// We need to set to Running first, then to terminal.
+				// Use a fresh task to avoid terminal guard on running → terminal.
+				fresh := reg.Create("fresh", nil)
+				reg.mu.Lock()
+				reg.tasks[fresh.TaskID].Status = terminal
+				reg.mu.Unlock()
+				task = fresh
+			}
+
+			// Now SetStatus should be rejected.
+			err := reg.SetStatus(task.TaskID, StatusRunning)
+			if err == nil {
+				t.Fatal("expected error on SetStatus from terminal state")
+			}
+			if !errors.Is(err, ErrTerminalState) {
+				t.Errorf("expected ErrTerminalState, got %v", err)
+			}
+		})
+	}
+}
+
+func TestUpdateRejectsTerminalState(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry()
+
+	for _, terminal := range []TaskStatus{StatusCompleted, StatusFailed, StatusStopped} {
+		t.Run(terminal.String(), func(t *testing.T) {
+			task := reg.Create("update guard", nil)
+			reg.mu.Lock()
+			reg.tasks[task.TaskID].Status = terminal
+			reg.mu.Unlock()
+
+			_, err := reg.Update(task.TaskID, "should fail")
+			if err == nil {
+				t.Fatal("expected error on Update from terminal state")
+			}
+			if !errors.Is(err, ErrTerminalState) {
+				t.Errorf("expected ErrTerminalState, got %v", err)
+			}
+		})
+	}
+}
+
+func TestSetStatusAllowsNonTerminalTransition(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry()
+	task := reg.Create("transition", nil)
+
+	// Created → Running should work
+	if err := reg.SetStatus(task.TaskID, StatusRunning); err != nil {
+		t.Fatalf("SetStatus(Running) error: %v", err)
+	}
+
+	got, ok := reg.Get(task.TaskID)
+	if !ok {
+		t.Fatal("task should exist")
+	}
+	if got.Status != StatusRunning {
+		t.Errorf("Status = %v, want %v", got.Status, StatusRunning)
+	}
 }

@@ -88,6 +88,9 @@ type Config struct {
 	BaseCommit string
 	// ReasoningEffort is the reasoning effort level (low, medium, high).
 	ReasoningEffort string
+	// OutputFormat controls output mode: "text" (default), "json", "stream-json".
+	// Maps to Rust's --output-format flag.
+	OutputFormat string
 }
 
 // LoadConfig reads configuration from layered settings files and environment

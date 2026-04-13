@@ -63,6 +63,7 @@ func main() {
 	workDirFlag := flag.String("work-dir", "", "Set working directory")
 	baseCommitFlag := flag.String("base-commit", "", "Base commit for diff context")
 	reasoningEffortFlag := flag.String("reasoning-effort", "", "Reasoning effort level (low, medium, high)")
+	outputFormatFlag := flag.String("output-format", "", "Output format: text (default), json, stream-json")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: claw-code-go [subcommand] [options]\n\n")
@@ -127,6 +128,9 @@ func main() {
 	}
 	if *reasoningEffortFlag != "" {
 		cfg.ReasoningEffort = *reasoningEffortFlag
+	}
+	if *outputFormatFlag != "" {
+		cfg.OutputFormat = *outputFormatFlag
 	}
 
 	// --dangerously-skip-permissions overrides permission mode to full access.

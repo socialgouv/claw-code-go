@@ -50,22 +50,32 @@ type Renderer interface {
 
 // MarkdownRenderer renders markdown text with ANSI terminal styling.
 // It uses lipgloss for styling (GO_ONLY) rather than syntect/chroma.
+// Includes language-aware syntax highlighting for code blocks.
 // Implements the Renderer interface.
 type MarkdownRenderer struct {
-	theme ColorTheme
+	theme       ColorTheme
+	highlighter *SyntaxHighlighter
 }
 
 // Ensure MarkdownRenderer implements Renderer at compile time.
 var _ Renderer = (*MarkdownRenderer)(nil)
 
-// NewMarkdownRenderer creates a renderer with the default color theme.
+// NewMarkdownRenderer creates a renderer with the default color theme
+// and syntax highlighting enabled.
 func NewMarkdownRenderer() *MarkdownRenderer {
-	return &MarkdownRenderer{theme: DefaultColorTheme()}
+	return &MarkdownRenderer{
+		theme:       DefaultColorTheme(),
+		highlighter: NewSyntaxHighlighter(),
+	}
 }
 
-// NewMarkdownRendererWithTheme creates a renderer with a custom color theme.
+// NewMarkdownRendererWithTheme creates a renderer with a custom color theme
+// and syntax highlighting enabled.
 func NewMarkdownRendererWithTheme(theme ColorTheme) *MarkdownRenderer {
-	return &MarkdownRenderer{theme: theme}
+	return &MarkdownRenderer{
+		theme:       theme,
+		highlighter: NewSyntaxHighlighter(),
+	}
 }
 
 // RenderMarkdown converts markdown text to ANSI-styled terminal output.
@@ -100,8 +110,12 @@ func (r *MarkdownRenderer) RenderMarkdown(markdown string) string {
 		// Code block fence handling
 		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
 			if inCodeBlock {
-				// End code block: render buffered code
-				output.WriteString(codeBuffer.String())
+				// End code block: apply syntax highlighting then render.
+				highlighted := codeBuffer.String()
+				if r.highlighter != nil && codeLanguage != "" {
+					highlighted = r.highlighter.Highlight(highlighted, codeLanguage)
+				}
+				output.WriteString(highlighted)
 				output.WriteString(codeBlockBorderStyle.Render("╰─"))
 				output.WriteString("\n\n")
 				codeBuffer.Reset()
@@ -131,6 +145,7 @@ func (r *MarkdownRenderer) RenderMarkdown(markdown string) string {
 		}
 
 		if inCodeBlock {
+			// Buffer code lines; syntax highlighting applied at fence close.
 			codeBuffer.WriteString(line)
 			codeBuffer.WriteString("\n")
 			continue
