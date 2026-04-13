@@ -87,6 +87,16 @@ func gitAvailable() bool {
 	return err == nil
 }
 
+// requireGit prints a message and returns false if git is not available.
+// Use at the start of command handlers: if !requireGit() { return nil }
+func requireGit() bool {
+	if gitAvailable() {
+		return true
+	}
+	fmt.Println("git is not available on PATH.")
+	return false
+}
+
 // RegisterCodeCommands registers code-operations slash commands.
 func RegisterCodeCommands(r *Registry) {
 	r.Register(Command{
@@ -94,8 +104,7 @@ func RegisterCodeCommands(r *Registry) {
 		Description: "Generate commit message from git diff",
 		Category:    CategoryCode,
 		Handler: func(args string, loop interface{}) error {
-			if !gitAvailable() {
-				fmt.Println("git is not available on PATH.")
+			if !requireGit() {
 				return nil
 			}
 
@@ -121,8 +130,7 @@ func RegisterCodeCommands(r *Registry) {
 		ArgumentHint: "[title]",
 		Category:     CategoryCode,
 		Handler: func(args string, loop interface{}) error {
-			if !gitAvailable() {
-				fmt.Println("git is not available on PATH.")
+			if !requireGit() {
 				return nil
 			}
 
@@ -206,8 +214,7 @@ func RegisterCodeCommands(r *Registry) {
 		ArgumentHint: "[--staged]",
 		Category:     CategoryCode,
 		Handler: func(args string, loop interface{}) error {
-			if !gitAvailable() {
-				fmt.Println("git is not available on PATH.")
+			if !requireGit() {
 				return nil
 			}
 
@@ -237,8 +244,7 @@ func RegisterCodeCommands(r *Registry) {
 		ArgumentHint: "[--staged]",
 		Category:     CategoryCode,
 		Handler: func(args string, loop interface{}) error {
-			if !gitAvailable() {
-				fmt.Println("git is not available on PATH.")
+			if !requireGit() {
 				return nil
 			}
 
@@ -278,8 +284,7 @@ func RegisterCodeCommands(r *Registry) {
 		ArgumentHint: "[since-tag]",
 		Category:     CategoryCode,
 		Handler: func(args string, loop interface{}) error {
-			if !gitAvailable() {
-				fmt.Println("git is not available on PATH.")
+			if !requireGit() {
 				return nil
 			}
 

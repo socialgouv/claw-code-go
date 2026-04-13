@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 // PluginTool is a runnable tool from a plugin.
@@ -48,8 +49,8 @@ func (t *PluginTool) Execute(input json.RawMessage) (string, error) {
 		cmd.Dir = t.Root
 	}
 
-	// Emit deprecation warning for ITERION_ prefix on first use.
-	fmt.Fprintln(os.Stderr, "DEPRECATION WARNING: ITERION_* env vars are deprecated, use CLAWD_* instead")
+	// Emit deprecation warning for ITERION_ prefix on first use only.
+	warnIterionDeprecation()
 
 	// Pass input on stdin
 	cmd.Stdin = bytes.NewReader(input)
@@ -77,3 +78,7 @@ func (t *PluginTool) Execute(input json.RawMessage) (string, error) {
 
 	return strings.TrimSpace(stdout.String()), nil
 }
+
+var warnIterionDeprecation = sync.OnceFunc(func() {
+	fmt.Fprintln(os.Stderr, "DEPRECATION WARNING: ITERION_* env vars are deprecated, use CLAWD_* instead")
+})

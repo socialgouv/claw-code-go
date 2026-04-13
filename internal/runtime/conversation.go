@@ -204,11 +204,8 @@ func (loop *ConversationLoop) runOneTurn(ctx context.Context) (string, error) {
 		currentText  string
 		currentTool  *toolBlock
 		stopReason   string
-		blockIndex   int
 		blockTypeMap = make(map[int]string) // index -> "text" or "tool_use"
 	)
-
-	_ = blockIndex // suppress unused warning
 
 	for event := range ch {
 		switch event.Type {

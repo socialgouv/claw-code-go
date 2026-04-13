@@ -14,8 +14,7 @@ func RegisterGitCommands(r *Registry) {
 		ArgumentHint: "[list|pop|push|drop]",
 		Category:     CategoryCode,
 		Handler: func(args string, loop interface{}) error {
-			if !gitAvailable() {
-				fmt.Println("git is not available on PATH.")
+			if !requireGit() {
 				return nil
 			}
 			sub := strings.TrimSpace(args)
@@ -64,8 +63,7 @@ func RegisterGitCommands(r *Registry) {
 		ArgumentHint: "<file>",
 		Category:     CategoryCode,
 		Handler: func(args string, loop interface{}) error {
-			if !gitAvailable() {
-				fmt.Println("git is not available on PATH.")
+			if !requireGit() {
 				return nil
 			}
 			file := strings.TrimSpace(args)
@@ -89,8 +87,7 @@ func RegisterGitCommands(r *Registry) {
 		ResumeSupported: true,
 		Category:        CategoryCode,
 		Handler: func(args string, loop interface{}) error {
-			if !gitAvailable() {
-				fmt.Println("git is not available on PATH.")
+			if !requireGit() {
 				return nil
 			}
 			count := "10"
@@ -112,8 +109,7 @@ func RegisterGitCommands(r *Registry) {
 		ArgumentHint: "<subcommand> [args...]",
 		Category:     CategoryCode,
 		Handler: func(args string, loop interface{}) error {
-			if !gitAvailable() {
-				fmt.Println("git is not available on PATH.")
+			if !requireGit() {
 				return nil
 			}
 			parts := strings.Fields(args)
