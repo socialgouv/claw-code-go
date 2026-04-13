@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,11 +23,17 @@ type PluginTool struct {
 }
 
 // Execute runs the plugin tool with the given JSON input.
-// Sets env vars with CLAWD_ prefix (primary) and ITERION_ prefix (backward compat).
-// Passes input as JSON on stdin.
-// Returns stdout on success, error with stderr on non-zero exit.
+// Equivalent to ExecuteContext(context.Background(), input).
 func (t *PluginTool) Execute(input json.RawMessage) (string, error) {
-	cmd := exec.Command(t.Command, t.Args...)
+	return t.ExecuteContext(context.Background(), input)
+}
+
+// ExecuteContext runs the plugin tool with the given JSON input and context.
+// The context controls cancellation and timeout of the subprocess.
+// Sets CLAWD_ and ITERION_ (backward-compat) env vars, passes input on stdin,
+// and returns trimmed stdout on success or a PluginError on non-zero exit.
+func (t *PluginTool) ExecuteContext(ctx context.Context, input json.RawMessage) (string, error) {
+	cmd := exec.CommandContext(ctx, t.Command, t.Args...)
 
 	// Set environment variables: CLAWD_ (primary) and ITERION_ (backward compat).
 	cmd.Env = append(cmd.Environ(),

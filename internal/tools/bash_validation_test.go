@@ -262,22 +262,63 @@ func TestClassifyCommand(t *testing.T) {
 		command string
 		want    CommandIntent
 	}{
+		// ReadOnly
 		{"ls is read-only", "ls -la", ReadOnly},
 		{"cat is read-only", "cat file.txt", ReadOnly},
 		{"grep is read-only", "grep -r pattern .", ReadOnly},
 		{"find is read-only", "find . -name '*.rs'", ReadOnly},
-		{"cp is write", "cp a.txt b.txt", Write},
-		{"mv is write", "mv old.txt new.txt", Write},
-		{"mkdir is write", "mkdir -p /tmp/dir", Write},
-		{"rm is destructive", "rm -rf /tmp/x", Destructive},
-		{"shred is destructive", "shred /dev/sda", Destructive},
-		{"curl is network", "curl https://example.com", Network},
-		{"wget is network", "wget file.zip", Network},
-		{"sed -i is write", "sed -i 's/old/new/' file.txt", Write},
 		{"sed stdout is read-only", "sed 's/old/new/' file.txt", ReadOnly},
 		{"git status is read-only", "git status", ReadOnly},
 		{"git log is read-only", "git log --oneline", ReadOnly},
+		// Write
+		{"cp is write", "cp a.txt b.txt", Write},
+		{"mv is write", "mv old.txt new.txt", Write},
+		{"mkdir is write", "mkdir -p /tmp/dir", Write},
+		{"sed -i is write", "sed -i 's/old/new/' file.txt", Write},
 		{"git push is write", "git push origin main", Write},
+		// Destructive
+		{"rm is destructive", "rm -rf /tmp/x", Destructive},
+		{"shred is destructive", "shred /dev/sda", Destructive},
+		// Network
+		{"curl is network", "curl https://example.com", Network},
+		{"wget is network", "wget file.zip", Network},
+		// ProcessManagement
+		{"kill is process-mgmt", "kill -9 1234", ProcessManagement},
+		{"pkill is process-mgmt", "pkill nginx", ProcessManagement},
+		{"killall is process-mgmt", "killall node", ProcessManagement},
+		{"ps is process-mgmt", "ps aux", ProcessManagement},
+		{"top is process-mgmt", "top -b", ProcessManagement},
+		{"htop is process-mgmt", "htop", ProcessManagement},
+		{"bg is process-mgmt", "bg %1", ProcessManagement},
+		{"fg is process-mgmt", "fg %1", ProcessManagement},
+		{"nohup is process-mgmt", "nohup ./server", ProcessManagement},
+		{"nice is process-mgmt", "nice -n 10 make", ProcessManagement},
+		// PackageManagement
+		{"apt is pkg-mgmt", "apt install vim", PackageManagement},
+		{"apt-get is pkg-mgmt", "apt-get update", PackageManagement},
+		{"brew is pkg-mgmt", "brew install node", PackageManagement},
+		{"pip is pkg-mgmt", "pip install requests", PackageManagement},
+		{"npm is pkg-mgmt", "npm install express", PackageManagement},
+		{"yarn is pkg-mgmt", "yarn add lodash", PackageManagement},
+		{"cargo is pkg-mgmt", "cargo build", PackageManagement},
+		{"gem is pkg-mgmt", "gem install rails", PackageManagement},
+		{"snap is pkg-mgmt", "snap install firefox", PackageManagement},
+		{"flatpak is pkg-mgmt", "flatpak install app", PackageManagement},
+		// SystemAdmin
+		{"sudo is sys-admin", "sudo ls", SystemAdmin},
+		{"su is sys-admin", "su -", SystemAdmin},
+		{"mount is sys-admin", "mount /dev/sda1 /mnt", SystemAdmin},
+		{"systemctl is sys-admin", "systemctl restart nginx", SystemAdmin},
+		{"iptables is sys-admin", "iptables -L", SystemAdmin},
+		{"passwd is sys-admin", "passwd root", SystemAdmin},
+		{"visudo is sys-admin", "visudo", SystemAdmin},
+		{"journalctl is sys-admin", "journalctl -f", SystemAdmin},
+		{"fdisk is sys-admin", "fdisk -l", SystemAdmin},
+		// Unknown
+		{"custom app is unknown", "myapp --help", Unknown},
+		{"script is unknown", "./custom-script.sh", Unknown},
+		{"node is unknown", "node server.js", Unknown},
+		{"python3 is unknown", "python3 app.py", Unknown},
 	}
 
 	for _, tt := range tests {
@@ -320,25 +361,30 @@ func TestValidateCommand_Pipeline(t *testing.T) {
 			mode:     permissions.ModeReadOnly,
 			wantKind: ValidationAllow,
 		},
+		{
+			name:     "blocks rm segment in pipeline",
+			command:  "cat file.txt | rm -rf /tmp/x",
+			mode:     permissions.ModeReadOnly,
+			wantKind: ValidationBlock,
+		},
+		{
+			name:     "allows quoted pipe (not split)",
+			command:  `echo "hello | world"`,
+			mode:     permissions.ModeReadOnly,
+			wantKind: ValidationAllow,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := ValidateCommand(tt.command, tt.mode, workspace)
 			if result.Kind != tt.wantKind {
-				t.Errorf("got Kind=%d, want %d", result.Kind, tt.wantKind)
+				t.Errorf("got Kind=%d, want %d (reason=%q msg=%q)",
+					result.Kind, tt.wantKind, result.Reason, result.Message)
 			}
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// TestExtractFirstCommand
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// TestSplitPipeline
-// ---------------------------------------------------------------------------
 
 func TestSplitPipeline(t *testing.T) {
 	tests := []struct {
@@ -389,6 +435,25 @@ func TestSplitPipeline(t *testing.T) {
 			wantLen:  1,
 			wantCmds: []string{"ls -la"},
 			wantOps:  []string{""},
+		},
+		{
+			name:     "backslash-escaped pipe",
+			command:  `echo hello\|world`,
+			wantLen:  1,
+			wantCmds: []string{`echo hello\|world`},
+			wantOps:  []string{""},
+		},
+		{
+			name:    "empty input",
+			command: "",
+			wantLen: 0,
+		},
+		{
+			name:     "mixed operators",
+			command:  "a | b && c || d ; e",
+			wantLen:  5,
+			wantCmds: []string{"a", "b", "c", "d", "e"},
+			wantOps:  []string{"", "|", "&&", "||", ";"},
 		},
 	}
 
@@ -641,6 +706,10 @@ func TestExtractFirstCommand(t *testing.T) {
 		{"command from env prefix", "FOO=bar ls -la", "ls"},
 		{"multiple env prefixes", "A=1 B=2 echo hello", "echo"},
 		{"plain command", "grep -r pattern .", "grep"},
+		{"quoted env value", `FOO="hello world" cat file`, "cat"},
+		{"single-quoted env value", "FOO='bar baz' echo hi", "echo"},
+		{"empty string", "", ""},
+		{"only env var no command", "FOO=bar", ""},
 	}
 
 	for _, tt := range tests {
@@ -650,5 +719,41 @@ func TestExtractFirstCommand(t *testing.T) {
 				t.Errorf("extractFirstCommand(%q) = %q, want %q", tt.command, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDangerFullAccessBypass(t *testing.T) {
+	dangerous := []string{
+		"rm -rf /",
+		"sudo rm -rf /tmp/x",
+		"echo hello > /etc/passwd",
+		"git push --force origin main",
+		"dd if=/dev/zero of=/dev/sda",
+		"chmod -R 777 /",
+		"npm install express",
+		"shred /dev/sda",
+	}
+	for _, cmd := range dangerous {
+		t.Run(cmd, func(t *testing.T) {
+			result := ValidateMode(cmd, permissions.ModeDangerFullAccess)
+			if result.Kind != ValidationAllow {
+				t.Errorf("DangerFullAccess should Allow %q, got Kind=%d reason=%q msg=%q",
+					cmd, result.Kind, result.Reason, result.Message)
+			}
+		})
+	}
+}
+
+func TestValidateReadOnly_NonReadOnlyModes(t *testing.T) {
+	modes := []permissions.PermissionMode{
+		permissions.ModeAllow,
+		permissions.ModePrompt,
+		permissions.ModeDangerFullAccess,
+	}
+	for _, mode := range modes {
+		result := ValidateReadOnly("rm -rf /", mode)
+		if result.Kind != ValidationAllow {
+			t.Errorf("mode=%d should Allow 'rm -rf /', got Kind=%d", mode, result.Kind)
+		}
 	}
 }

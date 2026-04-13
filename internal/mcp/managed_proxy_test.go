@@ -72,6 +72,43 @@ func TestManagedProxyTransportHTTPError(t *testing.T) {
 	}
 }
 
+func TestManagedProxyTransportNotify(t *testing.T) {
+	var capturedProxyID string
+	var capturedMethod string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedProxyID = r.Header.Get("X-MCP-Proxy-Id")
+		body, _ := io.ReadAll(r.Body)
+		var n struct {
+			Method string `json:"method"`
+		}
+		json.Unmarshal(body, &n)
+		capturedMethod = n.Method
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	transport, err := NewManagedProxyTransport(server.URL, "notif-proxy-456")
+	if err != nil {
+		t.Fatalf("create transport: %v", err)
+	}
+
+	err = transport.Notify(Notification{
+		JSONRPC: "2.0",
+		Method:  "notifications/initialized",
+	})
+	if err != nil {
+		t.Fatalf("Notify failed: %v", err)
+	}
+
+	if capturedProxyID != "notif-proxy-456" {
+		t.Errorf("expected X-MCP-Proxy-Id=notif-proxy-456, got %q", capturedProxyID)
+	}
+	if capturedMethod != "notifications/initialized" {
+		t.Errorf("expected method 'notifications/initialized', got %q", capturedMethod)
+	}
+}
+
 func TestManagedProxyTransportCloseIsNoop(t *testing.T) {
 	transport, _ := NewManagedProxyTransport("http://example.com", "id")
 	if err := transport.Close(); err != nil {

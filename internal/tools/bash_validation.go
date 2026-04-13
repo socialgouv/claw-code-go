@@ -614,7 +614,7 @@ func ValidateCommand(command string, mode permissions.PermissionMode, workspace 
 }
 
 // validateSingleCommand validates a single pipeline segment.
-func validateSingleCommand(command string, mode permissions.PermissionMode, workspace string) ValidationResult {
+func validateSingleCommand(command string, mode permissions.PermissionMode, _ string) ValidationResult {
 	result := ValidateMode(command, mode)
 	if result.Kind != ValidationAllow {
 		return result

@@ -10,20 +10,44 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func TestWebSocketTransportRoundTrip(t *testing.T) {
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
-	}
+var testUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
 
+// wsEchoServer returns an httptest.Server that keeps the WebSocket alive,
+// draining incoming messages until the client disconnects. If handler is
+// non-nil it is called for each incoming message before draining resumes.
+func wsEchoServer(handler func(conn *websocket.Conn)) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := testUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if handler != nil {
+			handler(conn)
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+}
+
+func wsURL(server *httptest.Server) string {
+	return "ws" + strings.TrimPrefix(server.URL, "http")
+}
+
+func TestWebSocketTransportRoundTrip(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := testUpgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Logf("upgrade error: %v", err)
 			return
 		}
 		defer conn.Close()
 
-		// Echo: read request, send response
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return
@@ -31,17 +55,15 @@ func TestWebSocketTransportRoundTrip(t *testing.T) {
 		var req Request
 		json.Unmarshal(msg, &req)
 
-		resp := Response{
+		conn.WriteJSON(Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
 			Result:  map[string]interface{}{"echo": true},
-		}
-		conn.WriteJSON(resp)
+		})
 	}))
 	defer server.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	transport, err := NewWebSocketTransport(wsURL, nil)
+	transport, err := NewWebSocketTransport(wsURL(server), nil)
 	if err != nil {
 		t.Fatalf("dial failed: %v", err)
 	}
@@ -67,28 +89,71 @@ func TestWebSocketTransportConnectionFailure(t *testing.T) {
 	}
 }
 
-func TestWebSocketTransportCloseIdempotent(t *testing.T) {
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
-	}
-
+func TestWebSocketTransportNotify(t *testing.T) {
+	notifReceived := make(chan Notification, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := testUpgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-		// Keep connection alive until client closes
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				return
-			}
+
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			return
 		}
+		var n Notification
+		json.Unmarshal(msg, &n)
+		notifReceived <- n
+		conn.ReadMessage() // keep alive
 	}))
 	defer server.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	transport, err := NewWebSocketTransport(wsURL, nil)
+	transport, err := NewWebSocketTransport(wsURL(server), nil)
+	if err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+	defer transport.Close()
+
+	if err := transport.Notify(Notification{JSONRPC: "2.0", Method: "notifications/initialized"}); err != nil {
+		t.Fatalf("Notify failed: %v", err)
+	}
+
+	n := <-notifReceived
+	if n.Method != "notifications/initialized" {
+		t.Errorf("expected method 'notifications/initialized', got %q", n.Method)
+	}
+}
+
+func TestWebSocketTransportErrorAfterClose(t *testing.T) {
+	server := wsEchoServer(nil)
+	defer server.Close()
+
+	transport, err := NewWebSocketTransport(wsURL(server), nil)
+	if err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+
+	transport.Close()
+
+	_, err = transport.Send(t.Context(), Request{JSONRPC: "2.0", ID: 1, Method: "test"})
+	if err == nil {
+		t.Fatal("expected error on Send after Close")
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Errorf("expected 'closed' in error, got: %v", err)
+	}
+
+	if err := transport.Notify(Notification{JSONRPC: "2.0", Method: "test"}); err == nil {
+		t.Fatal("expected error on Notify after Close")
+	}
+}
+
+func TestWebSocketTransportCloseIdempotent(t *testing.T) {
+	server := wsEchoServer(nil)
+	defer server.Close()
+
+	transport, err := NewWebSocketTransport(wsURL(server), nil)
 	if err != nil {
 		t.Fatalf("dial failed: %v", err)
 	}
