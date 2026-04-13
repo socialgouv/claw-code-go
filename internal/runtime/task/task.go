@@ -265,15 +265,25 @@ func (r *Registry) List(statusFilter *TaskStatus) []Task {
 	return result
 }
 
-// getMutable looks up a task by ID and rejects terminal-state mutations.
-// Caller must hold r.mu.
-func (r *Registry) getMutable(taskID string) (*Task, error) {
+// getByID looks up a task by ID. Caller must hold r.mu.
+func (r *Registry) getByID(taskID string) (*Task, error) {
 	t, ok := r.tasks[taskID]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, taskID)
 	}
+	return t, nil
+}
+
+// getNonTerminal looks up a task by ID and rejects terminal-state mutations.
+// Only Stop uses this — matching Rust, where only stop() guards terminal state.
+// Caller must hold r.mu.
+func (r *Registry) getNonTerminal(taskID string) (*Task, error) {
+	t, err := r.getByID(taskID)
+	if err != nil {
+		return nil, err
+	}
 	if t.Status.IsTerminal() {
-		return nil, fmt.Errorf("%w: task %s is already %s", ErrTerminalState, taskID, t.Status)
+		return nil, fmt.Errorf("%w: task %s is already in terminal state: %s", ErrTerminalState, taskID, t.Status)
 	}
 	return t, nil
 }
@@ -283,7 +293,7 @@ func (r *Registry) Stop(taskID string) (Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	t, err := r.getMutable(taskID)
+	t, err := r.getNonTerminal(taskID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -292,13 +302,13 @@ func (r *Registry) Stop(taskID string) (Task, error) {
 	return t.clone(), nil
 }
 
-// Update adds a user message to the task. Returns ErrTerminalState if the task
-// is already in a terminal state.
+// Update adds a user message to the task.
+// Matching Rust: update() does not guard against terminal states.
 func (r *Registry) Update(taskID string, message string) (Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	t, err := r.getMutable(taskID)
+	t, err := r.getByID(taskID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -337,13 +347,14 @@ func (r *Registry) AppendOutput(taskID string, output string) error {
 	return nil
 }
 
-// SetStatus updates the task's status. Returns ErrTerminalState if the task is
-// already in a terminal state (Completed, Failed, Stopped).
+// SetStatus updates the task's status unconditionally.
+// Matching Rust: set_status() does not guard against terminal states,
+// allowing recovery-driven status changes on completed/failed tasks.
 func (r *Registry) SetStatus(taskID string, status TaskStatus) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	t, err := r.getMutable(taskID)
+	t, err := r.getByID(taskID)
 	if err != nil {
 		return err
 	}

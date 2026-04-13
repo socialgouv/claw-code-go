@@ -379,60 +379,51 @@ func TestConcurrentRegistryAccess(t *testing.T) {
 	}
 }
 
-func TestSetStatusRejectsTerminalState(t *testing.T) {
+// TestSetStatusAllowsTerminalStateTransition verifies that SetStatus does NOT
+// guard against terminal states — matching Rust's set_status() which allows
+// unconditional status changes for recovery-driven transitions.
+func TestSetStatusAllowsTerminalStateTransition(t *testing.T) {
 	t.Parallel()
 	reg := NewRegistry()
 
-	for _, terminal := range []TaskStatus{StatusCompleted, StatusFailed, StatusStopped} {
-		t.Run(terminal.String(), func(t *testing.T) {
-			task := reg.Create("terminal guard", nil)
-			// Move to terminal state first (bypass guard via internal create+stop path).
-			if terminal == StatusStopped {
-				_, err := reg.Stop(task.TaskID)
-				if err != nil {
-					t.Fatalf("Stop() error: %v", err)
-				}
-			} else {
-				// We need to set to Running first, then to terminal.
-				// Use a fresh task to avoid terminal guard on running → terminal.
-				fresh := reg.Create("fresh", nil)
-				reg.mu.Lock()
-				reg.tasks[fresh.TaskID].Status = terminal
-				reg.mu.Unlock()
-				task = fresh
-			}
-
-			// Now SetStatus should be rejected.
-			err := reg.SetStatus(task.TaskID, StatusRunning)
-			if err == nil {
-				t.Fatal("expected error on SetStatus from terminal state")
-			}
-			if !errors.Is(err, ErrTerminalState) {
-				t.Errorf("expected ErrTerminalState, got %v", err)
-			}
-		})
+	task := reg.Create("recovery target", nil)
+	// Move to Completed (terminal).
+	if err := reg.SetStatus(task.TaskID, StatusCompleted); err != nil {
+		t.Fatalf("SetStatus(Completed) error: %v", err)
+	}
+	// SetStatus on a terminal task must succeed (Rust parity).
+	if err := reg.SetStatus(task.TaskID, StatusRunning); err != nil {
+		t.Fatalf("SetStatus(Running) on completed task should succeed, got: %v", err)
+	}
+	got, ok := reg.Get(task.TaskID)
+	if !ok {
+		t.Fatal("task should exist")
+	}
+	if got.Status != StatusRunning {
+		t.Errorf("Status = %v, want %v", got.Status, StatusRunning)
 	}
 }
 
-func TestUpdateRejectsTerminalState(t *testing.T) {
+// TestUpdateAllowsTerminalStateMessages verifies that Update does NOT guard
+// against terminal states — matching Rust's update() which allows post-mortem
+// annotations on completed/failed tasks.
+func TestUpdateAllowsTerminalStateMessages(t *testing.T) {
 	t.Parallel()
 	reg := NewRegistry()
 
-	for _, terminal := range []TaskStatus{StatusCompleted, StatusFailed, StatusStopped} {
-		t.Run(terminal.String(), func(t *testing.T) {
-			task := reg.Create("update guard", nil)
-			reg.mu.Lock()
-			reg.tasks[task.TaskID].Status = terminal
-			reg.mu.Unlock()
+	task := reg.Create("annotatable", nil)
+	reg.SetStatus(task.TaskID, StatusCompleted)
 
-			_, err := reg.Update(task.TaskID, "should fail")
-			if err == nil {
-				t.Fatal("expected error on Update from terminal state")
-			}
-			if !errors.Is(err, ErrTerminalState) {
-				t.Errorf("expected ErrTerminalState, got %v", err)
-			}
-		})
+	// Update on a terminal task must succeed (Rust parity).
+	updated, err := reg.Update(task.TaskID, "post-mortem note")
+	if err != nil {
+		t.Fatalf("Update on completed task should succeed, got: %v", err)
+	}
+	if len(updated.Messages) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(updated.Messages))
+	}
+	if updated.Messages[0].Content != "post-mortem note" {
+		t.Errorf("Messages[0].Content = %q, want %q", updated.Messages[0].Content, "post-mortem note")
 	}
 }
 
