@@ -11,9 +11,10 @@ import (
 
 // serverEntry holds a connected MCP client and its discovered tools.
 type serverEntry struct {
-	name   string
-	client *Client
-	tools  []MCPTool
+	name      string
+	client    *Client
+	tools     []MCPTool
+	resources []McpResourceInfo
 }
 
 // Registry manages connections to multiple MCP servers and their tools.
@@ -28,7 +29,7 @@ func NewRegistry() *Registry {
 }
 
 // AddServer connects to an MCP server, runs the initialize handshake, and
-// discovers its tools. name is a human-readable label for the server.
+// discovers its tools and resources. name is a human-readable label for the server.
 func (r *Registry) AddServer(ctx context.Context, name string, transport Transport) error {
 	client := NewClient(transport)
 
@@ -41,13 +42,17 @@ func (r *Registry) AddServer(ctx context.Context, name string, transport Transpo
 		return fmt.Errorf("mcp registry: list tools from %q: %w", name, err)
 	}
 
+	// Best-effort resource discovery — not all servers support resources.
+	resources, _ := client.ListResources(ctx)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.servers = append(r.servers, serverEntry{
-		name:   name,
-		client: client,
-		tools:  tools,
+		name:      name,
+		client:    client,
+		tools:     tools,
+		resources: resources,
 	})
 
 	return nil
@@ -198,6 +203,54 @@ func MCPToolToAPITool(t MCPTool) api.Tool {
 			Required:   t.InputSchema.Required,
 		},
 	}
+}
+
+// GetServerInfo returns the server info string for a named server, or empty if not found.
+// This is a narrow accessor matching Rust's server_info field on McpServerState.
+func (r *Registry) GetServerInfo(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, s := range r.servers {
+		if s.name == name {
+			info := s.client.ServerInfo()
+			if info.Name != "" {
+				if info.Version != "" {
+					return info.Name + " " + info.Version
+				}
+				return info.Name
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// GetResourceCount returns the number of resources for a named server.
+// This is a narrow accessor matching Rust's resources.len() on McpServerState.
+func (r *Registry) GetResourceCount(name string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, s := range r.servers {
+		if s.name == name {
+			return len(s.resources)
+		}
+	}
+	return 0
+}
+
+// GetClient returns the MCP client for a named server, or nil if not found.
+func (r *Registry) GetClient(name string) *Client {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, s := range r.servers {
+		if s.name == name {
+			return s.client
+		}
+	}
+	return nil
 }
 
 func firstNonEmpty(vals ...string) string {

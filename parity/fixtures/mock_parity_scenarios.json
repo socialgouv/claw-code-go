@@ -1,0 +1,74 @@
+[
+  {
+    "name": "streaming_text",
+    "category": "streaming",
+    "description": "Basic streaming text response with content_block_delta events",
+    "parity_refs": ["mock_anthropic.go:streamingTextSSE"]
+  },
+  {
+    "name": "read_file_roundtrip",
+    "category": "tool_use",
+    "description": "Read file tool invocation and result roundtrip",
+    "parity_refs": ["mock_anthropic.go:toolUseSSE(read_file)"]
+  },
+  {
+    "name": "grep_chunk_assembly",
+    "category": "tool_use",
+    "description": "Grep search with chunk assembly and match counting",
+    "parity_refs": ["mock_anthropic.go:toolUseSSE(grep_search)"]
+  },
+  {
+    "name": "write_file_allowed",
+    "category": "tool_use",
+    "description": "Write file tool with sufficient permissions",
+    "parity_refs": ["mock_anthropic.go:toolUseSSE(write_file)"]
+  },
+  {
+    "name": "write_file_denied",
+    "category": "tool_use",
+    "description": "Write file tool denied by permission policy",
+    "parity_refs": ["mock_anthropic.go:toolUseSSE(write_file)"]
+  },
+  {
+    "name": "multi_tool_turn_roundtrip",
+    "category": "tool_use",
+    "description": "Multiple tools in a single turn (read_file + grep_search)",
+    "parity_refs": ["mock_anthropic.go:multiToolUseSSE"]
+  },
+  {
+    "name": "bash_stdout_roundtrip",
+    "category": "tool_use",
+    "description": "Bash command execution with stdout capture",
+    "parity_refs": ["mock_anthropic.go:toolUseSSE(bash)"]
+  },
+  {
+    "name": "bash_permission_prompt_approved",
+    "category": "permissions",
+    "description": "Bash tool with permission prompt, user approves",
+    "parity_refs": ["mock_anthropic.go:toolUseSSE(bash)"]
+  },
+  {
+    "name": "bash_permission_prompt_denied",
+    "category": "permissions",
+    "description": "Bash tool with permission prompt, user denies",
+    "parity_refs": ["mock_anthropic.go:toolUseSSE(bash)"]
+  },
+  {
+    "name": "plugin_tool_roundtrip",
+    "category": "plugins",
+    "description": "External plugin tool invocation and result roundtrip",
+    "parity_refs": ["mock_anthropic.go:toolUseSSE(plugin_echo)"]
+  },
+  {
+    "name": "auto_compact_triggered",
+    "category": "session",
+    "description": "Automatic session compaction triggered by high token count",
+    "parity_refs": ["mock_anthropic.go:finalTextSSEWithUsage(50000)"]
+  },
+  {
+    "name": "token_cost_reporting",
+    "category": "observability",
+    "description": "Token usage and cost reporting with input/output token counts",
+    "parity_refs": ["mock_anthropic.go:finalTextSSEWithUsage(1000,500)"]
+  }
+]

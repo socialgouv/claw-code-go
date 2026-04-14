@@ -121,7 +121,7 @@ func ExecuteReadMcpResource(input map[string]any, registry *mcp.Registry) (strin
 		return string(out), nil
 	}
 
-	content, err := client.ReadResource(context.Background(), uri)
+	resource, err := client.ReadResource(context.Background(), uri)
 	if err != nil {
 		result := map[string]any{
 			"server": server,
@@ -132,10 +132,14 @@ func ExecuteReadMcpResource(input map[string]any, registry *mcp.Registry) (strin
 		return string(out), nil
 	}
 
+	// Match Rust response shape: {server, uri, name, description, mime_type, content}
 	result := map[string]any{
-		"server":  server,
-		"uri":     uri,
-		"content": content,
+		"server":      server,
+		"uri":         resource.URI,
+		"name":        resource.Name,
+		"description": resource.Description,
+		"mime_type":   resource.MimeType,
+		"content":     resource.Content,
 	}
 	out, _ := json.MarshalIndent(result, "", "  ")
 	return string(out), nil
@@ -179,23 +183,23 @@ func ExecuteMcpAuth(input map[string]any, registry *mcp.Registry, authState *mcp
 		status = "connected" // If no auth state, assume connected since server is registered.
 	}
 
+	// Match Rust response shape: {server, status, server_info, tool_count, resource_count}
+	serverInfo := registry.GetServerInfo(server)
+	resourceCount := registry.GetResourceCount(server)
+
 	result := map[string]any{
-		"server":     server,
-		"status":     status,
-		"tool_count": len(registry.ServerTools(server)),
+		"server":         server,
+		"status":         status,
+		"server_info":    serverInfo,
+		"tool_count":     len(registry.ServerTools(server)),
+		"resource_count": resourceCount,
 	}
 	out, _ := json.MarshalIndent(result, "", "  ")
 	return string(out), nil
 }
 
-// findServerClient looks up the MCP client for a named server. Since Registry
-// doesn't expose GetClient directly, we grab the client from the server's
-// first tool via FindTool.
+// findServerClient looks up the MCP client for a named server.
 func findServerClient(registry *mcp.Registry, serverName string) (*mcp.Client, bool) {
-	tools := registry.ServerTools(serverName)
-	if len(tools) == 0 {
-		return nil, false
-	}
-	client, _, ok := registry.FindTool(tools[0].Name)
-	return client, ok
+	client := registry.GetClient(serverName)
+	return client, client != nil
 }

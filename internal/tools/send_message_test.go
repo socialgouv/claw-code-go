@@ -134,9 +134,10 @@ func TestSendUserMessage_Attachments(t *testing.T) {
 		}
 		var parsed map[string]any
 		json.Unmarshal([]byte(out), &parsed)
-		attachments, ok := parsed["attachments"].([]any)
-		if !ok || len(attachments) != 0 {
-			t.Errorf("expected empty attachments array, got %v", parsed["attachments"])
+		// Empty attachments input produces nil (no resolved attachments).
+		// Rust: Option<Vec<Attachment>> with empty input = None = null.
+		if parsed["attachments"] != nil {
+			t.Errorf("expected null attachments for empty input array, got %v", parsed["attachments"])
 		}
 	})
 
@@ -150,9 +151,14 @@ func TestSendUserMessage_Attachments(t *testing.T) {
 		}
 		var parsed map[string]any
 		json.Unmarshal([]byte(out), &parsed)
-		// Should have empty attachments array.
-		if parsed["attachments"] == nil {
-			t.Error("expected attachments field to be present")
+		// Rust: Option<Vec<Attachment>> serializes as null when None.
+		// attachments key should exist but be null.
+		_, exists := parsed["attachments"]
+		if !exists {
+			t.Error("expected attachments key to exist in response")
+		}
+		if parsed["attachments"] != nil {
+			t.Errorf("expected null attachments, got %v", parsed["attachments"])
 		}
 	})
 

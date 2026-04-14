@@ -35,7 +35,7 @@ type ResolvedAttachment struct {
 
 func ExecuteSendUserMessage(input map[string]any) (string, error) {
 	message, ok := input["message"].(string)
-	if !ok || message == "" {
+	if !ok || strings.TrimSpace(message) == "" {
 		return "", fmt.Errorf("send_user_message: 'message' is required and must not be empty")
 	}
 	status, _ := input["status"].(string)
@@ -58,15 +58,13 @@ func ExecuteSendUserMessage(input map[string]any) (string, error) {
 		}
 	}
 
+	// attachments is nil when no files were resolved (including empty input array).
+	// nil serializes as JSON null, matching Rust's Option<Vec<Attachment>> = None.
 	result := map[string]any{
-		"message": message,
-		"status":  status,
-		"sentAt":  time.Now().UTC().Format(time.RFC3339),
-	}
-	if attachments != nil {
-		result["attachments"] = attachments
-	} else {
-		result["attachments"] = []any{}
+		"message":     message,
+		"status":      status,
+		"sentAt":      time.Now().UTC().Format(time.RFC3339),
+		"attachments": attachments,
 	}
 	out, _ := json.MarshalIndent(result, "", "  ")
 	return string(out), nil

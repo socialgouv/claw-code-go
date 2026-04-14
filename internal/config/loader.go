@@ -52,6 +52,13 @@ type SettingsFallbackModels struct {
 //
 // CLI flag overrides are applied by the caller after Load returns.
 func Load() *Settings {
+	return LoadForDir("")
+}
+
+// LoadForDir returns merged settings using cwd as the base for project-level
+// config files. If cwd is empty, the current working directory is used.
+// This is the Go equivalent of Rust's ConfigLoader::default_for(cwd).
+func LoadForDir(cwd string) *Settings {
 	s := &Settings{}
 
 	homeDir, _ := os.UserHomeDir()
@@ -60,10 +67,18 @@ func Load() *Settings {
 	if homeDir != "" {
 		sources = append(sources, filepath.Join(homeDir, ".claude", "settings.json"))
 	}
-	sources = append(sources,
-		filepath.Join(".claude", "settings.json"),
-		filepath.Join(".claude", "settings.local.json"),
-	)
+
+	if cwd != "" {
+		sources = append(sources,
+			filepath.Join(cwd, ".claude", "settings.json"),
+			filepath.Join(cwd, ".claude", "settings.local.json"),
+		)
+	} else {
+		sources = append(sources,
+			filepath.Join(".claude", "settings.json"),
+			filepath.Join(".claude", "settings.local.json"),
+		)
+	}
 
 	for _, path := range sources {
 		data, err := os.ReadFile(path)

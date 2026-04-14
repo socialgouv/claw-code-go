@@ -2,6 +2,7 @@ package tools
 
 import (
 	"claw-code-go/internal/api"
+	"claw-code-go/internal/config"
 	"claw-code-go/internal/runtime/worker"
 	"encoding/json"
 	"fmt"
@@ -171,21 +172,37 @@ func ExecuteWorkerCreate(input map[string]any, reg *worker.WorkerRegistry) (stri
 		return "", fmt.Errorf("worker_create: 'cwd' is required")
 	}
 
-	var trustedRoots []string
+	// Merge config-level trusted_roots with per-call overrides.
+	// Config provides the default allowlist; per-call roots add on top.
+	// Matches Rust's ConfigLoader::default_for(cwd) behavior.
+	settings := config.LoadForDir(cwd)
+	var configRoots []string
+	if len(settings.RawJSON) > 0 {
+		fc := config.ExtractFeatureConfig(settings.RawJSON)
+		configRoots = fc.TrustedRoots
+	}
+
+	var callRoots []string
 	if roots, ok := input["trusted_roots"].([]any); ok {
 		for _, r := range roots {
 			if s, ok := r.(string); ok {
-				trustedRoots = append(trustedRoots, s)
+				callRoots = append(callRoots, s)
 			}
 		}
 	}
+
+	// Chain: config roots first, then per-call roots on top.
+	// Explicit allocation avoids mutating configRoots' backing array.
+	mergedRoots := make([]string, 0, len(configRoots)+len(callRoots))
+	mergedRoots = append(mergedRoots, configRoots...)
+	mergedRoots = append(mergedRoots, callRoots...)
 
 	autoRecover := true
 	if ar, ok := input["auto_recover_prompt_misdelivery"].(bool); ok {
 		autoRecover = ar
 	}
 
-	return marshalJSON(reg.Create(cwd, trustedRoots, autoRecover)), nil
+	return marshalJSON(reg.Create(cwd, mergedRoots, autoRecover)), nil
 }
 
 func ExecuteWorkerGet(input map[string]any, reg *worker.WorkerRegistry) (string, error) {

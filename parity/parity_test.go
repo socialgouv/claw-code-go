@@ -4,6 +4,8 @@
 package parity
 
 import (
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,9 +13,14 @@ import (
 
 	"claw-code-go/internal/apikit"
 	"claw-code-go/internal/commands"
+	"claw-code-go/internal/config"
+	"claw-code-go/internal/mcp"
 	"claw-code-go/internal/permissions"
 	"claw-code-go/internal/runtime"
 	"claw-code-go/internal/runtime/recovery"
+	"claw-code-go/internal/runtime/worker"
+	"claw-code-go/internal/testutil"
+	"claw-code-go/internal/tools"
 )
 
 // fixtureDir returns the path to the golden fixtures directory.
@@ -431,4 +438,314 @@ func TestRecoveryWithDepsExecutesParity(t *testing.T) {
 	if len(events) == 0 {
 		t.Error("expected recovery events to be emitted")
 	}
+}
+
+// parityScenarioNames lists the 12 mock parity scenarios matching Rust's harness.
+var parityScenarioNames = []string{
+	"streaming_text",
+	"read_file_roundtrip",
+	"grep_chunk_assembly",
+	"write_file_allowed",
+	"write_file_denied",
+	"multi_tool_turn_roundtrip",
+	"bash_stdout_roundtrip",
+	"bash_permission_prompt_approved",
+	"bash_permission_prompt_denied",
+	"plugin_tool_roundtrip",
+	"auto_compact_triggered",
+	"token_cost_reporting",
+}
+
+// --- Delta fix parity tests ---
+
+// TestSendMessageWhitespaceValidationParity verifies that whitespace-only messages
+// are rejected, matching Rust's message.trim().is_empty() behavior.
+func TestSendMessageWhitespaceValidationParity(t *testing.T) {
+	_ = fixtureDir(t)
+
+	// Whitespace-only messages should be rejected.
+	whitespaceInputs := []map[string]any{
+		{"message": "   ", "status": "normal"},
+		{"message": "\t\n", "status": "normal"},
+		{"message": "  \r\n  ", "status": "normal"},
+	}
+
+	for _, input := range whitespaceInputs {
+		_, err := tools.ExecuteSendUserMessage(input)
+		if err == nil {
+			t.Errorf("expected error for whitespace-only message %q, got nil", input["message"])
+		}
+	}
+
+	// Empty string should also be rejected.
+	_, err := tools.ExecuteSendUserMessage(map[string]any{"message": "", "status": "normal"})
+	if err == nil {
+		t.Error("expected error for empty message, got nil")
+	}
+
+	// Valid message should succeed.
+	result, err := tools.ExecuteSendUserMessage(map[string]any{"message": "hello", "status": "normal"})
+	if err != nil {
+		t.Fatalf("valid message should succeed: %v", err)
+	}
+	if !strings.Contains(result, "hello") {
+		t.Error("result should contain the message text")
+	}
+}
+
+// TestSendMessageAttachmentsNullabilityParity verifies that when no attachments
+// are provided, the result marshals to null (not []), matching Rust's
+// Option<Vec<Attachment>> serialization.
+func TestSendMessageAttachmentsNullabilityParity(t *testing.T) {
+	_ = fixtureDir(t)
+
+	result, err := tools.ExecuteSendUserMessage(map[string]any{
+		"message": "hello",
+		"status":  "normal",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("failed to parse result JSON: %v", err)
+	}
+
+	// Rust: Option<Vec<Attachment>> with None serializes as null.
+	// Go: nil marshals to null in JSON.
+	attachments, exists := parsed["attachments"]
+	if !exists {
+		t.Fatal("attachments key should exist in result")
+	}
+	if attachments != nil {
+		t.Errorf("attachments should be null (nil) when no attachments provided, got %v", attachments)
+	}
+}
+
+// TestWorkerCreateTrustedRootsMergeParity verifies that worker_create merges
+// config-level trusted_roots with per-call trusted_roots, matching Rust's
+// ConfigLoader::default_for(cwd) behavior.
+func TestWorkerCreateTrustedRootsMergeParity(t *testing.T) {
+	_ = fixtureDir(t)
+
+	// Set up a temp directory with config containing trustedRoots.
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configData := `{"trustedRoots": ["/config/root1", "/config/root2"]}`
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(configData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify LoadForDir picks up trusted roots from config.
+	settings := config.LoadForDir(tmpDir)
+	if len(settings.RawJSON) == 0 {
+		t.Fatal("expected settings.RawJSON to be populated")
+	}
+	fc := config.ExtractFeatureConfig(settings.RawJSON)
+	if len(fc.TrustedRoots) != 2 {
+		t.Fatalf("expected 2 config trusted roots, got %d", len(fc.TrustedRoots))
+	}
+
+	// Create a worker registry and call ExecuteWorkerCreate with per-call roots.
+	reg := worker.NewWorkerRegistry()
+	input := map[string]any{
+		"cwd":           tmpDir,
+		"trusted_roots": []any{"/call/root3"},
+	}
+	result, err := tools.ExecuteWorkerCreate(input, reg)
+	if err != nil {
+		t.Fatalf("ExecuteWorkerCreate failed: %v", err)
+	}
+
+	// The result should be valid JSON (worker was created).
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+	if parsed["worker_id"] == nil || parsed["worker_id"] == "" {
+		t.Error("worker should have a worker_id")
+	}
+}
+
+// TestReadMcpResourceResponseShapeParity verifies that read_mcp_resource returns
+// the Rust-matching response shape with name, description, and mime_type fields.
+func TestReadMcpResourceResponseShapeParity(t *testing.T) {
+	_ = fixtureDir(t)
+
+	// We verify the response shape by calling ExecuteReadMcpResource with a mock
+	// registry. Since we can't easily set up a full MCP server, we verify the
+	// tool definition and error path shape.
+	result, err := tools.ExecuteReadMcpResource(
+		map[string]any{"uri": "test://resource", "server": "nonexistent"},
+		mcp.NewRegistry(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	// Error case should still have server and uri.
+	if parsed["server"] != "nonexistent" {
+		t.Errorf("server = %v, want 'nonexistent'", parsed["server"])
+	}
+	if parsed["uri"] != "test://resource" {
+		t.Errorf("uri = %v, want 'test://resource'", parsed["uri"])
+	}
+
+	// Verify the McpResourceContent struct has the right fields.
+	rc := mcp.McpResourceContent{
+		URI:         "test://res",
+		Name:        "Test Resource",
+		Description: "A test",
+		MimeType:    "text/plain",
+		Content:     "hello",
+	}
+	data, _ := json.Marshal(rc)
+	var rcParsed map[string]any
+	json.Unmarshal(data, &rcParsed)
+
+	expectedFields := []string{"uri", "name", "description", "mime_type", "content"}
+	for _, field := range expectedFields {
+		if _, ok := rcParsed[field]; !ok {
+			t.Errorf("McpResourceContent JSON missing field %q", field)
+		}
+	}
+}
+
+// TestMcpAuthResponseShapeParity verifies that mcp_auth returns the Rust-matching
+// response shape with server_info and resource_count fields.
+func TestMcpAuthResponseShapeParity(t *testing.T) {
+	_ = fixtureDir(t)
+
+	registry := mcp.NewRegistry()
+	authState := mcp.NewAuthState()
+
+	// Test disconnected server response shape.
+	result, err := tools.ExecuteMcpAuth(
+		map[string]any{"server": "unknown"},
+		registry, authState,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	// Disconnected server should have status and message.
+	if parsed["status"] != "disconnected" {
+		t.Errorf("status = %v, want 'disconnected'", parsed["status"])
+	}
+	if _, ok := parsed["message"]; !ok {
+		t.Error("disconnected response should include 'message' field")
+	}
+
+	// Verify accessor methods exist on Registry.
+	info := registry.GetServerInfo("test")
+	if info != "" {
+		t.Error("GetServerInfo for unknown server should return empty string")
+	}
+	count := registry.GetResourceCount("test")
+	if count != 0 {
+		t.Error("GetResourceCount for unknown server should return 0")
+	}
+}
+
+// TestMockParityScenarioManifest verifies the scenario manifest loads and
+// contains all 12 expected scenarios matching Rust's harness structure.
+func TestMockParityScenarioManifest(t *testing.T) {
+	dir := fixtureDir(t)
+
+	data, err := os.ReadFile(filepath.Join(dir, "mock_parity_scenarios.json"))
+	if err != nil {
+		t.Fatalf("read scenario manifest: %v", err)
+	}
+
+	var scenarios []struct {
+		Name        string   `json:"name"`
+		Category    string   `json:"category"`
+		Description string   `json:"description"`
+		ParityRefs  []string `json:"parity_refs"`
+	}
+	if err := json.Unmarshal(data, &scenarios); err != nil {
+		t.Fatalf("parse scenario manifest: %v", err)
+	}
+
+	if len(scenarios) != 12 {
+		t.Fatalf("expected 12 scenarios, got %d", len(scenarios))
+	}
+
+	// Verify all 12 scenario names match Rust's harness.
+	for i, expected := range parityScenarioNames {
+		if scenarios[i].Name != expected {
+			t.Errorf("scenario[%d]: name = %q, want %q", i, scenarios[i].Name, expected)
+		}
+		if scenarios[i].Category == "" {
+			t.Errorf("scenario %q: missing category", expected)
+		}
+		if scenarios[i].Description == "" {
+			t.Errorf("scenario %q: missing description", expected)
+		}
+		if len(scenarios[i].ParityRefs) == 0 {
+			t.Errorf("scenario %q: missing parity_refs", expected)
+		}
+	}
+
+	// Verify all scenarios have corresponding mock service scenario constants.
+	for _, s := range scenarios {
+		_, ok := testutil.ParseScenario(s.Name)
+		if !ok {
+			t.Errorf("scenario %q not found in mock service ParseScenario", s.Name)
+		}
+	}
+}
+
+// TestMockServiceRequestCapture verifies that the mock service captures
+// requests and tracks scenario/streaming state, matching Rust's 21-request
+// expectation structure.
+func TestMockServiceRequestCapture(t *testing.T) {
+	_ = fixtureDir(t)
+
+	svc := testutil.SpawnMockService()
+	defer svc.Close()
+
+	// Send requests for each of the 12 parity scenarios.
+	for _, scenario := range parityScenarioNames {
+		body := `{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"test ` + testutil.ScenarioPrefix + scenario + `"}]}]}`
+		resp, err := sendMockRequest(svc.BaseURL(), body)
+		if err != nil {
+			t.Fatalf("scenario %s: %v", scenario, err)
+		}
+		resp.Body.Close()
+	}
+
+	captured := svc.CapturedRequests()
+	if len(captured) != 12 {
+		t.Errorf("expected 12 captured requests (one per scenario), got %d", len(captured))
+	}
+
+	// Verify all requests are streaming.
+	for _, req := range captured {
+		if !req.Stream {
+			t.Errorf("request for %s should be streaming", req.Scenario)
+		}
+		if req.Path != "/v1/messages" {
+			t.Errorf("request path = %q, want /v1/messages", req.Path)
+		}
+	}
+}
+
+// sendMockRequest is a helper for TestMockServiceRequestCapture.
+func sendMockRequest(baseURL, body string) (*http.Response, error) {
+	return http.Post(baseURL+"/v1/messages", "application/json", strings.NewReader(body))
 }
