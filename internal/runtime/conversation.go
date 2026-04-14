@@ -217,6 +217,49 @@ func (loop *ConversationLoop) systemPrompt() string {
 	return strings.Join(parts, "\n\n")
 }
 
+// isAnthropicProvider returns true when the configured provider is Anthropic
+// (the default) or any Anthropic-compatible cloud provider (Bedrock, Vertex).
+func (loop *ConversationLoop) isAnthropicProvider() bool {
+	switch loop.Config.ProviderName {
+	case "", "anthropic", "bedrock", "vertex":
+		return true
+	default:
+		return false
+	}
+}
+
+// injectCacheControl adds Anthropic prompt cache breakpoints to a request.
+// For non-Anthropic providers this is a no-op.
+//
+// Strategy (mirrors the original Claude Code TypeScript):
+//   - System prompt: convert System string to SystemBlocks with cache_control
+//     on the last block.
+//   - Tools: mark the last tool with cache_control.
+func (loop *ConversationLoop) injectCacheControl(req *api.CreateMessageRequest) {
+	if !loop.isAnthropicProvider() {
+		return
+	}
+
+	if req.System != "" && len(req.SystemBlocks) == 0 {
+		req.SystemBlocks = []api.ContentBlock{
+			{
+				Type:         "text",
+				Text:         req.System,
+				CacheControl: api.EphemeralCacheControl(),
+			},
+		}
+		req.System = ""
+	}
+
+	if n := len(req.Tools); n > 0 {
+		// Copy the slice so we don't mutate the shared loop.Tools backing array.
+		copied := make([]api.Tool, n)
+		copy(copied, req.Tools)
+		copied[n-1].CacheControl = api.EphemeralCacheControl()
+		req.Tools = copied
+	}
+}
+
 // allTools returns built-in tools merged with any MCP tools.
 func (loop *ConversationLoop) allTools() []api.Tool {
 	if loop.MCPRegistry == nil {
@@ -278,6 +321,7 @@ func (loop *ConversationLoop) runOneTurn(ctx context.Context) (string, error) {
 		Tools:     loop.allTools(),
 		Stream:    true,
 	}
+	loop.injectCacheControl(&req)
 
 	ch, err := loop.Client.StreamResponse(ctx, req)
 	if err != nil {
@@ -439,16 +483,18 @@ func (loop *ConversationLoop) SendMessageStreaming(ctx context.Context, userText
 		}
 	}
 
-	var totalInput, totalOutput int
+	var totalInput, totalOutput, totalCacheWrite, totalCacheRead int
 
 	for {
-		stopReason, inTok, outTok, err := loop.runOneTurnStreaming(ctx, events)
+		stopReason, inTok, outTok, cwTok, crTok, err := loop.runOneTurnStreaming(ctx, events)
 		if err != nil {
 			events <- TurnEvent{Type: TurnEventError, Err: err}
 			return err
 		}
 		totalInput += inTok
 		totalOutput += outTok
+		totalCacheWrite += cwTok
+		totalCacheRead += crTok
 
 		if stopReason != "tool_use" {
 			break
@@ -462,7 +508,7 @@ func (loop *ConversationLoop) SendMessageStreaming(ctx context.Context, userText
 
 	// Update the usage tracker (Phase 13).
 	if loop.Usage != nil {
-		loop.Usage.Add(totalInput, totalOutput, 0, 0)
+		loop.Usage.Add(totalInput, totalOutput, totalCacheWrite, totalCacheRead)
 	}
 
 	events <- TurnEvent{
@@ -475,8 +521,8 @@ func (loop *ConversationLoop) SendMessageStreaming(ctx context.Context, userText
 }
 
 // runOneTurnStreaming streams one API turn and sends TurnEvents.
-// Returns stop_reason, inputTokens, outputTokens, error.
-func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events chan<- TurnEvent) (string, int, int, error) {
+// Returns stop_reason, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, error.
+func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events chan<- TurnEvent) (string, int, int, int, int, error) {
 	req := api.CreateMessageRequest{
 		Model:     loop.Config.Model,
 		MaxTokens: loop.Config.MaxTokens,
@@ -485,10 +531,11 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 		Tools:     loop.allTools(),
 		Stream:    true,
 	}
+	loop.injectCacheControl(&req)
 
 	ch, err := loop.Client.StreamResponse(ctx, req)
 	if err != nil {
-		return "", 0, 0, fmt.Errorf("stream response: %w", err)
+		return "", 0, 0, 0, 0, fmt.Errorf("stream response: %w", err)
 	}
 
 	type toolBlock struct {
@@ -498,23 +545,27 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 	}
 
 	var (
-		textBlocks   []api.ContentBlock
-		toolBlocks   []toolBlock
-		currentText  string
-		currentTool  *toolBlock
-		stopReason   string
-		blockTypeMap = make(map[int]string)
-		inputTokens  int
-		outputTokens int
+		textBlocks       []api.ContentBlock
+		toolBlocks       []toolBlock
+		currentText      string
+		currentTool      *toolBlock
+		stopReason       string
+		blockTypeMap     = make(map[int]string)
+		inputTokens      int
+		outputTokens     int
+		cacheWriteTokens int
+		cacheReadTokens  int
 	)
 
 	for event := range ch {
 		switch event.Type {
 		case api.EventError:
-			return "", 0, 0, fmt.Errorf("stream error: %s", event.ErrorMessage)
+			return "", 0, 0, 0, 0, fmt.Errorf("stream error: %s", event.ErrorMessage)
 
 		case api.EventMessageStart:
 			inputTokens = event.InputTokens
+			cacheWriteTokens = event.CacheCreationInputTokens
+			cacheReadTokens = event.CacheReadInputTokens
 
 		case api.EventContentBlockStart:
 			blockTypeMap[event.Index] = event.ContentBlock.Type
@@ -534,7 +585,7 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 				select {
 				case events <- TurnEvent{Type: TurnEventTextDelta, Text: event.Delta.Text}:
 				case <-ctx.Done():
-					return "", 0, 0, ctx.Err()
+					return "", 0, 0, 0, 0, ctx.Err()
 				}
 			case "input_json_delta":
 				if currentTool != nil {
@@ -640,14 +691,14 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 						PermReply: replyCh,
 					}:
 					case <-ctx.Done():
-						return "", 0, 0, ctx.Err()
+						return "", 0, 0, 0, 0, ctx.Err()
 					}
 
 					var userDecision PermDecision
 					select {
 					case userDecision = <-replyCh:
 					case <-ctx.Done():
-						return "", 0, 0, ctx.Err()
+						return "", 0, 0, 0, 0, ctx.Err()
 					}
 
 					switch userDecision {
@@ -683,13 +734,13 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 					AskUserReply: replyCh,
 				}:
 				case <-ctx.Done():
-					return "", 0, 0, ctx.Err()
+					return "", 0, 0, 0, 0, ctx.Err()
 				}
 				var answer string
 				select {
 				case answer = <-replyCh:
 				case <-ctx.Done():
-					return "", 0, 0, ctx.Err()
+					return "", 0, 0, 0, 0, ctx.Err()
 				}
 				toolResults = append(toolResults, api.ContentBlock{
 					Type:      "tool_result",
@@ -702,7 +753,7 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 			select {
 			case events <- TurnEvent{Type: TurnEventToolStart, ToolName: tb.name, ToolInput: summary}:
 			case <-ctx.Done():
-				return "", 0, 0, ctx.Err()
+				return "", 0, 0, 0, 0, ctx.Err()
 			}
 
 			result := loop.ExecuteTool(tb.name, inputMap)
@@ -716,7 +767,7 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 			select {
 			case events <- TurnEvent{Type: TurnEventToolDone, ToolName: tb.name, ToolResult: resultText}:
 			case <-ctx.Done():
-				return "", 0, 0, ctx.Err()
+				return "", 0, 0, 0, 0, ctx.Err()
 			}
 		}
 
@@ -726,7 +777,7 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 		})
 	}
 
-	return stopReason, inputTokens, outputTokens, nil
+	return stopReason, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, nil
 }
 
 // Deprecated: ExecuteToolQuiet is kept for backward compatibility. New code

@@ -1,5 +1,16 @@
 package api
 
+// CacheControlMarker is the Anthropic prompt caching marker.
+// Set Type to "ephemeral" to enable caching up to this content block.
+type CacheControlMarker struct {
+	Type string `json:"type"` // "ephemeral"
+}
+
+// EphemeralCacheControl returns a cache_control marker with type "ephemeral".
+func EphemeralCacheControl() *CacheControlMarker {
+	return &CacheControlMarker{Type: "ephemeral"}
+}
+
 // ContentBlock represents a single content block in a message.
 // Type can be "text", "tool_use", or "tool_result".
 type ContentBlock struct {
@@ -17,6 +28,9 @@ type ContentBlock struct {
 	ToolUseID string         `json:"tool_use_id,omitempty"`
 	Content   []ContentBlock `json:"content,omitempty"`
 	IsError   bool           `json:"is_error,omitempty"`
+
+	// Anthropic prompt caching marker (ignored by non-Anthropic providers).
+	CacheControl *CacheControlMarker `json:"cache_control,omitempty"`
 }
 
 // ToolResult is a convenience wrapper for building tool_result content blocks.
@@ -56,9 +70,10 @@ type Message struct {
 
 // Tool describes a tool that can be called by the model.
 type Tool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	InputSchema InputSchema `json:"input_schema"`
+	Name         string              `json:"name"`
+	Description  string              `json:"description"`
+	InputSchema  InputSchema         `json:"input_schema"`
+	CacheControl *CacheControlMarker `json:"cache_control,omitempty"`
 }
 
 // InputSchema is the JSON schema for tool inputs.
@@ -75,19 +90,25 @@ type Property struct {
 }
 
 // CreateMessageRequest is the request body for /v1/messages.
+//
+// System vs SystemBlocks: for providers that support prompt caching (Anthropic),
+// populate SystemBlocks with ContentBlock entries carrying CacheControl markers.
+// The Anthropic client serializes SystemBlocks as the "system" field (array form).
+// Non-Anthropic providers (OpenAI) use the plain System string and ignore SystemBlocks.
 type CreateMessageRequest struct {
-	Model            string    `json:"model"`
-	MaxTokens        int       `json:"max_tokens"`
-	System           string    `json:"system,omitempty"`
-	Messages         []Message `json:"messages"`
-	Tools            []Tool    `json:"tools,omitempty"`
-	Stream           bool      `json:"stream"`
-	Temperature      *float64  `json:"temperature,omitempty"`
-	TopP             *float64  `json:"top_p,omitempty"`
-	FrequencyPenalty *float64  `json:"frequency_penalty,omitempty"`
-	PresencePenalty  *float64  `json:"presence_penalty,omitempty"`
-	Stop             []string  `json:"stop,omitempty"`
-	ReasoningEffort  string    `json:"reasoning_effort,omitempty"`
+	Model            string         `json:"model"`
+	MaxTokens        int            `json:"max_tokens"`
+	System           string         `json:"system,omitempty"`
+	SystemBlocks     []ContentBlock `json:"-"` // Anthropic array form; takes precedence over System when non-empty
+	Messages         []Message      `json:"messages"`
+	Tools            []Tool         `json:"tools,omitempty"`
+	Stream           bool           `json:"stream"`
+	Temperature      *float64       `json:"temperature,omitempty"`
+	TopP             *float64       `json:"top_p,omitempty"`
+	FrequencyPenalty *float64       `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64       `json:"presence_penalty,omitempty"`
+	Stop             []string       `json:"stop,omitempty"`
+	ReasoningEffort  string         `json:"reasoning_effort,omitempty"`
 }
 
 // --- SSE Event Types ---
@@ -152,6 +173,10 @@ type StreamEvent struct {
 
 	// message_start input token count (parsed from "message.usage.input_tokens")
 	InputTokens int `json:"-"`
+
+	// Anthropic prompt cache token counts (parsed from "message.usage")
+	CacheCreationInputTokens int `json:"-"`
+	CacheReadInputTokens     int `json:"-"`
 
 	// Error
 	ErrorMessage string `json:"-"`

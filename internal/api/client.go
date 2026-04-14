@@ -15,6 +15,7 @@ const (
 	defaultBaseURL         = "https://api.anthropic.com"
 	anthropicVersion       = "2023-06-01"
 	anthropicBetaHeader    = "anthropic-beta"
+	anthropicBetaValue     = "prompt-caching-2024-07-31"
 	anthropicVersionHeader = "anthropic-version"
 
 	// defaultMaxRetries is the maximum number of retry attempts for retryable
@@ -70,7 +71,7 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 		return nil, err
 	}
 
-	body, err := json.Marshal(req)
+	body, err := marshalAnthropicRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -94,6 +95,7 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 			httpReq.Header.Set("x-api-key", c.APIKey)
 		}
 		httpReq.Header.Set(anthropicVersionHeader, anthropicVersion)
+		httpReq.Header.Set(anthropicBetaHeader, anthropicBetaValue)
 		httpReq.Header.Set("content-type", "application/json")
 		httpReq.Header.Set("accept", "text/event-stream")
 
@@ -283,16 +285,20 @@ func parseSSEData(data string) (StreamEvent, error) {
 		json.Unmarshal(usageRaw, &event.Usage) //nolint:errcheck
 	}
 
-	// Parse "message.usage.input_tokens" for message_start events
+	// Parse "message.usage" for message_start events (input tokens + cache tokens)
 	if messageRaw, ok := raw["message"]; ok {
 		var msgMap map[string]json.RawMessage
 		if err := json.Unmarshal(messageRaw, &msgMap); err == nil {
 			if usageRaw, ok := msgMap["usage"]; ok {
 				var usage struct {
-					InputTokens int `json:"input_tokens"`
+					InputTokens              int `json:"input_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 				}
 				if err := json.Unmarshal(usageRaw, &usage); err == nil {
 					event.InputTokens = usage.InputTokens
+					event.CacheCreationInputTokens = usage.CacheCreationInputTokens
+					event.CacheReadInputTokens = usage.CacheReadInputTokens
 				}
 			}
 		}
@@ -311,6 +317,53 @@ func parseSSEData(data string) (StreamEvent, error) {
 	}
 
 	return event, nil
+}
+
+// marshalAnthropicRequest serializes a CreateMessageRequest for the Anthropic API.
+// When SystemBlocks is populated, it marshals the "system" field as an array of
+// content blocks (required for prompt caching) instead of a plain string.
+func marshalAnthropicRequest(req CreateMessageRequest) ([]byte, error) {
+	if len(req.SystemBlocks) == 0 {
+		return json.Marshal(req)
+	}
+
+	// Wire type with System as json.RawMessage for the array form.
+	// SYNC: fields must match CreateMessageRequest (except System type).
+	type wireRequest struct {
+		Model            string          `json:"model"`
+		MaxTokens        int             `json:"max_tokens"`
+		System           json.RawMessage `json:"system,omitempty"`
+		Messages         []Message       `json:"messages"`
+		Tools            []Tool          `json:"tools,omitempty"`
+		Stream           bool            `json:"stream"`
+		Temperature      *float64        `json:"temperature,omitempty"`
+		TopP             *float64        `json:"top_p,omitempty"`
+		FrequencyPenalty *float64        `json:"frequency_penalty,omitempty"`
+		PresencePenalty  *float64        `json:"presence_penalty,omitempty"`
+		Stop             []string        `json:"stop,omitempty"`
+		ReasoningEffort  string          `json:"reasoning_effort,omitempty"`
+	}
+
+	systemJSON, err := json.Marshal(req.SystemBlocks)
+	if err != nil {
+		return nil, fmt.Errorf("marshal system blocks: %w", err)
+	}
+
+	wire := wireRequest{
+		Model:            req.Model,
+		MaxTokens:        req.MaxTokens,
+		System:           systemJSON,
+		Messages:         req.Messages,
+		Tools:            req.Tools,
+		Stream:           req.Stream,
+		Temperature:      req.Temperature,
+		TopP:             req.TopP,
+		FrequencyPenalty: req.FrequencyPenalty,
+		PresencePenalty:  req.PresencePenalty,
+		Stop:             req.Stop,
+		ReasoningEffort:  req.ReasoningEffort,
+	}
+	return json.Marshal(wire)
 }
 
 // isRetryableStatus returns true for HTTP status codes that indicate a
