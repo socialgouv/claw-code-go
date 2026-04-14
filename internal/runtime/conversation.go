@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 )
 
 const systemPromptBase = `You are Claude Code, an AI assistant for software engineering tasks. You have access to tools for running bash commands, reading and writing files, searching with glob patterns, and grepping for patterns in code. Use these tools to help users with coding tasks.`
@@ -36,6 +37,22 @@ type ConversationLoop struct {
 	PluginRegistry  *plugin.PluginRegistry // Plugin registry (may be nil)
 	HookRunner      *hooks.HookRunner      // Hook runner (may be nil; wired from config + plugin hooks)
 	CommandRegistry interface{}            // Slash command registry (may be nil; *commands.Registry)
+
+	// toolCallCount is the number of tool_use blocks executed in this session.
+	// Incremented atomically in ExecuteTool for goroutine safety (Rust parity:
+	// pending_tool_use_count is tracked per-turn; we track cumulative for the
+	// session to feed ToolCallCount() on the LoopAdapter).
+	toolCallCount atomic.Int64
+
+	// Build-time info passed through to LoopAdapter. Set by the caller.
+	BuildVersion string
+	BuildCommit  string
+}
+
+// ToolCallCount returns the total number of tool calls executed in this
+// conversation loop (goroutine-safe).
+func (loop *ConversationLoop) ToolCallCount() int {
+	return int(loop.toolCallCount.Load())
 }
 
 // NewConversationLoop creates a new conversation loop with the given client.
@@ -821,10 +838,33 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 			}
 		}
 	}
-	// TODO(Phase 4): Pass preHookPermOverride and preHookPermReason to
-	// the permission policy check via PermissionContext.
-	_ = preHookPermOverride
-	_ = preHookPermReason
+	// Wire hook permission override: if a pre-hook set a permission decision,
+	// apply it. Deny is enforced immediately; allow is remembered in the
+	// permission manager so later checks skip the ask flow.
+	if preHookPermOverride != nil {
+		switch *preHookPermOverride {
+		case hooks.PermissionAllow:
+			if loop.PermManager != nil {
+				loop.PermManager.Remember(name, summarizeToolInput(input), permissions.DecisionAllow, permissions.ScopeAlways)
+			}
+		case hooks.PermissionDeny:
+			msg := "Hook denied tool execution"
+			if preHookPermReason != "" {
+				msg = preHookPermReason
+			}
+			return api.ContentBlock{
+				Type:    "tool_result",
+				Content: []api.ContentBlock{{Type: "text", Text: msg}},
+				IsError: true,
+			}
+		// hooks.PermissionAsk — fall through to normal permission flow
+		default:
+		}
+	}
+
+	// Increment the atomic tool-call counter (Rust parity: tracks total tool
+	// executions for the session; used by LoopAdapter.ToolCallCount()).
+	loop.toolCallCount.Add(1)
 
 	// --- Telemetry: record tool execution start ---
 	if loop.Tracer != nil {
@@ -1229,6 +1269,7 @@ func (loop *ConversationLoop) HandleSlashCommand(input string) (bool, error) {
 
 	// Create a LoopAdapter to satisfy all command interface contracts.
 	adapter := NewLoopAdapter(loop)
+	adapter.SetBuildInfo(loop.BuildVersion, loop.BuildCommit)
 
 	// Type-assert to *commands.Registry interface.
 	type commandExecutor interface {

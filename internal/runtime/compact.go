@@ -91,6 +91,19 @@ func estimateBlockTokens(cb *api.ContentBlock) int {
 	}
 }
 
+// CountRealUserTurns counts messages with role "user" that are not injected.
+// This is used for turn accounting that should exclude programmatically-injected
+// messages (e.g., via InjectPrompt).
+func CountRealUserTurns(messages []api.Message) int {
+	count := 0
+	for _, msg := range messages {
+		if msg.Role == "user" && !msg.IsInjected {
+			count++
+		}
+	}
+	return count
+}
+
 // ShouldCompact returns true when the session should be compacted.
 // It uses the actual API-reported input token count when available (> 0),
 // falling back to EstimateTokens.

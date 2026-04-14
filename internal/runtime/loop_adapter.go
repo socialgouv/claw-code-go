@@ -37,8 +37,11 @@ type LoopAdapter struct {
 	rateLimitRPM  string
 	notifications []string
 	toggles       map[string]bool
-	toolCallCount int
 	startTime     time.Time
+
+	// Build-time info, set via SetBuildInfo().
+	buildVersion string
+	buildCommit  string
 }
 
 // Bookmark records a labeled position in conversation history.
@@ -65,6 +68,13 @@ func NewLoopAdapter(loop *ConversationLoop) *LoopAdapter {
 		toggles:    make(map[string]bool),
 		startTime:  time.Now(),
 	}
+}
+
+// SetBuildInfo records the build-time version and commit for the adapter.
+// Call this after construction with values from the ldflags-injected main vars.
+func (a *LoopAdapter) SetBuildInfo(version, commit string) {
+	a.buildVersion = version
+	a.buildCommit = commit
 }
 
 // MarkTurnStarted increments the active turn counter.

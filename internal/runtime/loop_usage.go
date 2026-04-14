@@ -74,8 +74,12 @@ func (a *LoopAdapter) SessionDuration() string {
 }
 
 // ToolCallCount returns the number of tool calls in this session.
+// Reads from the ConversationLoop's atomic counter when available.
 func (a *LoopAdapter) ToolCallCount() int {
-	return a.toolCallCount
+	if a.loop != nil {
+		return a.loop.ToolCallCount()
+	}
+	return 0
 }
 
 // --- cacheTracker interface (status_cmds.go) ---
@@ -144,14 +148,22 @@ func (a *LoopAdapter) ErrorRate() float64 {
 // --- versionProvider interface (status_cmds.go) ---
 
 // Version returns the CLI version string.
-// TODO: wire to the build-time version variable in cmd/claw-code-go/main.go.
+// When build-time info has been wired via SetBuildInfo(), it returns the real
+// version; otherwise falls back to "dev".
 func (a *LoopAdapter) Version() string {
+	if a.buildVersion != "" {
+		return a.buildVersion
+	}
 	return "dev"
 }
 
 // Commit returns the git commit hash.
-// TODO: wire to the build-time commit variable in cmd/claw-code-go/main.go.
+// When build-time info has been wired via SetBuildInfo(), it returns the real
+// commit; otherwise falls back to "unknown".
 func (a *LoopAdapter) Commit() string {
+	if a.buildCommit != "" {
+		return a.buildCommit
+	}
 	return "unknown"
 }
 

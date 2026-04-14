@@ -22,8 +22,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// version is set by ldflags at build time.
-var version = "dev"
+// Build-time variables set via ldflags (e.g., -X main.version=v1.0.0).
+var (
+	version = "dev"
+	commit  = "unknown"
+)
 
 func main() {
 	// Route diagnostic subcommands before flag parsing.
@@ -175,6 +178,9 @@ func main() {
 	}
 
 	loop := runtime.NewConversationLoop(cfg, realClient)
+	// Wire build-time info so LoopAdapter.Version()/Commit() return real values.
+	loop.BuildVersion = version
+	loop.BuildCommit = commit
 
 	// Bootstrap wires hooks, plugins, telemetry, and permissions in the correct order.
 	bootstrap(cfg, loop, *permModeFlag)

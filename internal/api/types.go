@@ -43,6 +43,15 @@ func (tr ToolResult) ToContentBlock() ContentBlock {
 type Message struct {
 	Role    string         `json:"role"`
 	Content []ContentBlock `json:"content"`
+
+	// IsInjected marks messages that were programmatically injected (e.g., via
+	// InjectPrompt) rather than typed by the user. Injected messages are
+	// excluded from turn counting in CompactSession and should not contribute
+	// to token accounting as real user turns.
+	//
+	// The field uses omitempty so that existing persisted sessions (which lack
+	// the field) deserialize cleanly with IsInjected defaulting to false.
+	IsInjected bool `json:"is_injected,omitempty"`
 }
 
 // Tool describes a tool that can be called by the model.

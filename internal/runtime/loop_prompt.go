@@ -25,6 +25,7 @@ func (a *LoopAdapter) InjectPrompt(prompt string) error {
 		Content: []api.ContentBlock{
 			{Type: "text", Text: prompt},
 		},
+		IsInjected: true,
 	})
 	// Track in prompt history with injection marker.
 	a.loop.Session.PromptHistory = append(a.loop.Session.PromptHistory, PromptHistoryEntry{
