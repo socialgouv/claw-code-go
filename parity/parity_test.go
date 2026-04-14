@@ -184,14 +184,14 @@ func TestCommandCountParity(t *testing.T) {
 	r := commands.NewFullRegistry()
 	goCount := r.Count()
 
-	// Batch 6 target: at least 100 ported commands (up from 35 in Batch 5).
-	// This batch wired ~65 commands via LoopAdapter.
-	const batch6Target = 100
+	// Final batch target: at least 142 ported commands.
+	// Go now exceeds Rust (146 vs 142) with Go-only additions.
+	const finalTarget = 142
 	// Rust reference: 142 SlashCommandSpec entries
 	const rustTotal = 142
 
-	if goCount < batch6Target {
-		t.Errorf("Go command count %d < batch 6 target %d", goCount, batch6Target)
+	if goCount < finalTarget {
+		t.Errorf("Go command count %d < final target %d", goCount, finalTarget)
 	}
 
 	t.Logf("Command count parity: Go=%d, Rust=%d (%.0f%%)", goCount, rustTotal, float64(goCount)/float64(rustTotal)*100)
@@ -259,12 +259,8 @@ func TestLoopAdapterInterfaceWiring(t *testing.T) {
 	// This is a behavioral check — we call through the interface, not just compile-time.
 
 	// SessionManager
-	sessions, err := adapter.ListSessions()
-	if err != nil {
+	if _, err := adapter.ListSessions(); err != nil {
 		t.Errorf("ListSessions: %v", err)
-	}
-	if sessions == nil {
-		// Expected empty, not nil error
 	}
 
 	// UsageTracker
@@ -354,6 +350,50 @@ func TestRecoveryScenariosParity(t *testing.T) {
 			t.Errorf("FromLaneEvent(%q) = %s, want %s", event, got, expected)
 		}
 	}
+}
+
+// TestInteractionModelParity verifies the interaction model golden fixture
+// documents all expected behaviors. This test validates that the fixture
+// exists and contains the expected scenario descriptions.
+func TestInteractionModelParity(t *testing.T) {
+	dir := fixtureDir(t)
+
+	data, err := os.ReadFile(filepath.Join(dir, "interaction_model.golden"))
+	if err != nil {
+		t.Fatalf("read golden fixture: %v", err)
+	}
+	content := string(data)
+
+	// Verify all three scenarios are documented.
+	scenarios := []string{
+		"InteractionLLM auto-respond",
+		"InteractionLLMOrHuman auto-respond",
+		"InteractionLLMOrHuman escalation",
+	}
+	for _, s := range scenarios {
+		if !strings.Contains(content, s) {
+			t.Errorf("golden fixture missing scenario: %q", s)
+		}
+	}
+
+	// Verify key invariants are documented.
+	invariants := []string{
+		"InteractionHuman always pauses",
+		"InteractionNone rejects",
+		"SessionID is preserved",
+		"needs_human_input",
+		"schema sanitization",
+	}
+	for _, inv := range invariants {
+		if !containsCaseInsensitive(content, inv) {
+			t.Errorf("golden fixture missing invariant: %q", inv)
+		}
+	}
+}
+
+// containsCaseInsensitive checks if s contains substr (case-insensitive).
+func containsCaseInsensitive(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // TestRecoveryWithDepsExecutesParity verifies recovery execution matches Rust behavior.

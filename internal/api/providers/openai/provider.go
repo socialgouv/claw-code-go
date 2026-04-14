@@ -269,12 +269,22 @@ func (c *Client) buildRequest(req api.CreateMessageRequest) (*oaiRequest, error)
 		useMaxCompTokens: strings.HasPrefix(wireModel, "gpt-5"),
 	}
 
-	// Always request usage in streaming mode (matching Rust).
-	if r.Stream {
+	// Only request stream usage for providers that support it (matches Rust's
+	// should_request_stream_usage which gates on provider_name == "OpenAI").
+	if r.Stream && c.shouldRequestStreamUsage() {
 		r.StreamOptions = &streamOpts{IncludeUsage: true}
 	}
 
 	return r, nil
+}
+
+// shouldRequestStreamUsage returns true when the client targets the default
+// OpenAI endpoint. XAI, DashScope, and other OpenAI-compatible providers
+// may not support the stream_options parameter, so we only include it for
+// the canonical OpenAI API. This matches Rust's should_request_stream_usage()
+// which gates on provider_name == "OpenAI".
+func (c *Client) shouldRequestStreamUsage() bool {
+	return c.BaseURL == defaultBaseURL
 }
 
 // isReasoningModel returns true for models known to reject tuning parameters

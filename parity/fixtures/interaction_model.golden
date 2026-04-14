@@ -1,0 +1,36 @@
+# Interaction Model Parity Fixture
+#
+# Documents the expected behavior for the three interaction scenarios:
+#
+# 1. InteractionLLM auto-respond:
+#    - Delegate returns ErrNeedsInteraction with questions
+#    - Node has interaction: llm
+#    - Runtime invokes interaction model (LLM) to auto-respond
+#    - LLM provides answers → delegate re-invoked with answers
+#    - Run continues without human pause
+#
+# 2. InteractionLLMOrHuman auto-respond:
+#    - Delegate returns ErrNeedsInteraction with questions
+#    - Node has interaction: llm_or_human
+#    - Runtime invokes interaction model with wrapped schema (needs_human_input flag)
+#    - LLM returns needs_human_input=false → delegate re-invoked
+#    - Run continues without human pause
+#
+# 3. InteractionLLMOrHuman escalation:
+#    - Same setup as (2)
+#    - LLM returns needs_human_input=true → run pauses
+#    - Interaction record created with original questions
+#    - Status: paused_waiting_human
+#    - Resume flow: human provides answers → delegate re-invoked
+#
+# Key invariants:
+# - InteractionHuman always pauses (no LLM involvement)
+# - InteractionNone rejects ErrNeedsInteraction with an error
+# - SessionID is preserved for delegate re-invocation continuity
+# - Questions map is passed through to interaction record unchanged
+# - Schema sanitization: question keys with special characters are replaced with underscores
+#
+# Schema wrapping for llm_or_human:
+# - Original schema fields are preserved
+# - needs_human_input (boolean) field is appended
+# - Wrapped schema name: "{original}_auto_or_pause"

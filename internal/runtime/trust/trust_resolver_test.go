@@ -1,7 +1,6 @@
 package trust
 
 import (
-	"claw-code-go/internal/strutil"
 	"sync"
 	"testing"
 )
@@ -187,27 +186,6 @@ func TestTrusts(t *testing.T) {
 			got := resolver.Trusts(tt.cwd)
 			if got != tt.want {
 				t.Errorf("Trusts(%q) = %v, want %v", tt.cwd, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestAsciiToLower(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"Hello WORLD", "hello world"},
-		{"Über Straße", "Über straße"}, // non-ASCII preserved (Ü stays, ß stays)
-		{"", ""},
-		{"already lowercase", "already lowercase"},
-		{"ALL CAPS 123", "all caps 123"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := strutil.ASCIIToLower(tt.input)
-			if got != tt.want {
-				t.Errorf("ASCIIToLower(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

@@ -283,3 +283,80 @@ func TestBuildRequest_ReasoningEffort(t *testing.T) {
 		t.Errorf("reasoning_effort = %v, want %q", v, "high")
 	}
 }
+
+func TestStreamOptionsSkippedForXAI(t *testing.T) {
+	// XAI uses a non-default base URL → stream_options must be absent.
+	client := &Client{
+		Model:   "grok-3",
+		BaseURL: "https://api.x.ai",
+	}
+	req := api.CreateMessageRequest{
+		Model:     "grok-3",
+		MaxTokens: 1024,
+	}
+
+	oaiReq, err := client.buildRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := json.Marshal(oaiReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := payload["stream_options"]; ok {
+		t.Error("XAI request should NOT include stream_options")
+	}
+
+	// Also verify the request struct directly
+	if oaiReq.StreamOptions != nil {
+		t.Error("StreamOptions should be nil for XAI")
+	}
+}
+
+func TestStreamOptionsIncludedForOpenAI(t *testing.T) {
+	// Default OpenAI base URL → stream_options must be present.
+	client := &Client{
+		Model:   "gpt-4o",
+		BaseURL: "https://api.openai.com",
+	}
+	req := api.CreateMessageRequest{
+		Model:     "gpt-4o",
+		MaxTokens: 1024,
+	}
+
+	oaiReq, err := client.buildRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := json.Marshal(oaiReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	so, ok := payload["stream_options"]
+	if !ok {
+		t.Fatal("OpenAI request must include stream_options")
+	}
+
+	soMap, ok := so.(map[string]interface{})
+	if !ok {
+		t.Fatalf("stream_options should be object, got %T", so)
+	}
+
+	if v, ok := soMap["include_usage"]; !ok || v != true {
+		t.Errorf("stream_options.include_usage = %v, want true", v)
+	}
+}
