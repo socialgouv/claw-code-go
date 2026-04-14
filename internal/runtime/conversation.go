@@ -1214,3 +1214,30 @@ func (loop *ConversationLoop) InitPlugins(registry *plugin.PluginRegistry) {
 		})
 	}
 }
+
+// HandleSlashCommand dispatches a slash command through the LoopAdapter and
+// CommandRegistry. Returns (handled, error). If the command is not a slash
+// command (doesn't start with /), returns (false, nil).
+func (loop *ConversationLoop) HandleSlashCommand(input string) (bool, error) {
+	input = strings.TrimSpace(input)
+	if !strings.HasPrefix(input, "/") {
+		return false, nil
+	}
+	if loop.CommandRegistry == nil {
+		return false, nil
+	}
+
+	// Create a LoopAdapter to satisfy all command interface contracts.
+	adapter := NewLoopAdapter(loop)
+
+	// Type-assert to *commands.Registry interface.
+	type commandExecutor interface {
+		Execute(input string, loop interface{}) (bool, error)
+	}
+	reg, ok := loop.CommandRegistry.(commandExecutor)
+	if !ok {
+		return false, nil
+	}
+
+	return reg.Execute(input, adapter)
+}

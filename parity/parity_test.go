@@ -176,21 +176,22 @@ func TestTelemetryTracerParity(t *testing.T) {
 }
 
 // TestCommandCountParity verifies the Go command registry has at least the
-// target count from Batch 5 (35 commands). The Rust reference has 142 SlashCommandSpec
-// entries; we track how close we are.
+// target count from Batch 6 (expanded from Batch 5). The Rust reference has
+// 142 SlashCommandSpec entries; we track how close we are.
 func TestCommandCountParity(t *testing.T) {
 	_ = fixtureDir(t)
 
 	r := commands.NewFullRegistry()
 	goCount := r.Count()
 
-	// Batch 5 target: at least 35 ported commands
-	const batch5Target = 35
+	// Batch 6 target: at least 100 ported commands (up from 35 in Batch 5).
+	// This batch wired ~65 commands via LoopAdapter.
+	const batch6Target = 100
 	// Rust reference: 142 SlashCommandSpec entries
 	const rustTotal = 142
 
-	if goCount < batch5Target {
-		t.Errorf("Go command count %d < batch 5 target %d", goCount, batch5Target)
+	if goCount < batch6Target {
+		t.Errorf("Go command count %d < batch 6 target %d", goCount, batch6Target)
 	}
 
 	t.Logf("Command count parity: Go=%d, Rust=%d (%.0f%%)", goCount, rustTotal, float64(goCount)/float64(rustTotal)*100)
@@ -200,31 +201,100 @@ func TestCommandCountParity(t *testing.T) {
 		// Builtins
 		"help", "exit", "quit", "clear",
 		// Session
-		"session", "resume", "rename", "export",
+		"session", "resume", "rename", "export", "history", "tag", "summary",
+		"pin", "unpin", "bookmarks", "focus", "unfocus", "add-dir", "workspace",
 		// Status
-		"status", "cost", "usage", "version",
+		"status", "cost", "usage", "version", "stats", "tokens", "cache",
+		"providers", "metrics", "notifications", "billing",
 		// Config
-		"config", "model", "permissions", "plan", "compact",
+		"config", "model", "permissions", "plan", "compact", "temperature",
+		"max-tokens", "system-prompt", "reasoning", "budget", "rate-limit",
+		"allowed-tools", "api-key", "telemetry", "profile", "language", "ultraplan",
 		// Diagnostics
 		"doctor", "diff",
 		// Plugin/session-mgmt
 		"plugin", "agents", "skills", "tasks", "team", "cron", "memory", "sandbox", "init", "upgrade",
 		// Code
 		"commit", "pr", "issue", "bughunter", "review", "security-review", "release-notes", "test",
+		"explain", "refactor", "docs", "fix", "perf", "chat", "web", "autofix",
 		// UX
-		"theme", "vim", "effort", "fast", "brief", "advisor", "color", "keybindings", "privacy-settings", "output-style",
+		"theme", "vim", "effort", "fast", "brief", "advisor", "color", "keybindings",
+		"privacy-settings", "output-style", "voice", "share", "feedback",
 		// Context
 		"files", "context", "hooks", "search", "copy", "rewind", "branch",
+		"symbols", "references", "definition", "hover", "diagnostics", "map", "tool-details",
 		// Auth
 		"auth",
 		// MCP
 		"mcp",
+		// Interaction
+		"approve", "deny", "undo", "stop", "retry",
 	}
 
 	for _, name := range requiredCommands {
 		if _, ok := r.Lookup(name); !ok {
 			t.Errorf("required command /%s not found in Go registry", name)
 		}
+	}
+}
+
+// TestLoopAdapterInterfaceWiring verifies that LoopAdapter satisfies the
+// interface contracts required by all command handler groups.
+func TestLoopAdapterInterfaceWiring(t *testing.T) {
+	_ = fixtureDir(t)
+
+	// Create a minimal ConversationLoop and wrap it in a LoopAdapter.
+	cfg := &runtime.Config{
+		Model:      "claude-test",
+		MaxTokens:  4096,
+		SessionDir: t.TempDir(),
+	}
+	loop := &runtime.ConversationLoop{
+		Config:  cfg,
+		Session: runtime.NewSession(),
+	}
+	adapter := runtime.NewLoopAdapter(loop)
+
+	// Verify the adapter can be used as each command group's interface.
+	// This is a behavioral check — we call through the interface, not just compile-time.
+
+	// SessionManager
+	sessions, err := adapter.ListSessions()
+	if err != nil {
+		t.Errorf("ListSessions: %v", err)
+	}
+	if sessions == nil {
+		// Expected empty, not nil error
+	}
+
+	// UsageTracker
+	if adapter.ModelName() != "claude-test" {
+		t.Errorf("ModelName = %q, want 'claude-test'", adapter.ModelName())
+	}
+
+	// ConfigSwitcher
+	if adapter.CurrentModel() != "claude-test" {
+		t.Errorf("CurrentModel = %q", adapter.CurrentModel())
+	}
+
+	// toggleLoop
+	adapter.SetToggle("test", true)
+	if !adapter.GetToggle("test") {
+		t.Error("GetToggle should return true after SetToggle(true)")
+	}
+
+	// themeLoop
+	themes := adapter.ListThemes()
+	if len(themes) == 0 {
+		t.Error("ListThemes should return available themes")
+	}
+
+	// effortLoop
+	if err := adapter.SetEffort("high"); err != nil {
+		t.Errorf("SetEffort: %v", err)
+	}
+	if adapter.GetEffort() != "high" {
+		t.Errorf("GetEffort = %q, want 'high'", adapter.GetEffort())
 	}
 }
 
