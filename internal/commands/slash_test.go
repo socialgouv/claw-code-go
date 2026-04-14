@@ -11,10 +11,10 @@ func TestFullRegistryCommandCount(t *testing.T) {
 	r := NewFullRegistry()
 	count := r.Count()
 
-	// Rust has 141 commands; Go has additional Go-only commands (quit, session-list,
-	// auth, billing, benchmarks, benchmark, output-style).
-	// Minimum expected: 141 (Rust parity).
-	const minExpected = 141
+	// Rust has 143 commands; Go adds Go-only commands (quit, session-list,
+	// auth, billing, benchmarks, benchmark, output-style, etc.) for 146+ total.
+	// Minimum expected: 143 (Rust parity).
+	const minExpected = 143
 	if count < minExpected {
 		t.Errorf("expected at least %d commands, got %d", minExpected, count)
 	}

@@ -30,7 +30,8 @@ func (t *PluginTool) Execute(input json.RawMessage) (string, error) {
 
 // ExecuteContext runs the plugin tool with the given JSON input and context.
 // The context controls cancellation and timeout of the subprocess.
-// Sets CLAWD_ and ITERION_ (backward-compat) env vars, passes input on stdin,
+// Sets CLAWD_ (the project's own namespace, matching the Rust source) and
+// ITERION_ (backward-compat) env vars, passes input on stdin,
 // and returns trimmed stdout on success or a PluginError on non-zero exit.
 func (t *PluginTool) ExecuteContext(ctx context.Context, input json.RawMessage) (string, error) {
 	cmd := exec.CommandContext(ctx, t.Command, t.Args...)

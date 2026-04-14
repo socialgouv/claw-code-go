@@ -2,8 +2,8 @@ package runtime
 
 import (
 	"claw-code-go/hooks"
-	"claw-code-go/hooks/hookstesting"
 	"claw-code-go/internal/api"
+	"claw-code-go/internal/hooks/hookstesting"
 	"claw-code-go/internal/permissions"
 	"encoding/json"
 	"strings"

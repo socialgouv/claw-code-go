@@ -1,8 +1,7 @@
 // Package hookstesting provides test helpers for the hooks package.
 // This package is intended only for use in tests (_test.go files).
-// It is separated from the hooks package to avoid compiling test-only
-// factory code into the production binary while remaining importable
-// from test files in other packages.
+// It lives under internal/ to enforce import restrictions — only packages
+// within the module can import it, and its test-only intent is clear.
 package hookstesting
 
 import "claw-code-go/hooks"

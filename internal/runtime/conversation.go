@@ -867,9 +867,9 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 				IsError: true,
 			}
 		case hooks.PermissionAsk:
-			// Hook requests interactive confirmation. The normal permission
-			// check below will handle prompting or denial.
-			// Nothing to do here — fall through to the standard flow.
+			// Hook requests interactive confirmation. Falls through to tool
+			// execution; interactive prompting is handled in the streaming
+			// path (runOneTurnStreaming).
 		default:
 			fmt.Fprintf(os.Stderr, "[hooks] warning: unknown permission decision %q from pre-tool-use hook; ignoring\n", string(*preHookPermOverride))
 		}
