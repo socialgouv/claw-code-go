@@ -183,6 +183,54 @@ func TestSetPrompter(t *testing.T) {
 	}
 }
 
+// --- QUALITY-1: MatchesAskRule tests ---
+
+func TestMatchesAskRule_WithPolicy(t *testing.T) {
+	m := NewManager(ModeDefault, nil)
+	policy := NewPermissionPolicy(ModeReadOnly).
+		WithToolRequirement("bash", ModeDangerFullAccess).
+		WithPermissionRules(nil, nil, []string{"bash(git:*)"})
+	m.SetPolicy(policy)
+
+	// Should match: bash tool with git-related input.
+	if !m.MatchesAskRule("bash", `{"command":"git status"}`) {
+		t.Error("MatchesAskRule should match bash tool with git input against ask rule bash(git:*)")
+	}
+
+	// Should not match: bash tool with non-git input.
+	if m.MatchesAskRule("bash", `{"command":"echo hi"}`) {
+		t.Error("MatchesAskRule should NOT match bash tool with non-git input")
+	}
+
+	// Should not match: different tool.
+	if m.MatchesAskRule("read_file", `{"path":"/tmp/x"}`) {
+		t.Error("MatchesAskRule should NOT match non-bash tool")
+	}
+}
+
+func TestMatchesAskRule_WithLegacyRuleset(t *testing.T) {
+	rules := &Ruleset{
+		Rules: []Rule{
+			{Tool: "bash", Pattern: "", Decision: DecisionAsk, RawDecision: "ask"},
+		},
+	}
+	m := NewManager(ModeDefault, rules)
+
+	if !m.MatchesAskRule("bash", "echo hi") {
+		t.Error("MatchesAskRule should match via legacy ruleset")
+	}
+	if m.MatchesAskRule("read_file", "/tmp/x") {
+		t.Error("MatchesAskRule should NOT match unrelated tool via legacy ruleset")
+	}
+}
+
+func TestMatchesAskRule_NoRules(t *testing.T) {
+	m := NewManager(ModeDefault, nil)
+	if m.MatchesAskRule("bash", "echo hi") {
+		t.Error("MatchesAskRule should return false with no rules")
+	}
+}
+
 func TestSetPolicyDelegation(t *testing.T) {
 	m := NewManager(ModeDefault, nil)
 

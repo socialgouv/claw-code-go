@@ -1,4 +1,11 @@
-package hooks
+// Package hookstesting provides test helpers for the hooks package.
+// This package is intended only for use in tests (_test.go files).
+// It is separated from the hooks package to avoid compiling test-only
+// factory code into the production binary while remaining importable
+// from test files in other packages.
+package hookstesting
+
+import "claw-code-go/hooks"
 
 // NewHookRunnerWithOverride creates a HookRunner for testing that will return
 // the given permission override on the first PreToolUse call. This is used
@@ -7,16 +14,16 @@ package hooks
 //
 // This works by configuring a PreToolUse hook command that echoes the
 // appropriate JSON on stdout.
-func NewHookRunnerWithOverride(decision *PermissionDecision, reason string) *HookRunner {
+func NewHookRunnerWithOverride(decision *hooks.PermissionDecision, reason string) *hooks.HookRunner {
 	if decision == nil {
-		return NewHookRunner(HookConfig{})
+		return hooks.NewHookRunner(hooks.HookConfig{})
 	}
 
 	// Build a command that echoes the JSON permission override to stdout.
 	// The hook output parser expects permissionDecision nested under hookSpecificOutput.
 	cmd := `echo '{"hookSpecificOutput":{"permissionDecision":"` + string(*decision) + `","permissionDecisionReason":"` + reason + `"}}'`
 
-	return NewHookRunner(HookConfig{
+	return hooks.NewHookRunner(hooks.HookConfig{
 		PreToolUse: []string{cmd},
 	})
 }

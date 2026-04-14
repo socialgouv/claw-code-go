@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"claw-code-go/hooks"
+	"claw-code-go/hooks/hookstesting"
 	"claw-code-go/internal/api"
+	"claw-code-go/internal/permissions"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -196,14 +198,14 @@ func TestLoopAdapter_BuildInfo_ViaLoop(t *testing.T) {
 	}
 }
 
-// --- WIRE-HOOK-PERM-OVERRIDE: Hook permission override test ---
+// --- WIRE-HOOK-PERM-OVERRIDE: Hook permission override tests ---
 
 func TestExecuteTool_HookPermissionDeny(t *testing.T) {
 	deny := hooks.PermissionDeny
 	loop := &ConversationLoop{
 		Permissions: DefaultPermissions(),
 		Config:      &Config{},
-		HookRunner:  hooks.NewHookRunnerWithOverride(&deny, "policy says no"),
+		HookRunner:  hookstesting.NewHookRunnerWithOverride(&deny, "policy says no"),
 	}
 
 	result := loop.ExecuteTool("bash", map[string]any{"command": "echo hi"})
@@ -212,5 +214,127 @@ func TestExecuteTool_HookPermissionDeny(t *testing.T) {
 	}
 	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "policy says no") {
 		t.Errorf("deny reason not in result: %+v", result)
+	}
+}
+
+// QUALITY-1: Hook "allow" with a matching ask-rule should NOT remember
+// as auto-allowed. The ask-rule must take precedence, matching Rust semantics.
+func TestExecuteTool_HookAllowRespectsAskRules(t *testing.T) {
+	allow := hooks.PermissionAllow
+
+	// Create a manager with an ask-rule that matches "bash".
+	mgr := permissions.NewManager(permissions.ModeDefault, &permissions.Ruleset{
+		Rules: []permissions.Rule{
+			{Tool: "bash", Pattern: "", Decision: permissions.DecisionAsk, RawDecision: "ask"},
+		},
+	})
+
+	loop := &ConversationLoop{
+		Permissions: DefaultPermissions(),
+		Config:      &Config{},
+		HookRunner:  hookstesting.NewHookRunnerWithOverride(&allow, "hook says ok"),
+		PermManager: mgr,
+	}
+
+	// Execute — since ask-rule matches, the allow should NOT be remembered.
+	// The tool will still execute (no interactive prompt wired up in unit test),
+	// but the cache should not contain a remembered allow for bash.
+	_ = loop.ExecuteTool("bash", map[string]any{"command": "echo hi"})
+
+	// Verify the ask-rule prevented auto-remembering: Check() should still
+	// return Ask (not Allow) since no decision was cached.
+	decision := mgr.Check("bash", "echo hi")
+	if decision != permissions.DecisionAsk {
+		t.Errorf("after hook allow + ask-rule match, Check() = %d, want DecisionAsk (%d)", decision, permissions.DecisionAsk)
+	}
+}
+
+// QUALITY-1: Hook "allow" WITHOUT a matching ask-rule should remember as allowed.
+func TestExecuteTool_HookAllowRemembersWithoutAskRule(t *testing.T) {
+	allow := hooks.PermissionAllow
+
+	// Manager with no ask-rules.
+	mgr := permissions.NewManager(permissions.ModeDefault, &permissions.Ruleset{})
+
+	loop := &ConversationLoop{
+		Permissions: DefaultPermissions(),
+		Config:      &Config{},
+		HookRunner:  hookstesting.NewHookRunnerWithOverride(&allow, "hook says ok"),
+		PermManager: mgr,
+	}
+
+	_ = loop.ExecuteTool("bash", map[string]any{"command": "echo hi"})
+
+	// Without ask-rules, the allow should be remembered.
+	decision := mgr.Check("bash", "echo hi")
+	if decision != permissions.DecisionAllow {
+		t.Errorf("after hook allow (no ask-rule), Check() = %d, want DecisionAllow (%d)", decision, permissions.DecisionAllow)
+	}
+}
+
+// QUALITY-2: Hook "ask" should not auto-allow (falls through to normal check).
+func TestExecuteTool_HookAskDoesNotAutoAllow(t *testing.T) {
+	ask := hooks.PermissionAsk
+
+	mgr := permissions.NewManager(permissions.ModeDefault, &permissions.Ruleset{})
+
+	loop := &ConversationLoop{
+		Permissions: DefaultPermissions(),
+		Config:      &Config{},
+		HookRunner:  hookstesting.NewHookRunnerWithOverride(&ask, "hook wants confirmation"),
+		PermManager: mgr,
+	}
+
+	_ = loop.ExecuteTool("bash", map[string]any{"command": "echo hi"})
+
+	// Ask override should not cache any decision.
+	decision := mgr.Check("bash", "echo hi")
+	if decision != permissions.DecisionAsk {
+		t.Errorf("after hook ask, Check() = %d, want DecisionAsk (%d)", decision, permissions.DecisionAsk)
+	}
+}
+
+// --- QUALITY-4: ShouldCompact with real-turn gating ---
+
+func TestShouldCompact_InjectedMessagesDoNotTrigger(t *testing.T) {
+	cfg := &Config{
+		CompactionEnabled:   true,
+		MaxTokens:           100,
+		CompactionThreshold: 0.5, // 50 tokens threshold
+	}
+
+	// 1 real user turn + several injected messages. Token count exceeds the
+	// threshold, but only 1 real turn exists (< minRealTurnsForCompaction=2).
+	longText := strings.Repeat("x", 200)
+	messages := []api.Message{
+		{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: longText}}},
+		{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: longText}}, IsInjected: true},
+		{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: longText}}, IsInjected: true},
+		{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: longText}}, IsInjected: true},
+		{Role: "assistant", Content: []api.ContentBlock{{Type: "text", Text: longText}}},
+	}
+
+	if ShouldCompact(0, messages, cfg) {
+		t.Error("ShouldCompact should return false when real user turn count < minRealTurnsForCompaction")
+	}
+}
+
+func TestShouldCompact_EnoughRealTurnsTriggers(t *testing.T) {
+	cfg := &Config{
+		CompactionEnabled:   true,
+		MaxTokens:           100,
+		CompactionThreshold: 0.5, // 50 tokens threshold
+	}
+
+	// 2 real user turns + enough tokens = should compact.
+	longText := strings.Repeat("x", 200)
+	messages := []api.Message{
+		{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: longText}}},
+		{Role: "assistant", Content: []api.ContentBlock{{Type: "text", Text: longText}}},
+		{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: longText}}},
+	}
+
+	if !ShouldCompact(0, messages, cfg) {
+		t.Error("ShouldCompact should return true when real turn count >= minRealTurnsForCompaction and tokens exceed threshold")
 	}
 }

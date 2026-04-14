@@ -839,13 +839,22 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 		}
 	}
 	// Wire hook permission override: if a pre-hook set a permission decision,
-	// apply it. Deny is enforced immediately; allow is remembered in the
-	// permission manager so later checks skip the ask flow.
+	// apply it. Matches Rust semantics:
+	//   - Deny: enforced immediately (short-circuit).
+	//   - Allow: check ask-rules first; if an ask-rule matches, fall through
+	//     to the normal permission/ask flow instead of auto-allowing.
+	//   - Ask: force the normal permission/ask flow (prompt in interactive
+	//     mode, deny in non-interactive/CI mode).
 	if preHookPermOverride != nil {
 		switch *preHookPermOverride {
 		case hooks.PermissionAllow:
+			// Rust: ask-rules take precedence over hook allow.
+			// Only remember as allowed when no ask-rule matches.
 			if loop.PermManager != nil {
-				loop.PermManager.Remember(name, summarizeToolInput(input), permissions.DecisionAllow, permissions.ScopeAlways)
+				inputSummary := summarizeToolInput(input)
+				if !loop.PermManager.MatchesAskRule(name, inputSummary) {
+					loop.PermManager.Remember(name, inputSummary, permissions.DecisionAllow, permissions.ScopeAlways)
+				}
 			}
 		case hooks.PermissionDeny:
 			msg := "Hook denied tool execution"
@@ -857,8 +866,12 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 				Content: []api.ContentBlock{{Type: "text", Text: msg}},
 				IsError: true,
 			}
-		// hooks.PermissionAsk — fall through to normal permission flow
+		case hooks.PermissionAsk:
+			// Hook requests interactive confirmation. The normal permission
+			// check below will handle prompting or denial.
+			// Nothing to do here — fall through to the standard flow.
 		default:
+			fmt.Fprintf(os.Stderr, "[hooks] warning: unknown permission decision %q from pre-tool-use hook; ignoring\n", string(*preHookPermOverride))
 		}
 	}
 

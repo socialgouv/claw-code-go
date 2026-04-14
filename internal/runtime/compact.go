@@ -104,11 +104,23 @@ func CountRealUserTurns(messages []api.Message) int {
 	return count
 }
 
+// minRealTurnsForCompaction is the minimum number of real (non-injected) user
+// turns required before compaction is considered. This prevents injected
+// system messages from inflating the raw message count and triggering
+// premature compaction.
+const minRealTurnsForCompaction = 2
+
 // ShouldCompact returns true when the session should be compacted.
 // It uses the actual API-reported input token count when available (> 0),
-// falling back to EstimateTokens.
+// falling back to EstimateTokens. Additionally, it requires at least
+// minRealTurnsForCompaction real (non-injected) user turns, so that
+// sessions dominated by injected messages don't trigger premature compaction.
 func ShouldCompact(inputTokens int, messages []api.Message, cfg *Config) bool {
 	if !cfg.CompactionEnabled {
+		return false
+	}
+	// Don't compact if there aren't enough real user turns yet.
+	if CountRealUserTurns(messages) < minRealTurnsForCompaction {
 		return false
 	}
 	if inputTokens <= 0 {

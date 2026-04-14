@@ -151,6 +151,24 @@ func (m *Manager) checkLegacy(tool, input string) Decision {
 	return DecisionAsk
 }
 
+// MatchesAskRule returns true if any ask-rule in the manager's ruleset matches
+// the given tool name and input. This is used by the conversation loop to
+// check whether a hook "allow" decision should be overridden by an ask-rule,
+// matching Rust semantics where ask-rules take precedence over hook allow.
+func (m *Manager) MatchesAskRule(tool, input string) bool {
+	m.mu.Lock()
+	policy := m.policy
+	m.mu.Unlock()
+
+	if policy != nil {
+		return findMatchingRule(policy.askRules, tool, input) != nil
+	}
+
+	// Legacy path: check ruleset for ask decisions.
+	d, ok := m.Rules.Match(tool, input)
+	return ok && d == DecisionAsk
+}
+
 // hookDecisionToOverride maps a legacy Decision to a PermissionOverride.
 func hookDecisionToOverride(d Decision) PermissionOverride {
 	switch d {
