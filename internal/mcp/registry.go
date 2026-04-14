@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -46,7 +46,7 @@ func (r *Registry) AddServer(ctx context.Context, name string, transport Transpo
 	// Best-effort resource discovery — not all servers support resources.
 	resources, resErr := client.ListResources(ctx)
 	if resErr != nil {
-		log.Printf("[mcp registry] best-effort ListResources for %q: %v", name, resErr)
+		slog.Debug("best-effort ListResources failed", "server", name, "error", resErr)
 	}
 
 	r.mu.Lock()

@@ -2,7 +2,7 @@ package lane
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -137,7 +137,7 @@ func (m *BranchLockManager) Acquire(intent BranchLockIntent) error {
 	candidate[len(m.claims)] = intent
 
 	if len(candidate) > BranchLockScalingWarningThreshold {
-		log.Printf("warning: branch lock manager has %d claims (N² check)", len(candidate))
+		slog.Debug("branch lock manager scaling warning", "claims", len(candidate))
 	}
 
 	collisions := DetectBranchLockCollisions(candidate)

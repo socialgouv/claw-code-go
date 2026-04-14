@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sync"
@@ -58,7 +58,7 @@ func NewStdioTransport(command string, args []string, env []string) (*StdioTrans
 	go func() {
 		scanner := bufio.NewScanner(stderrPipe)
 		for scanner.Scan() {
-			log.Printf("[MCP stderr %s] %s", command, scanner.Text())
+			slog.Debug("MCP server stderr", "command", command, "line", scanner.Text())
 		}
 	}()
 

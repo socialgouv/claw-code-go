@@ -55,13 +55,14 @@ func ExecuteExitPlanMode(planModeActive *bool, stateDir string) (string, error) 
 	}
 	*planModeActive = false
 	// managed reflects whether a state file existed (i.e. plan mode was persisted).
+	// Derived atomically from os.Remove result to avoid TOCTOU race.
 	managed := false
 	if stateDir != "" {
-		_, statErr := os.Stat(planModeStatePath(stateDir))
-		managed = statErr == nil
-		if err := clearPlanModeState(stateDir); err != nil {
+		existed, err := clearPlanModeState(stateDir)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "[plan_mode] warning: failed to clear plan mode state: %v\n", err)
 		}
+		managed = existed
 	}
 	return planModeResult("exit", managed, false, true, "Plan mode deactivated. Normal tool execution resumed.")
 }
@@ -109,13 +110,19 @@ func persistPlanMode(stateDir string, active bool) error {
 }
 
 // clearPlanModeState removes the persisted plan mode state file.
-func clearPlanModeState(stateDir string) error {
+// Returns (true, nil) if the file existed and was removed,
+// (false, nil) if the file did not exist, or (false, err) on other errors.
+// This atomic check-and-remove avoids TOCTOU races with os.Stat.
+func clearPlanModeState(stateDir string) (bool, error) {
 	path := planModeStatePath(stateDir)
 	err := os.Remove(path)
-	if os.IsNotExist(err) {
-		return nil
+	if err == nil {
+		return true, nil
 	}
-	return err
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // LoadPersistedPlanMode reads the persisted plan mode state from disk.

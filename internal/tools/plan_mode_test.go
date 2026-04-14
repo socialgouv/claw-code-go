@@ -139,3 +139,75 @@ func TestPlanModePersistence(t *testing.T) {
 		}
 	})
 }
+
+func TestExitPlanMode_ManagedFlag_DerivedFromRemove(t *testing.T) {
+	t.Run("persisted then exit yields managed=true", func(t *testing.T) {
+		dir := t.TempDir()
+		active := false
+
+		// Enter plan mode with persistence.
+		_, err := ExecuteEnterPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("enter: %v", err)
+		}
+
+		// Exit — file existed, so managed should be true.
+		out, err := ExecuteExitPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("exit: %v", err)
+		}
+
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if parsed["managed"] != true {
+			t.Errorf("expected managed=true, got %v", parsed["managed"])
+		}
+	})
+
+	t.Run("exit without persisting yields managed=false", func(t *testing.T) {
+		dir := t.TempDir()
+		active := true // Set active without persisting.
+
+		out, err := ExecuteExitPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("exit: %v", err)
+		}
+
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if parsed["managed"] != false {
+			t.Errorf("expected managed=false, got %v", parsed["managed"])
+		}
+	})
+
+	t.Run("double exit yields managed=false on second call", func(t *testing.T) {
+		dir := t.TempDir()
+		active := false
+
+		// Enter with persistence, then exit twice.
+		ExecuteEnterPlanMode(&active, dir)
+
+		// First exit removes the file.
+		active = true // re-arm since first exit cleared it
+		ExecuteExitPlanMode(&active, dir)
+
+		// Second exit — file already gone, clearPlanModeState returns (false, nil).
+		active = true
+		out, err := ExecuteExitPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("second exit: %v", err)
+		}
+
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if parsed["managed"] != false {
+			t.Errorf("expected managed=false on second exit, got %v", parsed["managed"])
+		}
+	})
+}
