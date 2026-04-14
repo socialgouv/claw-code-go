@@ -39,12 +39,21 @@ type SessionHandle struct {
 
 // ManagedSessionSummary is a lightweight summary of a managed session.
 type ManagedSessionSummary struct {
-	ID                  string
-	Path                string
+	ID   string
+	Path string
+	// ModifiedEpochMillis is the file modification time in milliseconds since
+	// the Unix epoch. Rust uses u128 but int64 covers 292 million years;
+	// this struct is never serialized so there is no wire-format impact.
 	ModifiedEpochMillis int64
 	MessageCount        int
-	ParentSessionID     string // empty if not forked
-	BranchName          string // empty if not a branch
+	// ParentSessionID is the session ID of the parent when this session was
+	// forked. Empty string when unset (Rust uses Option<String>). Idiomatic
+	// Go zero-value convention; struct is in-memory only.
+	ParentSessionID string
+	// BranchName is the human-readable branch label for forked sessions.
+	// Empty string when unset (Rust uses Option<String>). Idiomatic Go
+	// zero-value convention; struct is in-memory only.
+	BranchName string
 }
 
 // LoadedManagedSession wraps a fully loaded session with its handle.

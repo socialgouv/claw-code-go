@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -43,9 +44,9 @@ func TestPlanMode(t *testing.T) {
 		if active {
 			t.Fatal("expected active to be false")
 		}
-		if !strings.Contains(out, `"changed": false`) {
-			// When no stateDir, exit does not actually change settings, so changed=false.
-			// This is correct since there's no settings.local.json to modify.
+		// In-memory exit with active=true returns changed=true.
+		if !strings.Contains(out, `"changed": true`) {
+			t.Fatalf("expected changed=true in output, got %s", out)
 		}
 	})
 
@@ -244,7 +245,7 @@ func TestPlanModeEnrichedFields(t *testing.T) {
 		}
 	})
 
-	t.Run("enter from empty state has no previousLocalMode", func(t *testing.T) {
+	t.Run("enter from empty state has null previousLocalMode", func(t *testing.T) {
 		dir := t.TempDir()
 		active := false
 
@@ -256,8 +257,9 @@ func TestPlanModeEnrichedFields(t *testing.T) {
 		var parsed map[string]any
 		json.Unmarshal([]byte(out), &parsed)
 
-		if _, ok := parsed["previousLocalMode"]; ok {
-			t.Error("expected no previousLocalMode when entering from empty state")
+		// previousLocalMode should be present as null (typed struct always emits all keys).
+		if parsed["previousLocalMode"] != nil {
+			t.Errorf("expected previousLocalMode to be null, got %v", parsed["previousLocalMode"])
 		}
 
 		// currentLocalMode should be "plan" after entering.
@@ -322,7 +324,7 @@ func TestPlanModeEnrichedFields(t *testing.T) {
 		}
 	})
 
-	t.Run("exit from empty state omits previousLocalMode gracefully", func(t *testing.T) {
+	t.Run("exit from empty state has null previousLocalMode", func(t *testing.T) {
 		dir := t.TempDir()
 
 		// Enter from empty state (no settings.local.json).
@@ -337,14 +339,14 @@ func TestPlanModeEnrichedFields(t *testing.T) {
 		var parsed map[string]any
 		json.Unmarshal([]byte(out), &parsed)
 
-		// previousLocalMode should be absent (was nil before entering).
-		if _, ok := parsed["previousLocalMode"]; ok {
-			t.Error("expected no previousLocalMode when settings.local.json didn't exist before")
+		// previousLocalMode should be null (was nil before entering).
+		if parsed["previousLocalMode"] != nil {
+			t.Errorf("expected previousLocalMode to be null, got %v", parsed["previousLocalMode"])
 		}
 
-		// currentLocalMode should be absent (defaultMode was removed).
-		if _, ok := parsed["currentLocalMode"]; ok {
-			t.Errorf("expected no currentLocalMode after removing default, got %v", parsed["currentLocalMode"])
+		// currentLocalMode should be null (defaultMode was removed).
+		if parsed["currentLocalMode"] != nil {
+			t.Errorf("expected currentLocalMode to be null after removing default, got %v", parsed["currentLocalMode"])
 		}
 	})
 
@@ -363,6 +365,232 @@ func TestPlanModeEnrichedFields(t *testing.T) {
 
 		if parsed["success"] != true {
 			t.Error("expected success=true")
+		}
+	})
+}
+
+// TestPlanModeOutputShape verifies that the typed planModeOutput struct always
+// serializes all 10 keys, matching Rust's #[derive(Serialize)] behavior.
+func TestPlanModeOutputShape(t *testing.T) {
+	t.Run("output always contains all 10 keys", func(t *testing.T) {
+		dir := t.TempDir()
+		active := false
+
+		out, err := ExecuteEnterPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("enter: %v", err)
+		}
+
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(out), &raw); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		expectedKeys := []string{
+			"success", "operation", "changed", "active", "managed", "message",
+			"settingsPath", "statePath", "previousLocalMode", "currentLocalMode",
+		}
+		for _, key := range expectedKeys {
+			if _, ok := raw[key]; !ok {
+				t.Errorf("missing key %q in output JSON", key)
+			}
+		}
+
+		// Verify exact key count — no extra keys.
+		if len(raw) != len(expectedKeys) {
+			t.Errorf("expected %d keys, got %d", len(expectedKeys), len(raw))
+		}
+	})
+
+	t.Run("in-memory path (no stateDir) also contains all 10 keys", func(t *testing.T) {
+		active := false
+
+		out, err := ExecuteEnterPlanMode(&active, "")
+		if err != nil {
+			t.Fatalf("enter: %v", err)
+		}
+
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(out), &raw); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		expectedKeys := []string{
+			"success", "operation", "changed", "active", "managed", "message",
+			"settingsPath", "statePath", "previousLocalMode", "currentLocalMode",
+		}
+		for _, key := range expectedKeys {
+			if _, ok := raw[key]; !ok {
+				t.Errorf("missing key %q in output JSON", key)
+			}
+		}
+	})
+
+	t.Run("settingsPath/statePath are empty string when no stateDir", func(t *testing.T) {
+		active := false
+
+		out, err := ExecuteEnterPlanMode(&active, "")
+		if err != nil {
+			t.Fatalf("enter: %v", err)
+		}
+
+		var parsed map[string]any
+		json.Unmarshal([]byte(out), &parsed)
+
+		if parsed["settingsPath"] != "" {
+			t.Errorf("settingsPath = %v, want empty string", parsed["settingsPath"])
+		}
+		if parsed["statePath"] != "" {
+			t.Errorf("statePath = %v, want empty string", parsed["statePath"])
+		}
+	})
+
+	t.Run("previousLocalMode/currentLocalMode are null when unset", func(t *testing.T) {
+		active := false
+
+		out, err := ExecuteEnterPlanMode(&active, "")
+		if err != nil {
+			t.Fatalf("enter: %v", err)
+		}
+
+		var raw map[string]json.RawMessage
+		json.Unmarshal([]byte(out), &raw)
+
+		// null in JSON is the literal string "null".
+		if string(raw["previousLocalMode"]) != "null" {
+			t.Errorf("previousLocalMode = %s, want null", string(raw["previousLocalMode"]))
+		}
+	})
+
+	t.Run("populated previousLocalMode round-trips correctly", func(t *testing.T) {
+		dir := t.TempDir()
+
+		// Pre-set a local override.
+		settingsPath := filepath.Join(dir, "settings.local.json")
+		settingsData := `{"permissions": {"defaultMode": "acceptEdits"}}`
+		os.WriteFile(settingsPath, []byte(settingsData), 0o644)
+
+		active := false
+		out, err := ExecuteEnterPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("enter: %v", err)
+		}
+
+		// Verify the output round-trips through planModeOutput struct.
+		var roundTripped planModeOutput
+		if err := json.Unmarshal([]byte(out), &roundTripped); err != nil {
+			t.Fatalf("failed to unmarshal into planModeOutput: %v", err)
+		}
+		if roundTripped.PreviousLocalMode == nil {
+			t.Fatal("expected previousLocalMode to be non-nil")
+		}
+		var prevVal string
+		json.Unmarshal(*roundTripped.PreviousLocalMode, &prevVal)
+		if prevVal != "acceptEdits" {
+			t.Errorf("round-tripped previousLocalMode = %q, want 'acceptEdits'", prevVal)
+		}
+	})
+}
+
+// TestPlanModeErrorPropagation verifies that filesystem errors are properly
+// propagated rather than silently swallowed.
+func TestPlanModeErrorPropagation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based tests are unreliable on Windows")
+	}
+
+	t.Run("writePlanModeStateFile to read-only dir returns error", func(t *testing.T) {
+		dir := t.TempDir()
+		readOnlyDir := filepath.Join(dir, "readonly")
+		os.Mkdir(readOnlyDir, 0o755)
+		// Create the target path inside read-only dir.
+		targetPath := filepath.Join(readOnlyDir, "subdir", "state.json")
+		// Make the dir read-only so MkdirAll fails.
+		os.Chmod(readOnlyDir, 0o444)
+		defer os.Chmod(readOnlyDir, 0o755)
+
+		state := &planModeState{HadLocalOverride: false}
+		err := writePlanModeStateFile(targetPath, state)
+		if err == nil {
+			t.Fatal("expected error writing to read-only dir")
+		}
+	})
+
+	t.Run("setNestedValue to unwritable path returns error", func(t *testing.T) {
+		dir := t.TempDir()
+		readOnlyDir := filepath.Join(dir, "readonly")
+		os.Mkdir(readOnlyDir, 0o755)
+		targetPath := filepath.Join(readOnlyDir, "subdir", "settings.json")
+		os.Chmod(readOnlyDir, 0o444)
+		defer os.Chmod(readOnlyDir, 0o755)
+
+		err := setNestedValue(targetPath, []string{"key"}, "value")
+		if err == nil {
+			t.Fatal("expected error writing to read-only dir")
+		}
+	})
+
+	t.Run("clearPlanModeStateFile on nonexistent file returns nil", func(t *testing.T) {
+		err := clearPlanModeStateFile(filepath.Join(t.TempDir(), "does-not-exist.json"))
+		if err != nil {
+			t.Fatalf("expected nil for nonexistent file, got %v", err)
+		}
+	})
+
+	t.Run("clearPlanModeStateFile on read-only dir returns error", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create a file inside a directory, then make the directory read-only.
+		targetPath := filepath.Join(dir, "state.json")
+		os.WriteFile(targetPath, []byte("{}"), 0o644)
+		os.Chmod(dir, 0o444)
+		defer os.Chmod(dir, 0o755)
+
+		err := clearPlanModeStateFile(targetPath)
+		if err == nil {
+			t.Fatal("expected error removing file from read-only dir")
+		}
+	})
+
+	t.Run("ExecuteEnterPlanMode propagates write errors", func(t *testing.T) {
+		dir := t.TempDir()
+		// Make dir read-only so file creation fails.
+		os.Chmod(dir, 0o444)
+		defer os.Chmod(dir, 0o755)
+
+		active := false
+		_, err := ExecuteEnterPlanMode(&active, dir)
+		if err == nil {
+			t.Fatal("expected error from enter with read-only stateDir")
+		}
+		if !strings.Contains(err.Error(), "enter_plan_mode") {
+			t.Errorf("error should mention enter_plan_mode, got: %v", err)
+		}
+	})
+
+	t.Run("ExecuteExitPlanMode propagates write errors", func(t *testing.T) {
+		dir := t.TempDir()
+
+		// First enter successfully.
+		active := false
+		_, err := ExecuteEnterPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("enter: %v", err)
+		}
+
+		// Make only the settings file read-only (not the dir itself, so the
+		// state file can still be read — the dir needs execute permission).
+		// The exit path will successfully read the state file, then fail
+		// when trying to write the settings file.
+		settingsPath := filepath.Join(dir, "settings.local.json")
+		os.Chmod(settingsPath, 0o444)
+		defer os.Chmod(settingsPath, 0o644)
+
+		_, err = ExecuteExitPlanMode(&active, dir)
+		if err == nil {
+			t.Fatal("expected error from exit with read-only settings file")
+		}
+		if !strings.Contains(err.Error(), "exit_plan_mode") {
+			t.Errorf("error should mention exit_plan_mode, got: %v", err)
 		}
 	})
 }

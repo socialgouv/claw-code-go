@@ -896,12 +896,14 @@ func TestPlanModeOutputEnrichedFields(t *testing.T) {
 			t.Errorf("success = %v, want true", parsed["success"])
 		}
 
-		// Verify enriched fields (settingsPath, statePath, currentLocalMode).
-		// These are now included to match Rust's PlanModeOutput.
+		// Verify all 10 fields from Rust's PlanModeOutput are present.
+		// The typed planModeOutput struct always serializes all fields
+		// (previousLocalMode as null when unset, settingsPath/statePath as "").
 		expectedKeys := map[string]bool{
 			"success": true, "operation": true, "changed": true,
 			"active": true, "managed": true, "message": true,
-			"settingsPath": true, "statePath": true, "currentLocalMode": true,
+			"settingsPath": true, "statePath": true,
+			"previousLocalMode": true, "currentLocalMode": true,
 		}
 		for key := range parsed {
 			if !expectedKeys[key] {
