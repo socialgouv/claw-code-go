@@ -155,4 +155,27 @@ func TestSendUserMessage_Attachments(t *testing.T) {
 			t.Error("expected attachments field to be present")
 		}
 	})
+
+	t.Run("relative path resolves to absolute", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "rel.txt"), []byte("x"), 0o644)
+		origDir, _ := os.Getwd()
+		os.Chdir(dir)
+		defer os.Chdir(origDir)
+
+		out, err := ExecuteSendUserMessage(map[string]any{
+			"message":     "Rel",
+			"status":      "normal",
+			"attachments": []any{"rel.txt"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var parsed map[string]any
+		json.Unmarshal([]byte(out), &parsed)
+		att := parsed["attachments"].([]any)[0].(map[string]any)
+		if !filepath.IsAbs(att["path"].(string)) {
+			t.Errorf("expected absolute path, got %q", att["path"])
+		}
+	})
 }

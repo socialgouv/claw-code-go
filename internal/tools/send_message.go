@@ -73,8 +73,14 @@ func ExecuteSendUserMessage(input map[string]any) (string, error) {
 }
 
 // resolveAttachment canonicalizes a file path and returns attachment metadata.
+// filepath.Abs is required before EvalSymlinks because EvalSymlinks does not
+// guarantee an absolute result for relative inputs (unlike Rust's canonicalize).
 func resolveAttachment(path string) (*ResolvedAttachment, error) {
-	resolved, err := filepath.EvalSymlinks(path)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return nil, err
 	}
