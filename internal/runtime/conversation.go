@@ -5,6 +5,7 @@ import (
 	"claw-code-go/internal/api"
 	"claw-code-go/internal/apikit"
 	clawctx "claw-code-go/internal/context"
+	"claw-code-go/internal/lsp"
 	"claw-code-go/internal/mcp"
 	"claw-code-go/internal/permissions"
 	"claw-code-go/internal/runtime/task"
@@ -17,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 )
@@ -46,6 +48,8 @@ type ConversationLoop struct {
 	TeamRegistry   *team.TeamRegistry     // Team registry (may be nil)
 	CronRegistry   *team.CronRegistry     // Cron registry (may be nil)
 	WorkerRegistry *worker.WorkerRegistry // Worker registry (may be nil)
+	LspRegistry    *lsp.Registry          // LSP server registry (may be nil)
+	McpAuthState   *mcp.AuthState         // MCP auth state tracker (may be nil)
 
 	// PlanModeActive tracks whether plan mode is currently engaged.
 	PlanModeActive bool
@@ -116,6 +120,22 @@ func NewConversationLoop(cfg *Config, client api.APIClient) *ConversationLoop {
 			tools.AgentTool(),
 			tools.SkillTool(),
 			tools.ToolSearchTool(),
+			// Batch 3: worker tools
+			tools.WorkerCreateTool(),
+			tools.WorkerGetTool(),
+			tools.WorkerObserveTool(),
+			tools.WorkerResolveTrustTool(),
+			tools.WorkerAwaitReadyTool(),
+			tools.WorkerSendPromptTool(),
+			tools.WorkerRestartTool(),
+			tools.WorkerTerminateTool(),
+			tools.WorkerObserveCompletionTool(),
+			// Batch 3: LSP tool
+			tools.LspTool(),
+			// Batch 3: MCP resource/auth tools
+			tools.ListMcpResourcesTool(),
+			tools.ReadMcpResourceTool(),
+			tools.McpAuthTool(),
 		},
 		Permissions:    DefaultPermissions(),
 		Config:         cfg,
@@ -148,6 +168,15 @@ func (loop *ConversationLoop) workspaceRoot() string {
 	}
 	wd, _ := os.Getwd()
 	return wd
+}
+
+// planModeStateDir returns the directory for plan mode state persistence.
+// Returns empty string if no config directory is available.
+func (loop *ConversationLoop) planModeStateDir() string {
+	if loop.Config != nil && loop.Config.SessionDir != "" {
+		return filepath.Dir(loop.Config.SessionDir) // e.g. .claude/
+	}
+	return ""
 }
 
 // SystemPrompt returns the rendered system prompt for diagnostic use.
@@ -752,9 +781,9 @@ func (loop *ConversationLoop) ExecuteToolQuiet(name string, input map[string]any
 	case "structured_output":
 		result, err = tools.ExecuteStructuredOutput(input)
 	case "enter_plan_mode":
-		result, err = tools.ExecuteEnterPlanMode(&loop.PlanModeActive)
+		result, err = tools.ExecuteEnterPlanMode(&loop.PlanModeActive, loop.planModeStateDir())
 	case "exit_plan_mode":
-		result, err = tools.ExecuteExitPlanMode(&loop.PlanModeActive)
+		result, err = tools.ExecuteExitPlanMode(&loop.PlanModeActive, loop.planModeStateDir())
 	case "send_user_message":
 		result, err = tools.ExecuteSendUserMessage(input)
 	// --- Batch 2: task tools ---
@@ -800,6 +829,35 @@ func (loop *ConversationLoop) ExecuteToolQuiet(name string, input map[string]any
 		result, err = tools.ExecuteSkill(input, loop.workspaceRoot())
 	case "tool_search":
 		result, err = tools.ExecuteToolSearch(input, loop.allTools())
+	// --- Batch 3: worker tools ---
+	case "worker_create":
+		result, err = tools.ExecuteWorkerCreate(input, loop.WorkerRegistry)
+	case "worker_get":
+		result, err = tools.ExecuteWorkerGet(input, loop.WorkerRegistry)
+	case "worker_observe":
+		result, err = tools.ExecuteWorkerObserve(input, loop.WorkerRegistry)
+	case "worker_resolve_trust":
+		result, err = tools.ExecuteWorkerResolveTrust(input, loop.WorkerRegistry)
+	case "worker_await_ready":
+		result, err = tools.ExecuteWorkerAwaitReady(input, loop.WorkerRegistry)
+	case "worker_send_prompt":
+		result, err = tools.ExecuteWorkerSendPrompt(input, loop.WorkerRegistry)
+	case "worker_restart":
+		result, err = tools.ExecuteWorkerRestart(input, loop.WorkerRegistry)
+	case "worker_terminate":
+		result, err = tools.ExecuteWorkerTerminate(input, loop.WorkerRegistry)
+	case "worker_observe_completion":
+		result, err = tools.ExecuteWorkerObserveCompletion(input, loop.WorkerRegistry)
+	// --- Batch 3: LSP tool ---
+	case "lsp":
+		result, err = tools.ExecuteLSP(input, loop.LspRegistry)
+	// --- Batch 3: MCP resource/auth tools ---
+	case "list_mcp_resources":
+		result, err = tools.ExecuteListMcpResources(input, loop.MCPRegistry)
+	case "read_mcp_resource":
+		result, err = tools.ExecuteReadMcpResource(input, loop.MCPRegistry)
+	case "mcp_auth":
+		result, err = tools.ExecuteMcpAuth(input, loop.MCPRegistry, loop.McpAuthState)
 	default:
 		// Fall back to MCP registry.
 		if loop.MCPRegistry != nil {
@@ -1054,9 +1112,9 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 	case "structured_output":
 		result, err = tools.ExecuteStructuredOutput(input)
 	case "enter_plan_mode":
-		result, err = tools.ExecuteEnterPlanMode(&loop.PlanModeActive)
+		result, err = tools.ExecuteEnterPlanMode(&loop.PlanModeActive, loop.planModeStateDir())
 	case "exit_plan_mode":
-		result, err = tools.ExecuteExitPlanMode(&loop.PlanModeActive)
+		result, err = tools.ExecuteExitPlanMode(&loop.PlanModeActive, loop.planModeStateDir())
 	case "send_user_message":
 		result, err = tools.ExecuteSendUserMessage(input)
 	// --- Batch 2: task tools ---
@@ -1102,6 +1160,35 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 		result, err = tools.ExecuteSkill(input, loop.workspaceRoot())
 	case "tool_search":
 		result, err = tools.ExecuteToolSearch(input, loop.allTools())
+	// --- Batch 3: worker tools ---
+	case "worker_create":
+		result, err = tools.ExecuteWorkerCreate(input, loop.WorkerRegistry)
+	case "worker_get":
+		result, err = tools.ExecuteWorkerGet(input, loop.WorkerRegistry)
+	case "worker_observe":
+		result, err = tools.ExecuteWorkerObserve(input, loop.WorkerRegistry)
+	case "worker_resolve_trust":
+		result, err = tools.ExecuteWorkerResolveTrust(input, loop.WorkerRegistry)
+	case "worker_await_ready":
+		result, err = tools.ExecuteWorkerAwaitReady(input, loop.WorkerRegistry)
+	case "worker_send_prompt":
+		result, err = tools.ExecuteWorkerSendPrompt(input, loop.WorkerRegistry)
+	case "worker_restart":
+		result, err = tools.ExecuteWorkerRestart(input, loop.WorkerRegistry)
+	case "worker_terminate":
+		result, err = tools.ExecuteWorkerTerminate(input, loop.WorkerRegistry)
+	case "worker_observe_completion":
+		result, err = tools.ExecuteWorkerObserveCompletion(input, loop.WorkerRegistry)
+	// --- Batch 3: LSP tool ---
+	case "lsp":
+		result, err = tools.ExecuteLSP(input, loop.LspRegistry)
+	// --- Batch 3: MCP resource/auth tools ---
+	case "list_mcp_resources":
+		result, err = tools.ExecuteListMcpResources(input, loop.MCPRegistry)
+	case "read_mcp_resource":
+		result, err = tools.ExecuteReadMcpResource(input, loop.MCPRegistry)
+	case "mcp_auth":
+		result, err = tools.ExecuteMcpAuth(input, loop.MCPRegistry, loop.McpAuthState)
 	default:
 		// Try plugin tools first.
 		if loop.PluginRegistry != nil {

@@ -122,7 +122,6 @@ func AllowedToolsForSubagent(subagentType string) map[string]bool {
 		}
 		plan["todo_write"] = true
 		plan["send_user_message"] = true
-		plan["config"] = true
 		return plan
 	case "verification":
 		plan := AllowedToolsForSubagent("plan")

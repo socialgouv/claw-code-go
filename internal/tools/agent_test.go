@@ -86,6 +86,24 @@ func TestAllowedToolsForSubagent_General(t *testing.T) {
 	}
 }
 
+func TestAllowedToolsForSubagent_PlanNoConfig(t *testing.T) {
+	tools := AllowedToolsForSubagent("plan")
+	if tools == nil {
+		t.Fatal("expected non-nil tool set for plan")
+	}
+	// Plan should NOT include "config" (Rust parity).
+	if tools["config"] {
+		t.Error("plan subagent should NOT include 'config' tool (Rust parity)")
+	}
+	// Should include these.
+	expected := []string{"read_file", "todo_write", "send_user_message"}
+	for _, name := range expected {
+		if !tools[name] {
+			t.Errorf("expected %q in plan tools", name)
+		}
+	}
+}
+
 func TestValidateAgentInput(t *testing.T) {
 	input := map[string]any{
 		"description": "Fix the Login Bug",

@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -8,7 +11,7 @@ import (
 func TestPlanMode(t *testing.T) {
 	t.Run("enter plan mode sets active true", func(t *testing.T) {
 		active := false
-		out, err := ExecuteEnterPlanMode(&active)
+		out, err := ExecuteEnterPlanMode(&active, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -22,7 +25,7 @@ func TestPlanMode(t *testing.T) {
 
 	t.Run("enter plan mode when already active", func(t *testing.T) {
 		active := true
-		out, err := ExecuteEnterPlanMode(&active)
+		out, err := ExecuteEnterPlanMode(&active, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -33,7 +36,7 @@ func TestPlanMode(t *testing.T) {
 
 	t.Run("exit plan mode sets active false", func(t *testing.T) {
 		active := true
-		out, err := ExecuteExitPlanMode(&active)
+		out, err := ExecuteExitPlanMode(&active, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -47,7 +50,7 @@ func TestPlanMode(t *testing.T) {
 
 	t.Run("exit plan mode when not active", func(t *testing.T) {
 		active := false
-		out, err := ExecuteExitPlanMode(&active)
+		out, err := ExecuteExitPlanMode(&active, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -57,16 +60,82 @@ func TestPlanMode(t *testing.T) {
 	})
 
 	t.Run("enter nil pointer returns error", func(t *testing.T) {
-		_, err := ExecuteEnterPlanMode(nil)
+		_, err := ExecuteEnterPlanMode(nil, "")
 		if err == nil || !strings.Contains(err.Error(), "not available") {
 			t.Fatalf("expected nil pointer error, got %v", err)
 		}
 	})
 
 	t.Run("exit nil pointer returns error", func(t *testing.T) {
-		_, err := ExecuteExitPlanMode(nil)
+		_, err := ExecuteExitPlanMode(nil, "")
 		if err == nil || !strings.Contains(err.Error(), "not available") {
 			t.Fatalf("expected nil pointer error, got %v", err)
+		}
+	})
+}
+
+func TestPlanModePersistence(t *testing.T) {
+	t.Run("persist and load round-trip", func(t *testing.T) {
+		dir := t.TempDir()
+		active := false
+
+		// Enter plan mode with persistence.
+		_, err := ExecuteEnterPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("enter: %v", err)
+		}
+		if !active {
+			t.Fatal("expected active to be true")
+		}
+
+		// Verify state file exists.
+		statePath := filepath.Join(dir, "tool-state", "plan-mode.json")
+		data, err := os.ReadFile(statePath)
+		if err != nil {
+			t.Fatalf("failed to read state file: %v", err)
+		}
+		var state map[string]any
+		if err := json.Unmarshal(data, &state); err != nil {
+			t.Fatalf("failed to parse state: %v", err)
+		}
+		if state["active"] != true {
+			t.Errorf("expected active=true in persisted state, got %v", state["active"])
+		}
+
+		// Load persisted state.
+		loaded := LoadPersistedPlanMode(dir)
+		if !loaded {
+			t.Error("expected loaded plan mode to be true")
+		}
+	})
+
+	t.Run("exit clears persisted state", func(t *testing.T) {
+		dir := t.TempDir()
+		active := false
+
+		// Enter then exit.
+		ExecuteEnterPlanMode(&active, dir)
+		ExecuteExitPlanMode(&active, dir)
+
+		// Load should return false.
+		loaded := LoadPersistedPlanMode(dir)
+		if loaded {
+			t.Error("expected loaded plan mode to be false after exit")
+		}
+	})
+
+	t.Run("load from empty dir returns false", func(t *testing.T) {
+		dir := t.TempDir()
+		loaded := LoadPersistedPlanMode(dir)
+		if loaded {
+			t.Error("expected false from empty dir")
+		}
+	})
+
+	t.Run("load from empty string returns false", func(t *testing.T) {
+		loaded := LoadPersistedPlanMode("")
+		if loaded {
+			t.Error("expected false from empty string")
 		}
 	})
 }

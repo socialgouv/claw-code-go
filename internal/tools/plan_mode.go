@@ -4,6 +4,8 @@ import (
 	"claw-code-go/internal/api"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 )
 
 func EnterPlanModeTool() api.Tool {
@@ -28,7 +30,7 @@ func ExitPlanModeTool() api.Tool {
 	}
 }
 
-func ExecuteEnterPlanMode(planModeActive *bool) (string, error) {
+func ExecuteEnterPlanMode(planModeActive *bool, stateDir string) (string, error) {
 	if planModeActive == nil {
 		return "", fmt.Errorf("enter_plan_mode: plan mode state not available")
 	}
@@ -36,10 +38,15 @@ func ExecuteEnterPlanMode(planModeActive *bool) (string, error) {
 		return planModeResult(true, false, "Plan mode is already active")
 	}
 	*planModeActive = true
+	if stateDir != "" {
+		if err := persistPlanMode(stateDir, true); err != nil {
+			fmt.Fprintf(os.Stderr, "[plan_mode] warning: failed to persist plan mode: %v\n", err)
+		}
+	}
 	return planModeResult(true, true, "Plan mode activated. Tools will be described but not executed.")
 }
 
-func ExecuteExitPlanMode(planModeActive *bool) (string, error) {
+func ExecuteExitPlanMode(planModeActive *bool, stateDir string) (string, error) {
 	if planModeActive == nil {
 		return "", fmt.Errorf("exit_plan_mode: plan mode state not available")
 	}
@@ -47,6 +54,11 @@ func ExecuteExitPlanMode(planModeActive *bool) (string, error) {
 		return planModeResult(false, false, "Plan mode is not active")
 	}
 	*planModeActive = false
+	if stateDir != "" {
+		if err := clearPlanModeState(stateDir); err != nil {
+			fmt.Fprintf(os.Stderr, "[plan_mode] warning: failed to clear plan mode state: %v\n", err)
+		}
+	}
 	return planModeResult(false, true, "Plan mode deactivated. Normal tool execution resumed.")
 }
 
@@ -59,4 +71,53 @@ func planModeResult(active, changed bool, message string) (string, error) {
 	}
 	out, _ := json.MarshalIndent(result, "", "  ")
 	return string(out), nil
+}
+
+// planModeStatePath returns the path to the plan mode state file.
+func planModeStatePath(stateDir string) string {
+	return filepath.Join(stateDir, "tool-state", "plan-mode.json")
+}
+
+// persistPlanMode writes the plan mode state to disk.
+func persistPlanMode(stateDir string, active bool) error {
+	path := planModeStatePath(stateDir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	state := map[string]any{
+		"active": active,
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// clearPlanModeState removes the persisted plan mode state file.
+func clearPlanModeState(stateDir string) error {
+	path := planModeStatePath(stateDir)
+	err := os.Remove(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+// LoadPersistedPlanMode reads the persisted plan mode state from disk.
+// Returns false if stateDir is empty, the file doesn't exist, or can't be read.
+func LoadPersistedPlanMode(stateDir string) bool {
+	if stateDir == "" {
+		return false
+	}
+	data, err := os.ReadFile(planModeStatePath(stateDir))
+	if err != nil {
+		return false
+	}
+	var state map[string]any
+	if err := json.Unmarshal(data, &state); err != nil {
+		return false
+	}
+	active, _ := state["active"].(bool)
+	return active
 }
