@@ -38,11 +38,6 @@ func ExecuteSendUserMessage(input map[string]any) (string, error) {
 	if !ok || strings.TrimSpace(message) == "" {
 		return "", fmt.Errorf("send_user_message: 'message' is required and must not be empty")
 	}
-	status, _ := input["status"].(string)
-	if status == "" {
-		status = "normal"
-	}
-
 	var attachments []ResolvedAttachment
 	if paths, ok := input["attachments"].([]any); ok {
 		for _, p := range paths {
@@ -58,11 +53,11 @@ func ExecuteSendUserMessage(input map[string]any) (string, error) {
 		}
 	}
 
+	// Match Rust's BriefOutput: {message, attachments, sentAt} — status is NOT echoed.
 	// attachments is nil when no files were resolved (including empty input array).
 	// nil serializes as JSON null, matching Rust's Option<Vec<Attachment>> = None.
 	result := map[string]any{
 		"message":     message,
-		"status":      status,
 		"sentAt":      time.Now().UTC().Format(time.RFC3339),
 		"attachments": attachments,
 	}

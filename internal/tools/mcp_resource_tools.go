@@ -132,14 +132,14 @@ func ExecuteReadMcpResource(input map[string]any, registry *mcp.Registry) (strin
 		return string(out), nil
 	}
 
-	// Match Rust response shape: {server, uri, name, description, mime_type, content}
+	// Match Rust response shape: {server, uri, name, description, mime_type}.
+	// Content is available internally via McpResourceContent but excluded from tool output.
 	result := map[string]any{
 		"server":      server,
 		"uri":         resource.URI,
 		"name":        resource.Name,
 		"description": resource.Description,
 		"mime_type":   resource.MimeType,
-		"content":     resource.Content,
 	}
 	out, _ := json.MarshalIndent(result, "", "  ")
 	return string(out), nil

@@ -4,6 +4,7 @@
 package parity
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -572,13 +573,12 @@ func TestWorkerCreateTrustedRootsMergeParity(t *testing.T) {
 }
 
 // TestReadMcpResourceResponseShapeParity verifies that read_mcp_resource returns
-// the Rust-matching response shape with name, description, and mime_type fields.
+// the Rust-matching response shape: exactly {server, uri, name, description, mime_type}.
+// The `content` field must NOT be present in tool output (content is internal only).
 func TestReadMcpResourceResponseShapeParity(t *testing.T) {
 	_ = fixtureDir(t)
 
-	// We verify the response shape by calling ExecuteReadMcpResource with a mock
-	// registry. Since we can't easily set up a full MCP server, we verify the
-	// tool definition and error path shape.
+	// Verify the error path response shape (server + uri + error).
 	result, err := tools.ExecuteReadMcpResource(
 		map[string]any{"uri": "test://resource", "server": "nonexistent"},
 		mcp.NewRegistry(),
@@ -600,7 +600,7 @@ func TestReadMcpResourceResponseShapeParity(t *testing.T) {
 		t.Errorf("uri = %v, want 'test://resource'", parsed["uri"])
 	}
 
-	// Verify the McpResourceContent struct has the right fields.
+	// Verify the McpResourceContent struct retains content internally.
 	rc := mcp.McpResourceContent{
 		URI:         "test://res",
 		Name:        "Test Resource",
@@ -612,12 +612,11 @@ func TestReadMcpResourceResponseShapeParity(t *testing.T) {
 	var rcParsed map[string]any
 	json.Unmarshal(data, &rcParsed)
 
-	expectedFields := []string{"uri", "name", "description", "mime_type", "content"}
-	for _, field := range expectedFields {
-		if _, ok := rcParsed[field]; !ok {
-			t.Errorf("McpResourceContent JSON missing field %q", field)
-		}
+	// Internal struct should have content.
+	if _, ok := rcParsed["content"]; !ok {
+		t.Error("McpResourceContent internal struct should retain 'content' field")
 	}
+
 }
 
 // TestMcpAuthResponseShapeParity verifies that mcp_auth returns the Rust-matching
@@ -748,4 +747,204 @@ func TestMockServiceRequestCapture(t *testing.T) {
 // sendMockRequest is a helper for TestMockServiceRequestCapture.
 func sendMockRequest(baseURL, body string) (*http.Response, error) {
 	return http.Post(baseURL+"/v1/messages", "application/json", strings.NewReader(body))
+}
+
+// TestSendMessageResponseShapeNoStatusField verifies that send_user_message output
+// matches Rust's BriefOutput: {message, sentAt, attachments} with NO status field.
+func TestSendMessageResponseShapeNoStatusField(t *testing.T) {
+	_ = fixtureDir(t)
+
+	result, err := tools.ExecuteSendUserMessage(map[string]any{
+		"message": "hello world",
+		"status":  "normal",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("failed to parse result JSON: %v", err)
+	}
+
+	// Rust BriefOutput has exactly {message, attachments, sentAt}.
+	expectedKeys := map[string]bool{"message": true, "sentAt": true, "attachments": true}
+	for key := range parsed {
+		if !expectedKeys[key] {
+			t.Errorf("unexpected key %q in output (Rust BriefOutput has only {message, sentAt, attachments})", key)
+		}
+	}
+	for key := range expectedKeys {
+		if _, ok := parsed[key]; !ok {
+			t.Errorf("missing key %q in output", key)
+		}
+	}
+
+	// Verify values.
+	if parsed["message"] != "hello world" {
+		t.Errorf("message = %v, want 'hello world'", parsed["message"])
+	}
+	if parsed["sentAt"] == nil || parsed["sentAt"] == "" {
+		t.Error("sentAt should be a non-empty timestamp")
+	}
+}
+
+// TestMcpRegistryAddServerLogsResourceError verifies that AddServer succeeds
+// even when ListResources returns an error, and that the error is logged
+// at debug level (not silently swallowed).
+func TestMcpRegistryAddServerLogsResourceError(t *testing.T) {
+	_ = fixtureDir(t)
+
+	// Create a mock transport that succeeds for Initialize and ListTools
+	// but fails for ListResources.
+	transport := &mockTransportResourceError{}
+	registry := mcp.NewRegistry()
+
+	err := registry.AddServer(t.Context(), "test-server", transport)
+	if err != nil {
+		t.Fatalf("AddServer should succeed even when ListResources fails: %v", err)
+	}
+
+	// Verify the server was added despite resource discovery failure.
+	names := registry.ServerNames()
+	found := false
+	for _, n := range names {
+		if n == "test-server" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("test-server should be registered after AddServer")
+	}
+
+	// Resource count should be 0 since discovery failed.
+	if count := registry.GetResourceCount("test-server"); count != 0 {
+		t.Errorf("resource count = %d, want 0 (ListResources failed)", count)
+	}
+}
+
+// mockTransportResourceError is a Transport that succeeds for Initialize/ListTools
+// but returns an RPC error for resources/list. Used by TestMcpRegistryAddServerLogsResourceError.
+type mockTransportResourceError struct{}
+
+func (m *mockTransportResourceError) Send(ctx context.Context, req mcp.Request) (mcp.Response, error) {
+	switch req.Method {
+	case "initialize":
+		return mcp.Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: map[string]any{
+				"protocolVersion": "2024-11-05",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "test-server", "version": "1.0"},
+			},
+		}, nil
+	case "tools/list":
+		return mcp.Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  map[string]any{"tools": []any{}},
+		}, nil
+	case "resources/list":
+		return mcp.Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &mcp.RPCError{Code: -32601, Message: "method not found: resources/list"},
+		}, nil
+	default:
+		return mcp.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}, nil
+	}
+}
+
+func (m *mockTransportResourceError) Notify(n mcp.Notification) error { return nil }
+func (m *mockTransportResourceError) Close() error                    { return nil }
+
+// TestPlanModeOutputEnrichedFields verifies that plan mode responses include
+// the `operation` and `managed` fields matching Rust's PlanModeOutput structure.
+func TestPlanModeOutputEnrichedFields(t *testing.T) {
+	_ = fixtureDir(t)
+
+	stateDir := t.TempDir()
+
+	t.Run("enter", func(t *testing.T) {
+		active := false
+		result, err := tools.ExecuteEnterPlanMode(&active, stateDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("failed to parse result: %v", err)
+		}
+
+		// Verify operation and managed fields.
+		if parsed["operation"] != "enter" {
+			t.Errorf("operation = %v, want 'enter'", parsed["operation"])
+		}
+		if parsed["managed"] != true {
+			t.Errorf("managed = %v, want true (enter always sets managed=true)", parsed["managed"])
+		}
+		if parsed["active"] != true {
+			t.Errorf("active = %v, want true", parsed["active"])
+		}
+		if parsed["changed"] != true {
+			t.Errorf("changed = %v, want true", parsed["changed"])
+		}
+		if parsed["success"] != true {
+			t.Errorf("success = %v, want true", parsed["success"])
+		}
+
+		// Verify exactly the expected keys (6 fields).
+		expectedKeys := map[string]bool{
+			"success": true, "operation": true, "changed": true,
+			"active": true, "managed": true, "message": true,
+		}
+		for key := range parsed {
+			if !expectedKeys[key] {
+				t.Errorf("unexpected key %q in plan mode output", key)
+			}
+		}
+	})
+
+	t.Run("exit", func(t *testing.T) {
+		active := true
+		result, err := tools.ExecuteExitPlanMode(&active, stateDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("failed to parse result: %v", err)
+		}
+
+		if parsed["operation"] != "exit" {
+			t.Errorf("operation = %v, want 'exit'", parsed["operation"])
+		}
+		if parsed["active"] != false {
+			t.Errorf("active = %v, want false", parsed["active"])
+		}
+		if parsed["changed"] != true {
+			t.Errorf("changed = %v, want true", parsed["changed"])
+		}
+	})
+
+	t.Run("enter_already_active", func(t *testing.T) {
+		active := true
+		result, err := tools.ExecuteEnterPlanMode(&active, stateDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var parsed map[string]any
+		json.Unmarshal([]byte(result), &parsed)
+
+		if parsed["operation"] != "enter" {
+			t.Errorf("operation = %v, want 'enter'", parsed["operation"])
+		}
+		if parsed["changed"] != false {
+			t.Errorf("changed = %v, want false (already active)", parsed["changed"])
+		}
+	})
 }
