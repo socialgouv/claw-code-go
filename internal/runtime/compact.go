@@ -245,7 +245,7 @@ func CompactSession(ctx context.Context, client api.APIClient, cfg *Config, sess
 	newMessages = append(newMessages, continuationMsg)
 	newMessages = append(newMessages, recent...)
 
-	session.CompactionSummary = mergedSummary
+	session.CompactionSummary = CompressSummaryText(mergedSummary)
 	session.CompactionCount++
 	session.Messages = newMessages
 
@@ -492,8 +492,10 @@ func CompactSessionPure(messages []api.Message, cfg CompactionConfig) *Compactio
 
 	removedCount := len(messages) - len(recent)
 
+	compressedSummary := CompressSummaryText(mergedSummary)
+
 	return &CompactionResult{
-		Summary:             mergedSummary,
+		Summary:             compressedSummary,
 		FormattedSummary:    formatted,
 		CompactedMessages:   newMessages,
 		RemovedMessageCount: removedCount,
