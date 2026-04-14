@@ -30,52 +30,167 @@ func ExitPlanModeTool() api.Tool {
 	}
 }
 
+// planModeState is the persisted state for plan mode, tracking whether a local
+// override existed before entering plan mode and what value it had.
+type planModeState struct {
+	HadLocalOverride  bool             `json:"hadLocalOverride"`
+	PreviousLocalMode *json.RawMessage `json:"previousLocalMode,omitempty"`
+}
+
+// permissionDefaultModePath is the JSON path to the permissions.defaultMode
+// setting in settings.local.json.
+var permissionDefaultModePath = []string{"permissions", "defaultMode"}
+
 func ExecuteEnterPlanMode(planModeActive *bool, stateDir string) (string, error) {
 	if planModeActive == nil {
 		return "", fmt.Errorf("enter_plan_mode: plan mode state not available")
 	}
-	if *planModeActive {
-		return planModeResult("enter", true, true, false, "Plan mode is already active")
-	}
-	*planModeActive = true
-	if stateDir != "" {
-		if err := persistPlanMode(stateDir, true); err != nil {
-			fmt.Fprintf(os.Stderr, "[plan_mode] warning: failed to persist plan mode: %v\n", err)
+
+	settingsPath := settingsLocalPath(stateDir)
+	statePath := planModeStatePath(stateDir)
+
+	// Read current local mode from settings.local.json.
+	currentLocalMode := readNestedValue(settingsPath, permissionDefaultModePath)
+	currentIsPlan := isStringValue(currentLocalMode, "plan")
+
+	// If already active (either via in-memory flag or settings), handle idempotently.
+	if *planModeActive || currentIsPlan {
+		if stateDir == "" {
+			// No stateDir — use simple in-memory semantics.
+			return planModeResult("enter", true, true, false,
+				"Plan mode is already active",
+				"", "", nil, nil,
+			)
 		}
+		// Check if we have a state file (managed by us).
+		existingState := readPlanModeStateFile(statePath)
+		if currentIsPlan && existingState != nil {
+			// Already active and managed by us.
+			return planModeResult("enter", true, true, false,
+				"Plan mode override is already active for this worktree.",
+				settingsPath, statePath, existingState.PreviousLocalMode, currentLocalMode,
+			)
+		}
+		if currentIsPlan {
+			// Already plan mode but not managed by us.
+			return planModeResult("enter", false, true, false,
+				"Worktree-local plan mode is already enabled outside EnterPlanMode; leaving it unchanged.",
+				settingsPath, statePath, nil, currentLocalMode,
+			)
+		}
+		// planModeActive is true but settings don't reflect plan mode.
+		// Fall through to set it up properly.
 	}
-	return planModeResult("enter", true, true, true, "Plan mode activated. Tools will be described but not executed.")
+
+	// Save state before mutation.
+	state := planModeState{
+		HadLocalOverride:  currentLocalMode != nil,
+		PreviousLocalMode: rawMessagePtr(currentLocalMode),
+	}
+	if stateDir != "" {
+		writePlanModeStateFile(statePath, &state)
+	}
+
+	// Set plan mode in settings.local.json.
+	if stateDir != "" {
+		setNestedValue(settingsPath, permissionDefaultModePath, "plan")
+	}
+
+	*planModeActive = true
+
+	// Re-read current local mode after mutation.
+	newLocalMode := readNestedValue(settingsPath, permissionDefaultModePath)
+
+	return planModeResult("enter", true, true, true,
+		"Enabled worktree-local plan mode override.",
+		settingsPath, statePath, state.PreviousLocalMode, newLocalMode,
+	)
 }
 
 func ExecuteExitPlanMode(planModeActive *bool, stateDir string) (string, error) {
 	if planModeActive == nil {
 		return "", fmt.Errorf("exit_plan_mode: plan mode state not available")
 	}
-	if !*planModeActive {
-		return planModeResult("exit", false, false, false, "Plan mode is not active")
-	}
-	*planModeActive = false
-	// managed reflects whether a state file existed (i.e. plan mode was persisted).
-	// Derived atomically from os.Remove result to avoid TOCTOU race.
-	managed := false
-	if stateDir != "" {
-		existed, err := clearPlanModeState(stateDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[plan_mode] warning: failed to clear plan mode state: %v\n", err)
+
+	// Simple in-memory path when no stateDir is configured.
+	if stateDir == "" {
+		if !*planModeActive {
+			return planModeResult("exit", false, false, false,
+				"Plan mode is not active",
+				"", "", nil, nil,
+			)
 		}
-		managed = existed
+		*planModeActive = false
+		return planModeResult("exit", false, false, true,
+			"Plan mode deactivated. Normal tool execution resumed.",
+			"", "", nil, nil,
+		)
 	}
-	return planModeResult("exit", managed, false, true, "Plan mode deactivated. Normal tool execution resumed.")
+
+	settingsPath := settingsLocalPath(stateDir)
+	statePath := planModeStatePath(stateDir)
+
+	currentLocalMode := readNestedValue(settingsPath, permissionDefaultModePath)
+	currentIsPlan := isStringValue(currentLocalMode, "plan")
+
+	// Read existing state file.
+	existingState := readPlanModeStateFile(statePath)
+
+	if existingState == nil {
+		// No state file — not managed by us.
+		if !*planModeActive && !currentIsPlan {
+			return planModeResult("exit", false, false, false,
+				"No EnterPlanMode override is active for this worktree.",
+				settingsPath, statePath, nil, currentLocalMode,
+			)
+		}
+		*planModeActive = false
+		return planModeResult("exit", false, currentIsPlan, false,
+			"No EnterPlanMode override is active for this worktree.",
+			settingsPath, statePath, nil, currentLocalMode,
+		)
+	}
+
+	if !currentIsPlan {
+		// State exists but plan mode is not active — stale state, clean up.
+		clearPlanModeStateFile(statePath)
+		*planModeActive = false
+		return planModeResult("exit", false, false, false,
+			"Cleared stale EnterPlanMode state because plan mode was already changed outside the tool.",
+			settingsPath, statePath, existingState.PreviousLocalMode, currentLocalMode,
+		)
+	}
+
+	// Restore prior settings (stateDir is guaranteed non-empty here).
+	if existingState.HadLocalOverride && existingState.PreviousLocalMode != nil {
+		var prevValue any
+		if json.Unmarshal(*existingState.PreviousLocalMode, &prevValue) == nil {
+			setNestedValue(settingsPath, permissionDefaultModePath, prevValue)
+		} else {
+			removeNestedValue(settingsPath, permissionDefaultModePath)
+		}
+	} else {
+		removeNestedValue(settingsPath, permissionDefaultModePath)
+	}
+
+	clearPlanModeStateFile(statePath)
+	*planModeActive = false
+
+	newLocalMode := readNestedValue(settingsPath, permissionDefaultModePath)
+
+	return planModeResult("exit", false, false, true,
+		"Restored the prior worktree-local plan mode setting.",
+		settingsPath, statePath, existingState.PreviousLocalMode, newLocalMode,
+	)
 }
 
 // planModeResult builds the JSON response for plan mode operations.
-//
-// Go intentionally uses simplified plan-mode.json persistence ({active: bool})
-// rather than Rust's settings.local.json mutation with {hadLocalOverride,
-// previousLocalMode}. The 4 path/mode fields (settingsPath, statePath,
-// previousLocalMode, currentLocalMode) are omitted because Go's simplified
-// persistence does not track settings.local.json paths. This avoids coupling
-// to the settings file format and simplifies the restore path.
-func planModeResult(operation string, managed, active, changed bool, message string) (string, error) {
+// Includes the 4 enriched fields matching Rust's PlanModeOutput:
+// settingsPath, statePath, previousLocalMode, currentLocalMode.
+func planModeResult(operation string, managed, active, changed bool, message string,
+	settingsPath, statePath string,
+	previousLocalMode *json.RawMessage, currentLocalMode *json.RawMessage,
+) (string, error) {
 	result := map[string]any{
 		"success":   true,
 		"operation": operation,
@@ -84,61 +199,235 @@ func planModeResult(operation string, managed, active, changed bool, message str
 		"managed":   managed,
 		"message":   message,
 	}
+
+	// Include enriched fields when paths are available.
+	if settingsPath != "" {
+		result["settingsPath"] = settingsPath
+	}
+	if statePath != "" {
+		result["statePath"] = statePath
+	}
+	if previousLocalMode != nil {
+		var v any
+		if json.Unmarshal(*previousLocalMode, &v) == nil {
+			result["previousLocalMode"] = v
+		}
+	}
+	if currentLocalMode != nil {
+		var v any
+		if json.Unmarshal(*currentLocalMode, &v) == nil {
+			result["currentLocalMode"] = v
+		}
+	}
+
 	out, _ := json.MarshalIndent(result, "", "  ")
 	return string(out), nil
 }
 
 // planModeStatePath returns the path to the plan mode state file.
 func planModeStatePath(stateDir string) string {
+	if stateDir == "" {
+		return ""
+	}
 	return filepath.Join(stateDir, "tool-state", "plan-mode.json")
 }
 
-// persistPlanMode writes the plan mode state to disk.
-func persistPlanMode(stateDir string, active bool) error {
-	path := planModeStatePath(stateDir)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+// settingsLocalPath returns the path to settings.local.json.
+func settingsLocalPath(stateDir string) string {
+	if stateDir == "" {
+		return ""
 	}
-	state := map[string]any{
-		"active": active,
-	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
-}
-
-// clearPlanModeState removes the persisted plan mode state file.
-// Returns (true, nil) if the file existed and was removed,
-// (false, nil) if the file did not exist, or (false, err) on other errors.
-// This atomic check-and-remove avoids TOCTOU races with os.Stat.
-func clearPlanModeState(stateDir string) (bool, error) {
-	path := planModeStatePath(stateDir)
-	err := os.Remove(path)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
+	return filepath.Join(stateDir, "settings.local.json")
 }
 
 // LoadPersistedPlanMode reads the persisted plan mode state from disk.
-// Returns false if stateDir is empty, the file doesn't exist, or can't be read.
+// Returns true if a state file exists (indicating plan mode was entered
+// via ExecuteEnterPlanMode). Returns false if stateDir is empty, the file
+// doesn't exist, or can't be read.
 func LoadPersistedPlanMode(stateDir string) bool {
 	if stateDir == "" {
 		return false
 	}
-	data, err := os.ReadFile(planModeStatePath(stateDir))
+	return readPlanModeStateFile(planModeStatePath(stateDir)) != nil
+}
+
+// --- Settings file helpers ---
+
+// readNestedValue reads a nested JSON value from a file at the given path.
+// Returns nil if the file doesn't exist or the path doesn't exist in the JSON.
+func readNestedValue(filePath string, jsonPath []string) *json.RawMessage {
+	if filePath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filePath)
 	if err != nil {
+		return nil
+	}
+	var doc map[string]any
+	if json.Unmarshal(data, &doc) != nil {
+		return nil
+	}
+	val := getNestedValueFromMap(doc, jsonPath)
+	if val == nil {
+		return nil
+	}
+	raw, err := json.Marshal(val)
+	if err != nil {
+		return nil
+	}
+	rm := json.RawMessage(raw)
+	return &rm
+}
+
+// setNestedValue sets a nested JSON value in a file at the given path.
+func setNestedValue(filePath string, jsonPath []string, value any) {
+	if filePath == "" || len(jsonPath) == 0 {
+		return
+	}
+	var doc map[string]any
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		doc = make(map[string]any)
+	} else if json.Unmarshal(data, &doc) != nil {
+		doc = make(map[string]any)
+	}
+
+	setNestedValueInMap(doc, jsonPath, value)
+
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return
+	}
+	os.MkdirAll(filepath.Dir(filePath), 0o755)
+	os.WriteFile(filePath, out, 0o644)
+}
+
+// removeNestedValue removes a nested JSON value from a file.
+func removeNestedValue(filePath string, jsonPath []string) {
+	if filePath == "" || len(jsonPath) == 0 {
+		return
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return
+	}
+	var doc map[string]any
+	if json.Unmarshal(data, &doc) != nil {
+		return
+	}
+	removeNestedValueFromMap(doc, jsonPath)
+
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(filePath, out, 0o644)
+}
+
+func getNestedValueFromMap(m map[string]any, path []string) any {
+	if len(path) == 0 {
+		return nil
+	}
+	val, ok := m[path[0]]
+	if !ok {
+		return nil
+	}
+	if len(path) == 1 {
+		return val
+	}
+	sub, ok := val.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return getNestedValueFromMap(sub, path[1:])
+}
+
+func setNestedValueInMap(m map[string]any, path []string, value any) {
+	if len(path) == 0 {
+		return
+	}
+	if len(path) == 1 {
+		m[path[0]] = value
+		return
+	}
+	sub, ok := m[path[0]].(map[string]any)
+	if !ok {
+		sub = make(map[string]any)
+		m[path[0]] = sub
+	}
+	setNestedValueInMap(sub, path[1:], value)
+}
+
+func removeNestedValueFromMap(m map[string]any, path []string) {
+	if len(path) == 0 {
+		return
+	}
+	if len(path) == 1 {
+		delete(m, path[0])
+		return
+	}
+	sub, ok := m[path[0]].(map[string]any)
+	if !ok {
+		return
+	}
+	removeNestedValueFromMap(sub, path[1:])
+}
+
+// readPlanModeStateFile reads the plan mode state file.
+func readPlanModeStateFile(path string) *planModeState {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var state planModeState
+	if json.Unmarshal(data, &state) != nil {
+		return nil
+	}
+	return &state
+}
+
+// writePlanModeStateFile writes the plan mode state file.
+func writePlanModeStateFile(path string, state *planModeState) {
+	if path == "" {
+		return
+	}
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(path, data, 0o644)
+}
+
+// clearPlanModeStateFile removes the plan mode state file.
+func clearPlanModeStateFile(path string) {
+	if path == "" {
+		return
+	}
+	os.Remove(path)
+}
+
+// isStringValue checks if a json.RawMessage contains a specific string value.
+func isStringValue(rm *json.RawMessage, expected string) bool {
+	if rm == nil {
 		return false
 	}
-	var state map[string]any
-	if err := json.Unmarshal(data, &state); err != nil {
+	var s string
+	if json.Unmarshal(*rm, &s) != nil {
 		return false
 	}
-	active, _ := state["active"].(bool)
-	return active
+	return s == expected
+}
+
+// rawMessagePtr returns a defensive copy of a *json.RawMessage.
+func rawMessagePtr(rm *json.RawMessage) *json.RawMessage {
+	if rm == nil {
+		return nil
+	}
+	cp := make(json.RawMessage, len(*rm))
+	copy(cp, *rm)
+	return &cp
 }

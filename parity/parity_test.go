@@ -860,7 +860,8 @@ func (m *mockTransportResourceError) Notify(n mcp.Notification) error { return n
 func (m *mockTransportResourceError) Close() error                    { return nil }
 
 // TestPlanModeOutputEnrichedFields verifies that plan mode responses include
-// the `operation` and `managed` fields matching Rust's PlanModeOutput structure.
+// the enriched fields matching Rust's PlanModeOutput structure:
+// operation, managed, settingsPath, statePath, previousLocalMode, currentLocalMode.
 func TestPlanModeOutputEnrichedFields(t *testing.T) {
 	_ = fixtureDir(t)
 
@@ -878,7 +879,7 @@ func TestPlanModeOutputEnrichedFields(t *testing.T) {
 			t.Fatalf("failed to parse result: %v", err)
 		}
 
-		// Verify operation and managed fields.
+		// Verify core fields.
 		if parsed["operation"] != "enter" {
 			t.Errorf("operation = %v, want 'enter'", parsed["operation"])
 		}
@@ -895,15 +896,22 @@ func TestPlanModeOutputEnrichedFields(t *testing.T) {
 			t.Errorf("success = %v, want true", parsed["success"])
 		}
 
-		// Verify exactly the expected keys (6 fields).
+		// Verify enriched fields (settingsPath, statePath, currentLocalMode).
+		// These are now included to match Rust's PlanModeOutput.
 		expectedKeys := map[string]bool{
 			"success": true, "operation": true, "changed": true,
 			"active": true, "managed": true, "message": true,
+			"settingsPath": true, "statePath": true, "currentLocalMode": true,
 		}
 		for key := range parsed {
 			if !expectedKeys[key] {
 				t.Errorf("unexpected key %q in plan mode output", key)
 			}
+		}
+
+		// Verify enriched field values.
+		if parsed["currentLocalMode"] != "plan" {
+			t.Errorf("currentLocalMode = %v, want 'plan'", parsed["currentLocalMode"])
 		}
 	})
 
@@ -930,8 +938,12 @@ func TestPlanModeOutputEnrichedFields(t *testing.T) {
 		}
 	})
 
-	t.Run("enter_already_active", func(t *testing.T) {
-		active := true
+	t.Run("enter_already_active_via_settings", func(t *testing.T) {
+		// Re-enter plan mode (from fresh state after exit).
+		active := false
+		tools.ExecuteEnterPlanMode(&active, stateDir)
+
+		// Second enter while already active → changed=false.
 		result, err := tools.ExecuteEnterPlanMode(&active, stateDir)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

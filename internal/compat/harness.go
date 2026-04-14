@@ -113,22 +113,45 @@ func RunDumpManifests(args []string) {
 	}
 }
 
+// phaseDescription maps each typed BootstrapPhaseType to a human-readable
+// description for bootstrap-plan output.
+var phaseDescription = map[BootstrapPhaseType]string{
+	PhaseCliEntry:                  "Initial CLI entry point and argument parsing",
+	PhaseFastPathVersion:           "Fast path for --version flag (exit early)",
+	PhaseStartupProfiler:           "Start profiling and timing instrumentation",
+	PhaseSystemPromptFastPath:      "Fast path for system prompt rendering (exit early if --print-system-prompt)",
+	PhaseChromeMcpFastPath:         "Fast path for Chrome MCP server launch",
+	PhaseDaemonWorkerFastPath:      "Fast path for daemon worker process boot",
+	PhaseBridgeFastPath:            "Fast path for bridge mode subprocess",
+	PhaseDaemonFastPath:            "Fast path for daemon process boot",
+	PhaseBackgroundSessionFastPath: "Fast path for background session launch",
+	PhaseTemplateFastPath:          "Fast path for template rendering (exit early if --template)",
+	PhaseEnvironmentRunnerFastPath: "Fast path for environment runner process",
+	PhaseMainRuntime:               "Main runtime: config, credentials, provider, conversation loop, MCP, session, UI",
+}
+
 // RunBootstrapPlan implements the bootstrap-plan subcommand.
-// It prints the ordered startup phase plan.
+// It prints the ordered startup phase plan using the typed BootstrapPhaseType enum.
 func RunBootstrapPlan(args []string) {
 	fs := flag.NewFlagSet("bootstrap-plan", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "Output as JSON")
 	_ = fs.Parse(args)
 
-	phases := []BootstrapPhase{
-		{1, "Config", "Load configuration from environment variables and defaults (model, session dir, provider settings)"},
-		{2, "Credentials", "Resolve provider credentials (API key or OAuth token) via multi-provider auth store; fall back gracefully if none found"},
-		{3, "Provider Client", "Create the appropriate provider API client (Anthropic, OpenAI, Bedrock, Vertex, Foundry) or a no-auth placeholder"},
-		{4, "Conversation Loop", "Initialize ConversationLoop with built-in tools: bash, read_file, write_file, glob, grep"},
-		{5, "Permission Manager", "Set up permission manager with configured mode (default, accept-edits, bypass, plan) and ruleset from .claude/settings.json"},
-		{6, "MCP Servers", "Connect to Model Context Protocol servers defined in config (stdio and SSE transports)"},
-		{7, "Session", "Load existing session from disk if --session flag provided; merge into conversation loop"},
-		{8, "UI Launch", "Start Bubble Tea TUI (interactive mode) or execute single --prompt (non-interactive streaming mode)"},
+	plan := ClaudeCodeDefault()
+	typedPhases := plan.Phases()
+
+	// Build output-friendly slice.
+	phases := make([]BootstrapPhase, len(typedPhases))
+	for i, p := range typedPhases {
+		desc := phaseDescription[p]
+		if desc == "" {
+			desc = "No description available"
+		}
+		phases[i] = BootstrapPhase{
+			Phase:       i + 1,
+			Name:        p.String(),
+			Description: desc,
+		}
 	}
 
 	if *jsonOut {
