@@ -137,6 +137,16 @@ func (r *Registry) ServerTools(name string) []MCPTool {
 	return nil
 }
 
+// CallTool finds the server owning the named tool and calls it.
+// This is the Registry-level active execution bridge (Rust parity).
+func (r *Registry) CallTool(ctx context.Context, toolName string, arguments map[string]any) (MCPToolResult, error) {
+	client, _, ok := r.FindTool(toolName)
+	if !ok {
+		return MCPToolResult{}, fmt.Errorf("mcp registry: tool %q not found on any server", toolName)
+	}
+	return client.CallTool(ctx, toolName, arguments)
+}
+
 // Disconnect closes and removes the named server.
 func (r *Registry) Disconnect(name string) error {
 	r.mu.Lock()

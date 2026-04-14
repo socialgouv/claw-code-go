@@ -7,6 +7,9 @@ import (
 	clawctx "claw-code-go/internal/context"
 	"claw-code-go/internal/mcp"
 	"claw-code-go/internal/permissions"
+	"claw-code-go/internal/runtime/task"
+	"claw-code-go/internal/runtime/team"
+	"claw-code-go/internal/runtime/worker"
 	"claw-code-go/internal/tools"
 	"claw-code-go/internal/usage"
 	"claw-code-go/plugin"
@@ -38,6 +41,15 @@ type ConversationLoop struct {
 	HookRunner      *hooks.HookRunner      // Hook runner (may be nil; wired from config + plugin hooks)
 	CommandRegistry interface{}            // Slash command registry (may be nil; *commands.Registry)
 
+	// --- Batch 2: registries for CRUD tools ---
+	TaskRegistry   *task.Registry         // Task registry (may be nil)
+	TeamRegistry   *team.TeamRegistry     // Team registry (may be nil)
+	CronRegistry   *team.CronRegistry     // Cron registry (may be nil)
+	WorkerRegistry *worker.WorkerRegistry // Worker registry (may be nil)
+
+	// PlanModeActive tracks whether plan mode is currently engaged.
+	PlanModeActive bool
+
 	// toolCallCount is the number of tool_use blocks executed in this session.
 	// Incremented atomically in ExecuteTool for goroutine safety (Rust parity:
 	// pending_tool_use_count is tracked per-turn; we track cumulative for the
@@ -63,6 +75,7 @@ func NewConversationLoop(cfg *Config, client api.APIClient) *ConversationLoop {
 		Client:  client,
 		Session: NewSession(),
 		Tools: []api.Tool{
+			// Original 10 tools
 			tools.BashTool(),
 			tools.ReadFileTool(),
 			tools.WriteFileTool(),
@@ -73,11 +86,45 @@ func NewConversationLoop(cfg *Config, client api.APIClient) *ConversationLoop {
 			tools.WebSearchTool(),
 			tools.AskUserQuestionTool(),
 			tools.TodoWriteTool(),
+			// Batch 2: simple stateless tools
+			tools.SleepTool(),
+			tools.ConfigTool(),
+			tools.REPLTool(),
+			tools.NotebookEditTool(),
+			tools.StructuredOutputTool(),
+			tools.EnterPlanModeTool(),
+			tools.ExitPlanModeTool(),
+			tools.SendUserMessageTool(),
+			// Batch 2: registry-backed CRUD tools
+			tools.TaskCreateTool(),
+			tools.TaskGetTool(),
+			tools.TaskListTool(),
+			tools.TaskOutputTool(),
+			tools.TaskStopTool(),
+			tools.TaskUpdateTool(),
+			tools.RunTaskPacketTool(),
+			tools.TeamCreateTool(),
+			tools.TeamGetTool(),
+			tools.TeamListTool(),
+			tools.TeamDeleteTool(),
+			tools.CronCreateTool(),
+			tools.CronGetTool(),
+			tools.CronListTool(),
+			tools.CronDeleteTool(),
+			tools.RemoteTriggerTool(),
+			// Batch 2: orchestration tools
+			tools.AgentTool(),
+			tools.SkillTool(),
+			tools.ToolSearchTool(),
 		},
-		Permissions:  DefaultPermissions(),
-		Config:       cfg,
-		CtxAssembler: clawctx.NewAssembler(workDir),
-		Usage:        usage.NewTracker(cfg.Model),
+		Permissions:    DefaultPermissions(),
+		Config:         cfg,
+		CtxAssembler:   clawctx.NewAssembler(workDir),
+		Usage:          usage.NewTracker(cfg.Model),
+		TaskRegistry:   task.NewRegistry(),
+		TeamRegistry:   team.NewTeamRegistry(),
+		CronRegistry:   team.NewCronRegistry(),
+		WorkerRegistry: worker.NewWorkerRegistry(),
 	}
 }
 
@@ -693,6 +740,66 @@ func (loop *ConversationLoop) ExecuteToolQuiet(name string, input map[string]any
 		}
 	case "todo_write":
 		result, err = tools.ExecuteTodoWrite(input)
+	// --- Batch 2: simple stateless tools ---
+	case "sleep":
+		result, err = tools.ExecuteSleep(input)
+	case "config":
+		result, err = tools.ExecuteConfig(input, loop.configMap())
+	case "repl":
+		result, err = tools.ExecuteREPL(input)
+	case "notebook_edit":
+		result, err = tools.ExecuteNotebookEdit(input)
+	case "structured_output":
+		result, err = tools.ExecuteStructuredOutput(input)
+	case "enter_plan_mode":
+		result, err = tools.ExecuteEnterPlanMode(&loop.PlanModeActive)
+	case "exit_plan_mode":
+		result, err = tools.ExecuteExitPlanMode(&loop.PlanModeActive)
+	case "send_user_message":
+		result, err = tools.ExecuteSendUserMessage(input)
+	// --- Batch 2: task tools ---
+	case "task_create":
+		result, err = tools.ExecuteTaskCreate(input, loop.TaskRegistry)
+	case "task_get":
+		result, err = tools.ExecuteTaskGet(input, loop.TaskRegistry)
+	case "task_list":
+		result, err = tools.ExecuteTaskList(input, loop.TaskRegistry)
+	case "task_output":
+		result, err = tools.ExecuteTaskOutput(input, loop.TaskRegistry)
+	case "task_stop":
+		result, err = tools.ExecuteTaskStop(input, loop.TaskRegistry)
+	case "task_update":
+		result, err = tools.ExecuteTaskUpdate(input, loop.TaskRegistry)
+	case "run_task_packet":
+		result, err = tools.ExecuteRunTaskPacket(input, loop.TaskRegistry)
+	// --- Batch 2: team tools ---
+	case "team_create":
+		result, err = tools.ExecuteTeamCreate(input, loop.TeamRegistry)
+	case "team_get":
+		result, err = tools.ExecuteTeamGet(input, loop.TeamRegistry)
+	case "team_list":
+		result, err = tools.ExecuteTeamList(input, loop.TeamRegistry)
+	case "team_delete":
+		result, err = tools.ExecuteTeamDelete(input, loop.TeamRegistry)
+	// --- Batch 2: cron tools ---
+	case "cron_create":
+		result, err = tools.ExecuteCronCreate(input, loop.CronRegistry)
+	case "cron_get":
+		result, err = tools.ExecuteCronGet(input, loop.CronRegistry)
+	case "cron_list":
+		result, err = tools.ExecuteCronList(input, loop.CronRegistry)
+	case "cron_delete":
+		result, err = tools.ExecuteCronDelete(input, loop.CronRegistry)
+	// --- Batch 2: remote trigger ---
+	case "remote_trigger":
+		result, err = tools.ExecuteRemoteTrigger(input)
+	// --- Batch 2: orchestration tools ---
+	case "agent":
+		result, err = tools.ExecuteAgent(input)
+	case "skill":
+		result, err = tools.ExecuteSkill(input, loop.workspaceRoot())
+	case "tool_search":
+		result, err = tools.ExecuteToolSearch(input, loop.allTools())
 	default:
 		// Fall back to MCP registry.
 		if loop.MCPRegistry != nil {
@@ -935,6 +1042,66 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 		}
 	case "todo_write":
 		result, err = tools.ExecuteTodoWrite(input)
+	// --- Batch 2: simple stateless tools ---
+	case "sleep":
+		result, err = tools.ExecuteSleep(input)
+	case "config":
+		result, err = tools.ExecuteConfig(input, loop.configMap())
+	case "repl":
+		result, err = tools.ExecuteREPL(input)
+	case "notebook_edit":
+		result, err = tools.ExecuteNotebookEdit(input)
+	case "structured_output":
+		result, err = tools.ExecuteStructuredOutput(input)
+	case "enter_plan_mode":
+		result, err = tools.ExecuteEnterPlanMode(&loop.PlanModeActive)
+	case "exit_plan_mode":
+		result, err = tools.ExecuteExitPlanMode(&loop.PlanModeActive)
+	case "send_user_message":
+		result, err = tools.ExecuteSendUserMessage(input)
+	// --- Batch 2: task tools ---
+	case "task_create":
+		result, err = tools.ExecuteTaskCreate(input, loop.TaskRegistry)
+	case "task_get":
+		result, err = tools.ExecuteTaskGet(input, loop.TaskRegistry)
+	case "task_list":
+		result, err = tools.ExecuteTaskList(input, loop.TaskRegistry)
+	case "task_output":
+		result, err = tools.ExecuteTaskOutput(input, loop.TaskRegistry)
+	case "task_stop":
+		result, err = tools.ExecuteTaskStop(input, loop.TaskRegistry)
+	case "task_update":
+		result, err = tools.ExecuteTaskUpdate(input, loop.TaskRegistry)
+	case "run_task_packet":
+		result, err = tools.ExecuteRunTaskPacket(input, loop.TaskRegistry)
+	// --- Batch 2: team tools ---
+	case "team_create":
+		result, err = tools.ExecuteTeamCreate(input, loop.TeamRegistry)
+	case "team_get":
+		result, err = tools.ExecuteTeamGet(input, loop.TeamRegistry)
+	case "team_list":
+		result, err = tools.ExecuteTeamList(input, loop.TeamRegistry)
+	case "team_delete":
+		result, err = tools.ExecuteTeamDelete(input, loop.TeamRegistry)
+	// --- Batch 2: cron tools ---
+	case "cron_create":
+		result, err = tools.ExecuteCronCreate(input, loop.CronRegistry)
+	case "cron_get":
+		result, err = tools.ExecuteCronGet(input, loop.CronRegistry)
+	case "cron_list":
+		result, err = tools.ExecuteCronList(input, loop.CronRegistry)
+	case "cron_delete":
+		result, err = tools.ExecuteCronDelete(input, loop.CronRegistry)
+	// --- Batch 2: remote trigger ---
+	case "remote_trigger":
+		result, err = tools.ExecuteRemoteTrigger(input)
+	// --- Batch 2: orchestration tools ---
+	case "agent":
+		result, err = tools.ExecuteAgent(input)
+	case "skill":
+		result, err = tools.ExecuteSkill(input, loop.workspaceRoot())
+	case "tool_search":
+		result, err = tools.ExecuteToolSearch(input, loop.allTools())
 	default:
 		// Try plugin tools first.
 		if loop.PluginRegistry != nil {
@@ -1059,6 +1226,19 @@ func (loop *ConversationLoop) runPostToolHooks(toolName, toolInput, toolOutput s
 		return loop.HookRunner.RunPostToolUseFailure(toolName, toolInput, toolOutput)
 	}
 	return loop.HookRunner.RunPostToolUse(toolName, toolInput, toolOutput, false)
+}
+
+// configMap returns a flat map of configuration values for the Config tool.
+func (loop *ConversationLoop) configMap() map[string]any {
+	if loop.Config == nil {
+		return nil
+	}
+	return map[string]any{
+		"model":           loop.Config.Model,
+		"max_tokens":      loop.Config.MaxTokens,
+		"permission_mode": loop.Config.PermissionMode,
+		"session_dir":     loop.Config.SessionDir,
+	}
 }
 
 // mcpResultText extracts the concatenated text from an MCP tool result.

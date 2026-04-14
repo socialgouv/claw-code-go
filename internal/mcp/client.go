@@ -151,6 +151,36 @@ func (c *Client) CallTool(ctx context.Context, name string, input map[string]any
 	return result, nil
 }
 
+// call is a generic JSON-RPC helper that sends a request and unmarshals the result.
+func (c *Client) call(ctx context.Context, method string, params any, result any) error {
+	req := Request{
+		JSONRPC: "2.0",
+		ID:      c.nextID(),
+		Method:  method,
+		Params:  params,
+	}
+
+	resp, err := c.transport.Send(ctx, req)
+	if err != nil {
+		return fmt.Errorf("mcp %s: %w", method, err)
+	}
+
+	if resp.Error != nil {
+		return fmt.Errorf("mcp %s error %d: %s", method, resp.Error.Code, resp.Error.Message)
+	}
+
+	data, err := json.Marshal(resp.Result)
+	if err != nil {
+		return fmt.Errorf("mcp %s: marshal result: %w", method, err)
+	}
+
+	if err := json.Unmarshal(data, result); err != nil {
+		return fmt.Errorf("mcp %s: parse result: %w", method, err)
+	}
+
+	return nil
+}
+
 // Close shuts down the underlying transport.
 func (c *Client) Close() error {
 	return c.transport.Close()
