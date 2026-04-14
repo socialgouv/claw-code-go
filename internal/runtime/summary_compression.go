@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"claw-code-go/internal/strutil"
 	"fmt"
 	"sort"
 	"strings"
@@ -117,7 +118,7 @@ func normalizeLines(summary string, maxLineChars int) normalizedSummary {
 	var lines []string
 	removedDups := 0
 
-	for _, rawLine := range strings.Split(summary, "\n") {
+	for _, rawLine := range splitLines(summary) {
 		normalized := collapseInlineWhitespace(rawLine)
 		if normalized == "" {
 			continue
@@ -256,15 +257,26 @@ func truncateLine(line string, maxChars int) string {
 }
 
 func dedupeKey(line string) string {
-	return strings.ToLower(line)
+	return strutil.ASCIIToLower(line)
+}
+
+// splitLines splits a string into lines, handling \r\n, \r, and \n line
+// endings. This matches Rust's str::lines() semantics.
+func splitLines(s string) []string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return strings.Split(s, "\n")
 }
 
 // countLines counts lines using the same semantics as Rust's str::lines()
-// (trailing empty line is not counted).
+// (handles \r\n, \r, and \n; trailing empty line is not counted).
 func countLines(s string) int {
 	if s == "" {
 		return 0
 	}
+	// Normalize to \n to match splitLines semantics.
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
 	n := strings.Count(s, "\n")
 	// Rust's .lines() doesn't count a trailing empty split.
 	if !strings.HasSuffix(s, "\n") {

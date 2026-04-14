@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"claw-code-go/internal/api"
+	"claw-code-go/internal/strutil"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -64,13 +65,68 @@ type Client struct {
 
 // ----- Request types ---------------------------------------------------------
 
+// oaiRequest is the request body sent to the OpenAI chat completions endpoint.
+// Fields that must be conditionally omitted for reasoning models use custom
+// MarshalJSON rather than map[string]interface{} to preserve compile-time type safety.
 type oaiRequest struct {
-	Model         string       `json:"model"`
-	Messages      []oaiMessage `json:"messages"`
-	Tools         []oaiTool    `json:"tools,omitempty"`
-	Stream        bool         `json:"stream"`
-	StreamOptions *streamOpts  `json:"stream_options,omitempty"`
-	MaxTokens     int          `json:"max_tokens,omitempty"`
+	Model            string       `json:"model"`
+	Messages         []oaiMessage `json:"messages"`
+	Tools            []oaiTool    `json:"tools,omitempty"`
+	Stream           bool         `json:"stream"`
+	StreamOptions    *streamOpts  `json:"stream_options,omitempty"`
+	MaxTokens        int          `json:"-"` // written conditionally in MarshalJSON
+	Temperature      *float64     `json:"-"` // omitted for reasoning models
+	TopP             *float64     `json:"-"` // omitted for reasoning models
+	FrequencyPenalty *float64     `json:"-"` // omitted for reasoning models
+	PresencePenalty  *float64     `json:"-"` // omitted for reasoning models
+	Stop             []string     `json:"-"` // always safe
+	ReasoningEffort  string       `json:"-"` // reasoning models only
+	isReasoningModel bool         // controls conditional field inclusion
+	useMaxCompTokens bool         // gpt-5* uses max_completion_tokens
+}
+
+// MarshalJSON implements custom marshaling to conditionally include/exclude
+// fields based on model capabilities.
+func (r oaiRequest) MarshalJSON() ([]byte, error) {
+	// Use an alias to avoid infinite recursion.
+	type Alias oaiRequest
+	type wire struct {
+		Alias
+		MaxTokens           *int     `json:"max_tokens,omitempty"`
+		MaxCompletionTokens *int     `json:"max_completion_tokens,omitempty"`
+		Temperature         *float64 `json:"temperature,omitempty"`
+		TopP                *float64 `json:"top_p,omitempty"`
+		FrequencyPenalty    *float64 `json:"frequency_penalty,omitempty"`
+		PresencePenalty     *float64 `json:"presence_penalty,omitempty"`
+		Stop                []string `json:"stop,omitempty"`
+		ReasoningEffort     string   `json:"reasoning_effort,omitempty"`
+	}
+	w := wire{Alias: Alias(r)}
+
+	// max_tokens vs max_completion_tokens
+	if r.MaxTokens > 0 {
+		if r.useMaxCompTokens {
+			w.MaxCompletionTokens = &r.MaxTokens
+		} else {
+			w.MaxTokens = &r.MaxTokens
+		}
+	}
+
+	// Tuning params: only for non-reasoning models
+	if !r.isReasoningModel {
+		w.Temperature = r.Temperature
+		w.TopP = r.TopP
+		w.FrequencyPenalty = r.FrequencyPenalty
+		w.PresencePenalty = r.PresencePenalty
+	}
+
+	// Stop and reasoning_effort are safe for all models
+	if len(r.Stop) > 0 {
+		w.Stop = r.Stop
+	}
+	w.ReasoningEffort = r.ReasoningEffort
+
+	return json.Marshal(w)
 }
 
 type streamOpts struct {
@@ -189,14 +245,81 @@ func (c *Client) buildRequest(req api.CreateMessageRequest) (*oaiRequest, error)
 		model = req.Model
 	}
 
-	return &oaiRequest{
-		Model:         model,
-		Messages:      convertMessages(req.System, req.Messages),
-		Tools:         convertTools(req.Tools),
-		Stream:        true,
-		MaxTokens:     req.MaxTokens,
-		StreamOptions: &streamOpts{IncludeUsage: true},
-	}, nil
+	wireModel := stripRoutingPrefix(model)
+	reasoning := isReasoningModel(model)
+
+	maxTokens := req.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = c.MaxTokens
+	}
+
+	r := &oaiRequest{
+		Model:            wireModel,
+		Messages:         convertMessages(req.System, req.Messages),
+		Tools:            convertTools(req.Tools),
+		Stream:           true,
+		MaxTokens:        maxTokens,
+		Temperature:      req.Temperature,
+		TopP:             req.TopP,
+		FrequencyPenalty: req.FrequencyPenalty,
+		PresencePenalty:  req.PresencePenalty,
+		Stop:             req.Stop,
+		ReasoningEffort:  req.ReasoningEffort,
+		isReasoningModel: reasoning,
+		useMaxCompTokens: strings.HasPrefix(wireModel, "gpt-5"),
+	}
+
+	// Always request usage in streaming mode (matching Rust).
+	if r.Stream {
+		r.StreamOptions = &streamOpts{IncludeUsage: true}
+	}
+
+	return r, nil
+}
+
+// isReasoningModel returns true for models known to reject tuning parameters
+// like temperature, top_p, frequency_penalty, and presence_penalty. These are
+// typically reasoning/chain-of-thought models with fixed sampling.
+func isReasoningModel(model string) bool {
+	lowered := strutil.ASCIIToLower(model)
+	// Strip provider prefix: e.g. "qwen/qwen-qwq" → "qwen-qwq"
+	canonical := lowered
+	if idx := strings.LastIndex(lowered, "/"); idx >= 0 {
+		canonical = lowered[idx+1:]
+	}
+	// OpenAI reasoning models
+	if strings.HasPrefix(canonical, "o1") ||
+		strings.HasPrefix(canonical, "o3") ||
+		strings.HasPrefix(canonical, "o4") {
+		return true
+	}
+	// xAI reasoning: grok-3-mini always uses reasoning mode
+	if canonical == "grok-3-mini" {
+		return true
+	}
+	// Alibaba DashScope reasoning variants (QwQ + Qwen3-Thinking family)
+	if strings.HasPrefix(canonical, "qwen-qwq") ||
+		strings.HasPrefix(canonical, "qwq") ||
+		strings.Contains(canonical, "thinking") {
+		return true
+	}
+	return false
+}
+
+// stripRoutingPrefix removes known routing prefixes from model names.
+// e.g. "openai/gpt-4" → "gpt-4", "xai/grok-3" → "grok-3".
+// Unknown prefixes are left intact.
+func stripRoutingPrefix(model string) string {
+	idx := strings.Index(model, "/")
+	if idx < 0 {
+		return model
+	}
+	prefix := model[:idx]
+	switch prefix {
+	case "openai", "xai", "grok", "qwen":
+		return model[idx+1:]
+	}
+	return model
 }
 
 // convertMessages maps our Anthropic-style messages to the OpenAI message format.

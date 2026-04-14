@@ -138,6 +138,48 @@ func TestCompressSummary_TruncateLine_MaxCharsOne(t *testing.T) {
 	}
 }
 
+// --- Parity tests for Batch 6 fixes ---
+
+func TestDedupeKey_ASCIIOnly(t *testing.T) {
+	// ASCII letters: same key
+	if dedupeKey("HELLO") != dedupeKey("hello") {
+		t.Error("ASCII 'HELLO' and 'hello' should produce the same dedupeKey")
+	}
+	// Non-ASCII: NOT folded (Ü ≠ ü in ASCII-only lowering)
+	if dedupeKey("Über") == dedupeKey("über") {
+		t.Error("non-ASCII 'Über' and 'über' should produce DIFFERENT dedupeKeys (ASCII-only)")
+	}
+}
+
+func TestSplitLines_CRLF(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{"CRLF", "a\r\nb\r\nc", 3},
+		{"CR only", "a\rb\rc", 3},
+		{"LF only", "a\nb\nc", 3},
+		{"mixed", "a\r\nb\rc\nd", 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitLines(tt.input)
+			if len(got) != tt.want {
+				t.Errorf("splitLines(%q) produced %d lines, want %d", tt.input, len(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeLines_CRLFHandling(t *testing.T) {
+	summary := "line one\r\nline two\r\nline three"
+	result := normalizeLines(summary, 160)
+	if len(result.lines) != 3 {
+		t.Errorf("expected 3 lines after CRLF normalization, got %d: %v", len(result.lines), result.lines)
+	}
+}
+
 func TestCompressSummary_Integration_FitsDefaultBudget(t *testing.T) {
 	// Build a summary that exceeds default budget to verify compression.
 	var sb strings.Builder

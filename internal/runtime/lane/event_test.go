@@ -401,3 +401,61 @@ func TestLaneEventUnmarshalUnknownDataType(t *testing.T) {
 		t.Errorf("foo = %v", parsed["foo"])
 	}
 }
+
+func TestFinished_CompressesDetail(t *testing.T) {
+	// Install a test compressor that uppercases the input.
+	origCompressor := DetailCompressor
+	DetailCompressor = func(s string) string {
+		return "COMPRESSED:" + s[:10]
+	}
+	defer func() { DetailCompressor = origCompressor }()
+
+	detail := "This is a very long detail string that should be compressed"
+	ev := Finished("2026-01-01T00:00:00Z", &detail)
+
+	if ev.Detail == nil {
+		t.Fatal("expected non-nil detail")
+	}
+	if *ev.Detail != "COMPRESSED:This is a " {
+		t.Errorf("expected compressed detail, got %q", *ev.Detail)
+	}
+}
+
+func TestFinished_NilDetailUnchanged(t *testing.T) {
+	origCompressor := DetailCompressor
+	DetailCompressor = func(s string) string { return "SHOULD NOT BE CALLED" }
+	defer func() { DetailCompressor = origCompressor }()
+
+	ev := Finished("2026-01-01T00:00:00Z", nil)
+	if ev.Detail != nil {
+		t.Errorf("expected nil detail, got %v", ev.Detail)
+	}
+}
+
+func TestFinished_EmptyDetailNotCompressed(t *testing.T) {
+	origCompressor := DetailCompressor
+	called := false
+	DetailCompressor = func(s string) string { called = true; return s }
+	defer func() { DetailCompressor = origCompressor }()
+
+	empty := ""
+	ev := Finished("2026-01-01T00:00:00Z", &empty)
+	if called {
+		t.Error("compressor should not be called for empty detail")
+	}
+	if ev.Detail == nil || *ev.Detail != "" {
+		t.Errorf("expected empty detail, got %v", ev.Detail)
+	}
+}
+
+func TestFinished_NoCompressorPassthrough(t *testing.T) {
+	origCompressor := DetailCompressor
+	DetailCompressor = nil
+	defer func() { DetailCompressor = origCompressor }()
+
+	detail := "some detail"
+	ev := Finished("2026-01-01T00:00:00Z", &detail)
+	if ev.Detail == nil || *ev.Detail != "some detail" {
+		t.Errorf("expected passthrough detail, got %v", ev.Detail)
+	}
+}

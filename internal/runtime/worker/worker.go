@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"claw-code-go/internal/runtime/trust"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -331,6 +332,21 @@ type Worker struct {
 	CreatedAt                    uint64         `json:"created_at"`
 	UpdatedAt                    uint64         `json:"updated_at"`
 	Events                       []WorkerEvent  `json:"events"`
+
+	// TrustResolver is an optional centralized trust resolver. When non-nil,
+	// the worker delegates trust gate decisions to it instead of using its
+	// own ad-hoc logic. The field is not serialized.
+	TrustResolver *trust.TrustResolver `json:"-"`
+}
+
+// ResolveTrust evaluates screen text for trust prompts using the centralized
+// resolver (if set). Returns the decision; callers should check IsRequired().
+// When no resolver is configured, returns NotRequired (nil-safe fallback).
+func (w *Worker) ResolveTrust(screenText string) trust.TrustDecision {
+	if w.TrustResolver == nil {
+		return trust.NotRequired()
+	}
+	return w.TrustResolver.Resolve(w.Cwd, screenText)
 }
 
 // WorkerReadySnapshot is a lightweight view of worker readiness.

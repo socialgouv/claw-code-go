@@ -76,12 +76,18 @@ type Property struct {
 
 // CreateMessageRequest is the request body for /v1/messages.
 type CreateMessageRequest struct {
-	Model     string    `json:"model"`
-	MaxTokens int       `json:"max_tokens"`
-	System    string    `json:"system,omitempty"`
-	Messages  []Message `json:"messages"`
-	Tools     []Tool    `json:"tools,omitempty"`
-	Stream    bool      `json:"stream"`
+	Model            string    `json:"model"`
+	MaxTokens        int       `json:"max_tokens"`
+	System           string    `json:"system,omitempty"`
+	Messages         []Message `json:"messages"`
+	Tools            []Tool    `json:"tools,omitempty"`
+	Stream           bool      `json:"stream"`
+	Temperature      *float64  `json:"temperature,omitempty"`
+	TopP             *float64  `json:"top_p,omitempty"`
+	FrequencyPenalty *float64  `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64  `json:"presence_penalty,omitempty"`
+	Stop             []string  `json:"stop,omitempty"`
+	ReasoningEffort  string    `json:"reasoning_effort,omitempty"`
 }
 
 // --- SSE Event Types ---

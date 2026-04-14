@@ -7,6 +7,12 @@ import (
 	"fmt"
 )
 
+// DetailCompressor is a pluggable function for compressing detail strings.
+// The runtime package sets this to summary_compression.CompressSummaryText
+// at init time, avoiding a circular import from lane → runtime.
+// When nil, Finished() passes detail through uncompressed.
+var DetailCompressor func(string) string
+
 // LaneEventName identifies the type of lane event on the wire.
 type LaneEventName string
 
@@ -226,10 +232,16 @@ func Started(emittedAt string) LaneEvent {
 	return NewLaneEvent(EventStarted, StatusRunning, emittedAt)
 }
 
-// Finished creates a lane.finished event.
+// Finished creates a lane.finished event. If a DetailCompressor is set and
+// detail is non-nil and non-empty, the detail is compressed before storage.
 func Finished(emittedAt string, detail *string) LaneEvent {
 	e := NewLaneEvent(EventFinished, StatusCompleted, emittedAt)
-	e.Detail = detail
+	if detail != nil && *detail != "" && DetailCompressor != nil {
+		compressed := DetailCompressor(*detail)
+		e.Detail = &compressed
+	} else {
+		e.Detail = detail
+	}
 	return e
 }
 
