@@ -12,6 +12,7 @@ const (
 	ProviderAnthropic ProviderKind = "anthropic"
 	ProviderXai       ProviderKind = "xai"
 	ProviderOpenAI    ProviderKind = "openai"
+	ProviderDashScope ProviderKind = "dashscope"
 )
 
 // ProviderMetadata contains routing info for a provider.
@@ -62,7 +63,7 @@ func MetadataForModel(model string) *ProviderMetadata {
 		}
 	case strings.HasPrefix(lower, "qwen/") || strings.HasPrefix(lower, "qwen-"):
 		return &ProviderMetadata{
-			Provider:       ProviderOpenAI,
+			Provider:       ProviderDashScope,
 			AuthEnvVar:     "DASHSCOPE_API_KEY",
 			BaseURLEnvVar:  "DASHSCOPE_BASE_URL",
 			DefaultBaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -89,6 +90,9 @@ func DetectProviderKind(model string) ProviderKind {
 	}
 	if os.Getenv("XAI_API_KEY") != "" {
 		return ProviderXai
+	}
+	if os.Getenv("DASHSCOPE_API_KEY") != "" {
+		return ProviderDashScope
 	}
 	return ProviderAnthropic
 }

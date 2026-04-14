@@ -157,6 +157,36 @@ func LoadConfig() *Config {
 	// Detect the active provider from environment variables.
 	cfg.ProviderName = detectProvider()
 
+	// Resolve provider-specific env vars for non-Anthropic providers.
+	// These override the Anthropic defaults set above.
+	switch cfg.ProviderName {
+	case "xai":
+		if key := os.Getenv("XAI_API_KEY"); key != "" {
+			cfg.APIKey = key
+		}
+		if baseURL := os.Getenv("XAI_BASE_URL"); baseURL != "" {
+			cfg.BaseURL = baseURL
+		} else if cfg.BaseURL == "" {
+			cfg.BaseURL = "https://api.x.ai/v1"
+		}
+	case "dashscope":
+		if key := os.Getenv("DASHSCOPE_API_KEY"); key != "" {
+			cfg.APIKey = key
+		}
+		if baseURL := os.Getenv("DASHSCOPE_BASE_URL"); baseURL != "" {
+			cfg.BaseURL = baseURL
+		} else if cfg.BaseURL == "" {
+			cfg.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+		}
+	case "openai":
+		if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+			cfg.APIKey = key
+		}
+		if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+			cfg.BaseURL = baseURL
+		}
+	}
+
 	// Load MCP server configs.
 	cfg.MCPServers = loadMCPServers(homeDir)
 
@@ -195,6 +225,9 @@ func loadMCPServers(homeDir string) []MCPServerConfig {
 }
 
 // detectProvider reads env vars to determine which provider to use.
+// Precedence: bedrock > vertex > foundry > anthropic > xai > dashscope > openai.
+// Anthropic is detected before xAI/DashScope to match Rust behavior and avoid
+// surprising users who have multiple API keys set.
 func detectProvider() string {
 	switch {
 	case os.Getenv("CLAUDE_CODE_USE_BEDROCK") == "1":
@@ -203,6 +236,14 @@ func detectProvider() string {
 		return "vertex"
 	case os.Getenv("CLAUDE_CODE_USE_FOUNDRY") == "1":
 		return "foundry"
+	case os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("ANTHROPIC_AUTH_TOKEN") != "":
+		return "anthropic"
+	case os.Getenv("XAI_API_KEY") != "":
+		return "xai"
+	case os.Getenv("DASHSCOPE_API_KEY") != "":
+		return "dashscope"
+	case os.Getenv("OPENAI_API_KEY") != "":
+		return "openai"
 	default:
 		return "anthropic"
 	}

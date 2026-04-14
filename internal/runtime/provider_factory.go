@@ -12,10 +12,10 @@ import (
 )
 
 // SelectProvider returns the Provider for the given name.
-// Supported names: "anthropic" (default), "openai", "bedrock", "vertex", "foundry".
+// Supported: "anthropic" (default), "openai", "xai", "dashscope", "bedrock", "vertex", "foundry".
 func SelectProvider(name string) api.Provider {
 	switch name {
-	case "openai":
+	case "openai", "xai", "dashscope":
 		return openaiprovider.New()
 	case "bedrock":
 		return bedrockprovider.New()

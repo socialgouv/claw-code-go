@@ -20,6 +20,12 @@ func TestResolveModelAliasRouting(t *testing.T) {
 		{"grok-mini", "grok-3-mini"},
 		{"grok-3-mini", "grok-3-mini"},
 		{"grok-2", "grok-2"},
+		// DashScope aliases
+		{"qwen", "qwen-max"},
+		{"qwen-max", "qwen-max"},
+		{"qwen-plus", "qwen-plus"},
+		{"qwen-turbo", "qwen-turbo"},
+		{"qwen-qwq-32b", "qwen-qwq-32b"},
 		// Case insensitivity
 		{"Opus", "claude-opus-4-6"},
 		{"SONNET", "claude-sonnet-4-6"},
@@ -53,8 +59,12 @@ func TestMetadataForModel(t *testing.T) {
 		{"grok-3-mini", false, ProviderXai, "XAI_API_KEY", "https://api.x.ai/v1"},
 		{"openai/gpt-4", false, ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
 		{"gpt-4o", false, ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
-		{"qwen/qwen-max", false, ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
-		{"qwen-turbo", false, ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen/qwen-max", false, ProviderDashScope, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-max", false, ProviderDashScope, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-plus", false, ProviderDashScope, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-turbo", false, ProviderDashScope, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-qwq-32b", false, ProviderDashScope, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen", false, ProviderDashScope, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 		// Aliases should be resolved before prefix matching (FIX-R1).
 		{"opus", false, ProviderAnthropic, "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
 		{"sonnet", false, ProviderAnthropic, "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
@@ -147,11 +157,38 @@ func TestDetectProviderKind(t *testing.T) {
 		}
 	})
 
+	t.Run("fallback to DASHSCOPE_API_KEY", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+		t.Setenv("OPENAI_API_KEY", "")
+		t.Setenv("XAI_API_KEY", "")
+		t.Setenv("DASHSCOPE_API_KEY", "ds-test")
+		got := DetectProviderKind("unknown-model")
+		if got != ProviderDashScope {
+			t.Errorf("got %q, want %q", got, ProviderDashScope)
+		}
+	})
+
+	t.Run("explicit prefix qwen", func(t *testing.T) {
+		got := DetectProviderKind("qwen-max")
+		if got != ProviderDashScope {
+			t.Errorf("got %q, want %q", got, ProviderDashScope)
+		}
+	})
+
+	t.Run("explicit prefix qwen/", func(t *testing.T) {
+		got := DetectProviderKind("qwen/qwen-plus")
+		if got != ProviderDashScope {
+			t.Errorf("got %q, want %q", got, ProviderDashScope)
+		}
+	})
+
 	t.Run("default to Anthropic when no env", func(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "")
 		t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 		t.Setenv("OPENAI_API_KEY", "")
 		t.Setenv("XAI_API_KEY", "")
+		t.Setenv("DASHSCOPE_API_KEY", "")
 		got := DetectProviderKind("unknown-model")
 		if got != ProviderAnthropic {
 			t.Errorf("got %q, want %q", got, ProviderAnthropic)
@@ -228,10 +265,10 @@ func TestMetadataForModelPrefixFallback(t *testing.T) {
 		{"openai/gpt-4", ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
 		{"openai/gpt-4o-mini", ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
 		{"gpt-4o", ProviderOpenAI, "OPENAI_API_KEY", "https://api.openai.com/v1"},
-		// Qwen/DashScope prefix models (not individually registered)
-		{"qwen/qwen-max", ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
-		{"qwen-turbo", ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
-		{"qwen/qwen-plus", ProviderOpenAI, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		// Qwen/DashScope prefix models
+		{"qwen/qwen-max", ProviderDashScope, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-turbo", ProviderDashScope, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"qwen/qwen-plus", ProviderDashScope, "DASHSCOPE_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 		// Claude prefix models not in registry (hypothetical future variants)
 		{"claude-next-gen-v1", ProviderAnthropic, "ANTHROPIC_API_KEY", "https://api.anthropic.com"},
 		// Grok prefix models not in registry

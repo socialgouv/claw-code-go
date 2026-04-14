@@ -20,6 +20,11 @@ func TestModelRegistryLookup(t *testing.T) {
 		{"grok", false, "grok-3", 64_000},
 		{"grok-mini", false, "grok-3-mini", 64_000},
 		{"grok-2", false, "grok-2", 0},
+		{"qwen-max", false, "qwen-max", 0},
+		{"qwen-plus", false, "qwen-plus", 0},
+		{"qwen-turbo", false, "qwen-turbo", 0},
+		{"qwen-qwq-32b", false, "qwen-qwq-32b", 0},
+		{"qwen", false, "qwen-max", 0},
 		{"claude-opus-4-6", false, "claude-opus-4-6", 32_000},
 		{"OPUS", false, "claude-opus-4-6", 32_000},
 		{"unknown-model", true, "", 0},
@@ -60,6 +65,11 @@ func TestModelRegistryResolveAlias(t *testing.T) {
 		{"grok", "grok-3"},
 		{"grok-mini", "grok-3-mini"},
 		{"grok-2", "grok-2"},
+		{"qwen", "qwen-max"},
+		{"qwen-max", "qwen-max"},
+		{"qwen-plus", "qwen-plus"},
+		{"qwen-turbo", "qwen-turbo"},
+		{"qwen-qwq-32b", "qwen-qwq-32b"},
 		{"claude-sonnet-4-6", "claude-sonnet-4-6"},
 		{"unknown", "unknown"},
 	}
@@ -85,6 +95,9 @@ func TestModelRegistryProviderDetection(t *testing.T) {
 		{"sonnet", ProviderAnthropic},
 		{"grok", ProviderXai},
 		{"grok-mini", ProviderXai},
+		{"qwen", ProviderDashScope},
+		{"qwen-max", ProviderDashScope},
+		{"qwen-turbo", ProviderDashScope},
 	}
 
 	for _, tt := range tests {
@@ -135,7 +148,7 @@ func TestModelRegistryConsistencyWithPreflight(t *testing.T) {
 	// hardcoded functions for all known models.
 	reg := &ModelRegistry{}
 
-	models := []string{"opus", "sonnet", "haiku", "grok", "grok-mini", "grok-2"}
+	models := []string{"opus", "sonnet", "haiku", "grok", "grok-mini", "grok-2", "qwen", "qwen-max", "qwen-turbo"}
 	for _, model := range models {
 		canonical := ResolveModelAlias(model)
 		regCanonical := reg.ResolveAlias(model)

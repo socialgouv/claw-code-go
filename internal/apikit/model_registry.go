@@ -33,6 +33,29 @@ type ModelRegistry struct {
 // defaultRegistry is the package-level singleton.
 var defaultRegistry = &ModelRegistry{}
 
+// Shared provider metadata — one instance per provider, referenced by all
+// models belonging to that provider.
+var (
+	anthropicMeta = &ProviderMetadata{
+		Provider:       ProviderAnthropic,
+		AuthEnvVar:     "ANTHROPIC_API_KEY",
+		BaseURLEnvVar:  "ANTHROPIC_BASE_URL",
+		DefaultBaseURL: "https://api.anthropic.com",
+	}
+	xaiMeta = &ProviderMetadata{
+		Provider:       ProviderXai,
+		AuthEnvVar:     "XAI_API_KEY",
+		BaseURLEnvVar:  "XAI_BASE_URL",
+		DefaultBaseURL: "https://api.x.ai/v1",
+	}
+	dashScopeMeta = &ProviderMetadata{
+		Provider:       ProviderDashScope,
+		AuthEnvVar:     "DASHSCOPE_API_KEY",
+		BaseURLEnvVar:  "DASHSCOPE_BASE_URL",
+		DefaultBaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+	}
+)
+
 // ensureInit populates the registry with built-in models on first access.
 // Caller must NOT hold r.mu — this method acquires a write lock internally.
 func (r *ModelRegistry) ensureInit() {
@@ -53,82 +76,16 @@ func (r *ModelRegistry) ensureInit() {
 	r.aliases = make(map[string]string)
 
 	entries := []ModelEntry{
-		{
-			Canonical:     "claude-opus-4-6",
-			Provider:      ProviderAnthropic,
-			MaxOutput:     32_000,
-			ContextWindow: 200_000,
-			Aliases:       []string{"opus"},
-			Metadata: &ProviderMetadata{
-				Provider:       ProviderAnthropic,
-				AuthEnvVar:     "ANTHROPIC_API_KEY",
-				BaseURLEnvVar:  "ANTHROPIC_BASE_URL",
-				DefaultBaseURL: "https://api.anthropic.com",
-			},
-		},
-		{
-			Canonical:     "claude-sonnet-4-6",
-			Provider:      ProviderAnthropic,
-			MaxOutput:     64_000,
-			ContextWindow: 200_000,
-			Aliases:       []string{"sonnet"},
-			Metadata: &ProviderMetadata{
-				Provider:       ProviderAnthropic,
-				AuthEnvVar:     "ANTHROPIC_API_KEY",
-				BaseURLEnvVar:  "ANTHROPIC_BASE_URL",
-				DefaultBaseURL: "https://api.anthropic.com",
-			},
-		},
-		{
-			Canonical:     "claude-haiku-4-5-20251213",
-			Provider:      ProviderAnthropic,
-			MaxOutput:     64_000,
-			ContextWindow: 200_000,
-			Aliases:       []string{"haiku"},
-			Metadata: &ProviderMetadata{
-				Provider:       ProviderAnthropic,
-				AuthEnvVar:     "ANTHROPIC_API_KEY",
-				BaseURLEnvVar:  "ANTHROPIC_BASE_URL",
-				DefaultBaseURL: "https://api.anthropic.com",
-			},
-		},
-		{
-			Canonical:     "grok-3",
-			Provider:      ProviderXai,
-			MaxOutput:     64_000,
-			ContextWindow: 131_072,
-			Aliases:       []string{"grok"},
-			Metadata: &ProviderMetadata{
-				Provider:       ProviderXai,
-				AuthEnvVar:     "XAI_API_KEY",
-				BaseURLEnvVar:  "XAI_BASE_URL",
-				DefaultBaseURL: "https://api.x.ai/v1",
-			},
-		},
-		{
-			Canonical:     "grok-3-mini",
-			Provider:      ProviderXai,
-			MaxOutput:     64_000,
-			ContextWindow: 131_072,
-			Aliases:       []string{"grok-mini"},
-			Metadata: &ProviderMetadata{
-				Provider:       ProviderXai,
-				AuthEnvVar:     "XAI_API_KEY",
-				BaseURLEnvVar:  "XAI_BASE_URL",
-				DefaultBaseURL: "https://api.x.ai/v1",
-			},
-		},
-		{
-			Canonical: "grok-2",
-			Provider:  ProviderXai,
-			Aliases:   []string{},
-			Metadata: &ProviderMetadata{
-				Provider:       ProviderXai,
-				AuthEnvVar:     "XAI_API_KEY",
-				BaseURLEnvVar:  "XAI_BASE_URL",
-				DefaultBaseURL: "https://api.x.ai/v1",
-			},
-		},
+		{Canonical: "claude-opus-4-6", Provider: ProviderAnthropic, MaxOutput: 32_000, ContextWindow: 200_000, Aliases: []string{"opus"}, Metadata: anthropicMeta},
+		{Canonical: "claude-sonnet-4-6", Provider: ProviderAnthropic, MaxOutput: 64_000, ContextWindow: 200_000, Aliases: []string{"sonnet"}, Metadata: anthropicMeta},
+		{Canonical: "claude-haiku-4-5-20251213", Provider: ProviderAnthropic, MaxOutput: 64_000, ContextWindow: 200_000, Aliases: []string{"haiku"}, Metadata: anthropicMeta},
+		{Canonical: "grok-3", Provider: ProviderXai, MaxOutput: 64_000, ContextWindow: 131_072, Aliases: []string{"grok"}, Metadata: xaiMeta},
+		{Canonical: "grok-3-mini", Provider: ProviderXai, MaxOutput: 64_000, ContextWindow: 131_072, Aliases: []string{"grok-mini"}, Metadata: xaiMeta},
+		{Canonical: "grok-2", Provider: ProviderXai, Metadata: xaiMeta},
+		{Canonical: "qwen-max", Provider: ProviderDashScope, Aliases: []string{"qwen"}, Metadata: dashScopeMeta},
+		{Canonical: "qwen-plus", Provider: ProviderDashScope, Metadata: dashScopeMeta},
+		{Canonical: "qwen-turbo", Provider: ProviderDashScope, Metadata: dashScopeMeta},
+		{Canonical: "qwen-qwq-32b", Provider: ProviderDashScope, Metadata: dashScopeMeta},
 	}
 
 	for i := range entries {

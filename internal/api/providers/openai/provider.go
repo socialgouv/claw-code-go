@@ -32,7 +32,7 @@ func (p *Provider) AuthMethod() api.AuthMethod { return api.AuthMethodAPIKey }
 // NewClient creates an OpenAI API client from the given config.
 func (p *Provider) NewClient(cfg api.ProviderConfig) (api.APIClient, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("openai: API key required (set OPENAI_API_KEY or run /login)")
+		return nil, fmt.Errorf("API key required for OpenAI-compatible provider (set the appropriate API key env var or run /login)")
 	}
 	model := cfg.Model
 	// If the configured model is an Anthropic model name, use the default OpenAI model.
