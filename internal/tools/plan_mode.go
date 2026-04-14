@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"claw-code-go/internal/api"
 	"encoding/json"
 	"errors"
@@ -85,7 +86,10 @@ func ExecuteEnterPlanMode(planModeActive *bool, stateDir string) (string, error)
 			})
 		}
 		// Check if we have a state file (managed by us).
-		existingState := readPlanModeStateFile(statePath)
+		existingState, err := readPlanModeStateFile(statePath)
+		if err != nil {
+			return "", fmt.Errorf("enter_plan_mode: %w", err)
+		}
 		if currentIsPlan && existingState != nil {
 			// Already active and managed by us.
 			return marshalPlanModeOutput(planModeOutput{
@@ -125,6 +129,11 @@ func ExecuteEnterPlanMode(planModeActive *bool, stateDir string) (string, error)
 		PreviousLocalMode: rawMessagePtr(currentLocalMode),
 	}
 	if stateDir != "" {
+		// Clear any stale state before writing, matching Rust's two-step
+		// clear + write sequence for auditability.
+		if err := clearPlanModeStateFile(statePath); err != nil {
+			return "", fmt.Errorf("enter_plan_mode: failed to clear stale state: %w", err)
+		}
 		if err := writePlanModeStateFile(statePath, &state); err != nil {
 			return "", fmt.Errorf("enter_plan_mode: failed to write state: %w", err)
 		}
@@ -182,7 +191,10 @@ func ExecuteExitPlanMode(planModeActive *bool, stateDir string) (string, error) 
 	currentIsPlan := isStringValue(currentLocalMode, "plan")
 
 	// Read existing state file.
-	existingState := readPlanModeStateFile(statePath)
+	existingState, err := readPlanModeStateFile(statePath)
+	if err != nil {
+		return "", fmt.Errorf("exit_plan_mode: %w", err)
+	}
 
 	if existingState == nil {
 		// No state file — not managed by us.
@@ -289,14 +301,19 @@ func settingsLocalPath(stateDir string) string {
 }
 
 // LoadPersistedPlanMode reads the persisted plan mode state from disk.
-// Returns true if a state file exists (indicating plan mode was entered
-// via ExecuteEnterPlanMode). Returns false if stateDir is empty, the file
-// doesn't exist, or can't be read.
-func LoadPersistedPlanMode(stateDir string) bool {
+// Returns (true, nil) if a state file exists (indicating plan mode was entered
+// via ExecuteEnterPlanMode). Returns (false, nil) if stateDir is empty or the
+// file doesn't exist. Returns (false, error) for real filesystem failures
+// (permission denied, I/O errors), matching Rust's error propagation.
+func LoadPersistedPlanMode(stateDir string) (bool, error) {
 	if stateDir == "" {
-		return false
+		return false, nil
 	}
-	return readPlanModeStateFile(planModeStatePath(stateDir)) != nil
+	state, err := readPlanModeStateFile(planModeStatePath(stateDir))
+	if err != nil {
+		return false, fmt.Errorf("load persisted plan mode: %w", err)
+	}
+	return state != nil, nil
 }
 
 // --- Settings file helpers ---
@@ -432,19 +449,29 @@ func removeNestedValueFromMap(m map[string]any, path []string) {
 }
 
 // readPlanModeStateFile reads the plan mode state file.
-func readPlanModeStateFile(path string) *planModeState {
+// Returns (nil, nil) if the file does not exist or is empty (matching Rust's NotFound → Ok(None)).
+// Returns (nil, error) for real filesystem failures (permission denied, I/O errors)
+// or corrupt JSON content.
+func readPlanModeStateFile(path string) (*planModeState, error) {
 	if path == "" {
-		return nil
+		return nil, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read plan mode state: %w", err)
+	}
+	// Rust treats empty/whitespace-only content as None.
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil
 	}
 	var state planModeState
-	if json.Unmarshal(data, &state) != nil {
-		return nil
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("parse plan mode state: %w", err)
 	}
-	return &state
+	return &state, nil
 }
 
 // writePlanModeStateFile writes the plan mode state file.

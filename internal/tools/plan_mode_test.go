@@ -123,14 +123,20 @@ func TestPlanModePersistence(t *testing.T) {
 
 	t.Run("load from empty dir returns false", func(t *testing.T) {
 		dir := t.TempDir()
-		loaded := LoadPersistedPlanMode(dir)
+		loaded, err := LoadPersistedPlanMode(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if loaded {
 			t.Error("expected false from empty dir")
 		}
 	})
 
 	t.Run("load from empty string returns false", func(t *testing.T) {
-		loaded := LoadPersistedPlanMode("")
+		loaded, err := LoadPersistedPlanMode("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if loaded {
 			t.Error("expected false from empty string")
 		}
@@ -488,6 +494,184 @@ func TestPlanModeOutputShape(t *testing.T) {
 		json.Unmarshal(*roundTripped.PreviousLocalMode, &prevVal)
 		if prevVal != "acceptEdits" {
 			t.Errorf("round-tripped previousLocalMode = %q, want 'acceptEdits'", prevVal)
+		}
+	})
+}
+
+// TestReadPlanModeStateFile verifies the (nil, nil) / (nil, error) / (*state, nil)
+// return semantics that match Rust's Result<Option<PlanModeState>>.
+func TestReadPlanModeStateFile(t *testing.T) {
+	t.Run("valid file returns state and nil error", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "state.json")
+		os.WriteFile(path, []byte(`{"hadLocalOverride":true,"previousLocalMode":"\"acceptEdits\""}`), 0o644)
+
+		state, err := readPlanModeStateFile(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if state == nil {
+			t.Fatal("expected non-nil state")
+		}
+		if !state.HadLocalOverride {
+			t.Error("expected HadLocalOverride to be true")
+		}
+	})
+
+	t.Run("nonexistent file returns nil nil", func(t *testing.T) {
+		state, err := readPlanModeStateFile(filepath.Join(t.TempDir(), "does-not-exist.json"))
+		if err != nil {
+			t.Fatalf("expected nil error for missing file, got: %v", err)
+		}
+		if state != nil {
+			t.Fatal("expected nil state for missing file")
+		}
+	})
+
+	t.Run("empty path returns nil nil", func(t *testing.T) {
+		state, err := readPlanModeStateFile("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if state != nil {
+			t.Fatal("expected nil state for empty path")
+		}
+	})
+
+	t.Run("empty file returns nil nil (Rust parity)", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "state.json")
+		os.WriteFile(path, []byte("   \n"), 0o644)
+
+		state, err := readPlanModeStateFile(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if state != nil {
+			t.Fatal("expected nil state for empty file")
+		}
+	})
+
+	t.Run("corrupt JSON returns error", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "state.json")
+		os.WriteFile(path, []byte(`{not valid json`), 0o644)
+
+		state, err := readPlanModeStateFile(path)
+		if err == nil {
+			t.Fatal("expected error for corrupt JSON")
+		}
+		if state != nil {
+			t.Fatal("expected nil state for corrupt JSON")
+		}
+		if !strings.Contains(err.Error(), "parse plan mode state") {
+			t.Errorf("error should mention parse, got: %v", err)
+		}
+	})
+
+	t.Run("unreadable file returns permission error (not nil)", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("permission-based tests are unreliable on Windows")
+		}
+		dir := t.TempDir()
+		path := filepath.Join(dir, "state.json")
+		os.WriteFile(path, []byte(`{"hadLocalOverride":false}`), 0o644)
+		os.Chmod(path, 0o000)
+		defer os.Chmod(path, 0o644)
+
+		state, err := readPlanModeStateFile(path)
+		if err == nil {
+			t.Fatal("expected error for unreadable file, got nil")
+		}
+		if state != nil {
+			t.Fatal("expected nil state for unreadable file")
+		}
+		if !strings.Contains(err.Error(), "read plan mode state") {
+			t.Errorf("error should mention read plan mode state, got: %v", err)
+		}
+	})
+}
+
+// TestPlanModeClearBeforeWrite verifies that ExecuteEnterPlanMode clears stale
+// state before writing new state, matching Rust's two-step clear+write sequence.
+func TestPlanModeClearBeforeWrite(t *testing.T) {
+	t.Run("enter with pre-existing state file clears before writing", func(t *testing.T) {
+		dir := t.TempDir()
+		active := false
+
+		// First enter creates state.
+		_, err := ExecuteEnterPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("first enter: %v", err)
+		}
+
+		statePath := filepath.Join(dir, "tool-state", "plan-mode.json")
+		data1, err := os.ReadFile(statePath)
+		if err != nil {
+			t.Fatalf("read state after first enter: %v", err)
+		}
+
+		// Tamper with settings to force a second enter to go through the write path.
+		settingsPath := filepath.Join(dir, "settings.local.json")
+		os.WriteFile(settingsPath, []byte(`{"permissions":{"defaultMode":"acceptEdits"}}`), 0o644)
+		active = false
+
+		// Second enter should clear then write.
+		_, err = ExecuteEnterPlanMode(&active, dir)
+		if err != nil {
+			t.Fatalf("second enter: %v", err)
+		}
+
+		data2, err := os.ReadFile(statePath)
+		if err != nil {
+			t.Fatalf("read state after second enter: %v", err)
+		}
+
+		// The state files should differ because previousLocalMode changed.
+		if string(data1) == string(data2) {
+			t.Error("expected state file to be rewritten (clear+write), but content is identical")
+		}
+	})
+}
+
+// TestLoadPersistedPlanModeErrorPropagation verifies that LoadPersistedPlanMode
+// propagates filesystem errors instead of silently returning false.
+func TestLoadPersistedPlanModeErrorPropagation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based tests are unreliable on Windows")
+	}
+
+	t.Run("propagates permission errors", func(t *testing.T) {
+		dir := t.TempDir()
+
+		// Create a state file, then make it unreadable.
+		stateDir := filepath.Join(dir, "tool-state")
+		os.MkdirAll(stateDir, 0o755)
+		statePath := filepath.Join(stateDir, "plan-mode.json")
+		os.WriteFile(statePath, []byte(`{"hadLocalOverride":false}`), 0o644)
+		os.Chmod(statePath, 0o000)
+		defer os.Chmod(statePath, 0o644)
+
+		loaded, err := LoadPersistedPlanMode(dir)
+		if err == nil {
+			t.Fatal("expected error for unreadable state file, got nil")
+		}
+		if loaded {
+			t.Error("expected false when error occurs")
+		}
+		if !strings.Contains(err.Error(), "load persisted plan mode") {
+			t.Errorf("error should mention load persisted plan mode, got: %v", err)
+		}
+	})
+
+	t.Run("nonexistent state file returns false nil", func(t *testing.T) {
+		dir := t.TempDir()
+		loaded, err := LoadPersistedPlanMode(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if loaded {
+			t.Error("expected false for nonexistent state")
 		}
 	})
 }
