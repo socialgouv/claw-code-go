@@ -5,8 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>A Go port of Claude Code — Anthropic's agentic CLI coding assistant</strong><br/>
-  Fast. Extensible. Built for terminals.
+  <strong>Experimental fork — ingesting features from claw-code (Rust) into claw-code-go (Go)</strong>
 </p>
 
 <p align="center">
@@ -14,229 +13,63 @@
   <img src="https://img.shields.io/badge/Claude-claude--sonnet--4-blueviolet?style=flat-square&logo=anthropic" />
   <img src="https://img.shields.io/badge/MCP-supported-green?style=flat-square" />
   <img src="https://img.shields.io/badge/Multi--provider-Anthropic%20%7C%20OpenAI-orange?style=flat-square" />
-  <img src="https://img.shields.io/badge/TUI-Bubble%20Tea-pink?style=flat-square" />
+  <img src="https://img.shields.io/badge/status-experimental-red?style=flat-square" />
 </p>
 
 ---
 
-<p align="center">
-  <img src="assets/screenshot.png" alt="claw-code-go terminal screenshot" width="600" />
-</p>
+> **Warning**: This is an ongoing experiment and is **not tested**. Use at your own risk.
 
 ---
 
 ## What is this?
 
-`claw-code-go` is a full Go reimplementation of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's agentic coding assistant. It runs in your terminal, understands your codebase, calls tools, writes and edits files, searches the web, and works autonomously until the job is done.
+This repo is a fork of [daolmedo/claw-code-go](https://github.com/daolmedo/claw-code-go), a Go reimplementation of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's agentic coding assistant.
 
-**Why Go?**
-- Single static binary — no Node.js runtime required
-- Faster startup, lower memory footprint
-- Easier to embed, cross-compile, and distribute
+On top of the upstream codebase, this fork ingests features from [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) — a Rust port of Claude Code that emerged after the source leak. The goal is to bring the more complete Rust implementation's capabilities into the Go codebase: hooks, plugins, MCP lifecycle, sandbox, permissions engine, runtime session management, apikit with multi-provider routing, prompt caching, and much more.
 
----
+**This is an experiment, not a product.** The ported code has not been manually tested or validated beyond automated build checks.
 
-## Features
+## How was this done?
 
-### 🤖 Agentic Loop
-Full tool-use conversation loop: Claude reasons, calls tools, reads the results, and keeps going until the task is complete or it hits an `end_turn`.
+The Rust-to-Go feature porting was orchestrated by [**Iterion**](https://github.com/SocialGouv/iterion) — a workflow engine for complex multi-agent LLM pipelines, using Claude Code, Codex, and other backends.
 
-### 🎨 Bubble Tea TUI
-Rich terminal UI built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) — streaming output with a spinner, styled message history, syntax-aware theming, and a clean session view.
+This repo serves as the real-world example that drove Iterion's development. The full workflow configuration and writeup are available:
 
-### 🛠 Tool Suite
+- [**rust_to_go_port.iter**](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.iter) — the Iterion workflow definition (DSL)
+- [**rust_to_go_port.md**](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.md) — design decisions, lessons learned, and empirical data
 
-| Tool | Description |
-|------|-------------|
-| `bash` | Execute shell commands (30s timeout, sandboxed) |
-| `read_file` | Read files from disk |
-| `write_file` | Write/create files |
-| `file_edit` | Surgical text replacements in existing files |
-| `glob` | Find files matching a glob pattern |
-| `grep` | Search across files with regex |
-| `web_fetch` | Fetch and parse a URL |
-| `web_search` | Search the web (Brave API) |
-| `todo_write` | Track and persist task lists |
+### Run stats
 
-### 🔐 OAuth + Multi-Provider Auth
-Native OAuth flow for Anthropic accounts. Credentials are stored securely and refreshed automatically. OpenAI is scaffolded alongside Anthropic — swap providers via config.
+| Metric | Value |
+|--------|-------|
+| Refinement runs | 4 (workflow iterated alongside the engine) |
+| Outer loop iterations | 25+ batches across all runs |
+| Commits added | 48 (47 by Iterion, 1 by Claude Code) |
+| Go code generated | 37,995 lines across 173 files + 96 test files |
+| New Go packages | 30+ (hooks, plugin, apikit, worker, lane, policy, recovery, sandbox, lsp, task, team...) |
+| Feature parity | 100% (37/37 features) |
+| Final run | 100% parity in 41 min, single batch, zero fix loops, zero interventions |
+| Longest autonomous stretch | 2h25m without human intervention |
+| Dual-judge verdicts | 30+ across all runs (Claude + Codex) |
 
-### 🌐 MCP — Model Context Protocol
-Full MCP integration: connect external tool servers over stdio or SSE, register their tools, and let Claude call them seamlessly alongside built-in tools.
+### How the workflow operates
 
-### 🔒 Permissions & Safety
-Fine-grained permission system controls what Claude can do — bash execution, file writes, network access — with configurable modes (`auto`, `ask`, `deny`) and rule-based overrides.
+The workflow breaks the porting into dependency-ordered batches. Each batch goes through: **plan → implement → simplify → commit → test → parity scan → dual-judge review → fix loop**. Session continuity (fork/inherit) preserves KV cache across related phases. A human gate pauses for high-risk batches and auto-approves routine ones.
 
-### 📦 Context Assembly
-On every turn, claw-code-go automatically injects:
-- Git repo state (branch, diff summary, recent commits)
-- Memory directory files (`.claw-code/memory/`)
-- System info (OS, hostname, working directory)
+See the [full writeup](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.md) for details on convergence strategies, stagnation detection, and model allocation.
 
-### 💾 Session Persistence & History
-Sessions are saved as JSON files in `~/.claw-code/sessions/`. Resume any previous session by ID. The TUI includes a built-in session history browser.
+## Status
 
-### 📊 Token Usage & Cost Tracking
-Every session tracks input/output tokens per turn. Estimated USD cost is shown at the end of each session for all known models (Claude 3/4 + GPT-4o family).
+**Experimental.** The code compiles and passes `go vet`, but has not been manually tested. The latest commit (Anthropic prompt caching with `cache_control` breakpoints) was done directly with Claude Code outside the Iterion workflow.
 
-### ⚡ Context Compaction
-Automatic conversation compaction keeps context windows manageable on long sessions — summarising older turns without losing important state.
+Contributions, testing, and feedback are welcome.
 
-### 🧠 Memory Directory
-Drop markdown files into `.claw-code/memory/` and they're injected into every conversation automatically — persistent instructions, project context, preferences.
+## Credits
 
----
-
-## Prerequisites
-
-- **Go 1.24+**
-- `ANTHROPIC_API_KEY` environment variable (or log in via `--login`)
-
----
-
-## Install
-
-```sh
-git clone https://github.com/daolmedo/claw-code-go
-cd claw-code-go
-go build -o claw-code-go ./cmd/claw-code-go
-```
-
-Or install directly:
-
-```sh
-go install github.com/daolmedo/claw-code-go/cmd/claw-code-go@latest
-```
-
----
-
-## Usage
-
-### Interactive REPL (default)
-
-```sh
-./claw-code-go
-```
-
-### One-shot mode
-
-```sh
-export ANTHROPIC_API_KEY=sk-ant-...
-./claw-code-go --prompt "Refactor the auth package to use interfaces"
-```
-
-### Login — Anthropic (OAuth)
-
-```sh
-./claw-code-go --login
-# or explicitly:
-./claw-code-go --login --provider anthropic
-```
-
-### Login — OpenAI (API key)
-
-```sh
-./claw-code-go --login --provider openai
-# Prompts for your OpenAI API key and stores it securely
-```
-
-Credentials are saved to `~/.claw-code/credentials/` and reused automatically on the next run. Switch providers at any time with `--provider`.
-
-### Resume a session
-
-```sh
-./claw-code-go --session <session-id>
-```
-
----
-
-## CLI Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--prompt` | — | Single prompt (one-shot mode) |
-| `--model` | `claude-sonnet-4-20250514` | Model to use |
-| `--provider` | `anthropic` | AI provider: `anthropic`, `openai` |
-| `--repl` | false | Force interactive REPL mode |
-| `--login` | false | Authenticate for the selected provider |
-| `--session` | — | Resume a saved session by ID |
-| `--session-dir` | `~/.claw-code/sessions` | Directory for session files |
-| `--permission-mode` | `ask` | Permission mode: `auto`, `ask`, `deny` |
-
----
-
-## Slash Commands (REPL)
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show available commands |
-| `/clear` | Clear the current session |
-| `/session-list` | Browse saved sessions |
-| `/model <name>` | Switch model mid-session |
-| `/compact` | Manually trigger context compaction |
-| `/cost` | Show current session token usage and estimated cost |
-| `/exit` or `/quit` | Exit the REPL |
-
----
-
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key |
-| `ANTHROPIC_MODEL` | Override the default model |
-| `ANTHROPIC_BASE_URL` | Override the Anthropic API base URL |
-| `OPENAI_API_KEY` | OpenAI API key (if using OpenAI provider) |
-
----
-
-## Project Structure
-
-```
-claw-code-go/
-├── cmd/claw-code-go/        # CLI entry point
-└── internal/
-    ├── api/                 # Anthropic API client (SSE streaming, types)
-    ├── auth/                # OAuth flow, credential storage, token refresh
-    ├── commands/            # Slash command registry
-    ├── compat/              # Upstream TS source parity manifest
-    ├── config/              # Config loading, permission modes, rules
-    ├── context/             # Context assembly (git, memory, sysinfo)
-    ├── mcp/                 # Model Context Protocol client (stdio + SSE)
-    ├── permissions/         # Permission enforcement & rule engine
-    ├── runtime/             # Agentic conversation loop, session persistence
-    ├── tools/               # Built-in tool implementations
-    ├── tui/                 # Bubble Tea TUI (model, styles, theme, history)
-    └── usage/               # Token tracking and cost estimation
-```
-
----
-
-## Roadmap
-
-- [x] Phase 1 — Foundation: API client, basic conversation loop, core tools
-- [x] Phase 2 — TUI: Bubble Tea UI, streaming, spinner, slash commands
-- [x] Phase 3 — OAuth + multi-provider scaffolding
-- [x] Phase 4 — MCP (Model Context Protocol) integration
-- [x] Phase 5 — Permissions & Safety
-- [x] Phase 6 — Context compaction
-- [x] Phase 7 — Multi-provider login UX
-- [x] Phase 8 — Compat harness modes
-- [x] Phase 9 — Full TUI foundation (themes, history view)
-- [x] Phase 10 — Core tool expansion (file_edit, web_fetch, web_search, todo_write)
-- [x] Phase 11 — Permissions + config system
-- [x] Phase 12 — Context assembly + memory directory
-- [x] Phase 13 — Cost tracking + session history UI
-- [ ] Phase 14 — LSP integration
-- [ ] Phase 15 — Plugin/extension system
-
----
-
-## Contributing
-
-PRs welcome. Run `go build ./...` and `go vet ./...` before submitting.
-
----
+- [**daolmedo/claw-code-go**](https://github.com/daolmedo/claw-code-go) — the original Go port of Claude Code (upstream)
+- [**ultraworkers/claw-code**](https://github.com/ultraworkers/claw-code) — the Rust port of Claude Code (feature source)
+- [**Iterion**](https://github.com/SocialGouv/iterion) — the workflow orchestration engine that performed the porting
 
 ## License
 
