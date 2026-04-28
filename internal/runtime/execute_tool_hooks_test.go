@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"github.com/SocialGouv/claw-code-go/hooks"
 	"github.com/SocialGouv/claw-code-go/internal/apikit"
 	"strings"
@@ -21,7 +22,7 @@ func TestExecuteToolPostHookDenialEscalatesError(t *testing.T) {
 		}),
 	}
 
-	result := loop.ExecuteTool("glob", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "glob", map[string]any{
 		"pattern": "*.nonexistent_pattern_for_test_12345",
 	})
 
@@ -47,7 +48,7 @@ func TestExecuteToolPostHookFailureEscalatesError(t *testing.T) {
 		}),
 	}
 
-	result := loop.ExecuteTool("glob", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "glob", map[string]any{
 		"pattern": "*.nonexistent_pattern_for_test_12345",
 	})
 
@@ -73,7 +74,7 @@ func TestExecuteToolPreHookCancelledBlocksTool(t *testing.T) {
 		}),
 	}
 
-	result := loop.ExecuteTool("glob", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "glob", map[string]any{
 		"pattern": "*.nonexistent_pattern_for_test_12345",
 	})
 
@@ -94,7 +95,7 @@ func TestExecuteToolPreHookMessagesMergedOnSuccess(t *testing.T) {
 		}),
 	}
 
-	result := loop.ExecuteTool("glob", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "glob", map[string]any{
 		"pattern": "*.nonexistent_pattern_for_test_12345",
 	})
 
@@ -120,7 +121,7 @@ func TestExecuteToolAskUserCallsPostHooks(t *testing.T) {
 		}),
 	}
 
-	result := loop.ExecuteTool("ask_user", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "ask_user", map[string]any{
 		"question": "What is your name?",
 	})
 
@@ -144,7 +145,7 @@ func TestExecuteToolAskUserCallsTelemetry(t *testing.T) {
 		Tracer:      tracer,
 	}
 
-	_ = loop.ExecuteTool("ask_user", map[string]any{
+	_ = loop.ExecuteTool(context.Background(), "ask_user", map[string]any{
 		"question": "Hello?",
 	})
 
@@ -199,7 +200,7 @@ func TestExecuteToolNoHooksUnchangedOutput(t *testing.T) {
 		Permissions: DefaultPermissions(),
 	}
 
-	result := loop.ExecuteTool("glob", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "glob", map[string]any{
 		"pattern": "*.nonexistent_pattern_for_test_12345",
 	})
 
@@ -226,7 +227,7 @@ func TestExecuteToolPreHookPermissionOverrideExtracted(t *testing.T) {
 		}),
 	}
 
-	result := loop.ExecuteTool("glob", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "glob", map[string]any{
 		"pattern": "*.nonexistent_pattern_for_test_12345",
 	})
 
@@ -247,7 +248,7 @@ func TestExecuteToolErrorFiresPostToolUseFailure(t *testing.T) {
 	}
 
 	// Call an unknown tool to trigger an error.
-	result := loop.ExecuteTool("nonexistent_tool", map[string]any{})
+	result := loop.ExecuteTool(context.Background(), "nonexistent_tool", map[string]any{})
 
 	if !result.IsError {
 		t.Error("expected IsError for unknown tool")

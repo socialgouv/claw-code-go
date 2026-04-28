@@ -498,7 +498,7 @@ func (loop *ConversationLoop) runOneTurn(ctx context.Context) (string, error) {
 			}
 
 			fmt.Fprintf(os.Stdout, "\n[Tool: %s]\n", tb.name)
-			result := loop.ExecuteTool(tb.name, inputMap)
+			result := loop.ExecuteTool(ctx, tb.name, inputMap)
 			result.ToolUseID = tb.id
 			toolResults = append(toolResults, result)
 		}
@@ -816,7 +816,7 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 				return "", 0, 0, 0, 0, ctx.Err()
 			}
 
-			result := loop.ExecuteTool(tb.name, inputMap)
+			result := loop.ExecuteTool(ctx, tb.name, inputMap)
 			result.ToolUseID = tb.id
 			toolResults = append(toolResults, result)
 
@@ -842,7 +842,7 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 
 // Deprecated: ExecuteToolQuiet is kept for backward compatibility. New code
 // should use ExecuteTool which includes hooks, plugin dispatch, and telemetry.
-func (loop *ConversationLoop) ExecuteToolQuiet(name string, input map[string]any) api.ContentBlock {
+func (loop *ConversationLoop) ExecuteToolQuiet(ctx context.Context, name string, input map[string]any) api.ContentBlock {
 	if !CheckPermission(loop.Permissions, name) {
 		return api.ContentBlock{
 			Type:    "tool_result",
@@ -973,7 +973,7 @@ func (loop *ConversationLoop) ExecuteToolQuiet(name string, input map[string]any
 		// Fall back to MCP registry.
 		if loop.MCPRegistry != nil {
 			if client, _, ok := loop.MCPRegistry.FindTool(name); ok {
-				mcpResult, mcpErr := client.CallTool(context.Background(), name, input)
+				mcpResult, mcpErr := client.CallTool(ctx, name, input)
 				if mcpErr != nil {
 					return api.ContentBlock{
 						Type:    "tool_result",
@@ -1072,7 +1072,10 @@ func (loop *ConversationLoop) MessageCount() int {
 // When LifecycleHooks is set, in-process PreToolUse/PostToolUse hooks fire
 // around the dispatch. A PreToolUse Block decision short-circuits with a
 // synthetic refusal tool_result (no tool execution).
-func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api.ContentBlock {
+//
+// ctx is propagated to lifecycle hooks (Fire) and to the MCP fallback path so
+// callers can cancel long-running tool execution from above.
+func (loop *ConversationLoop) ExecuteTool(ctx context.Context, name string, input map[string]any) api.ContentBlock {
 	if !CheckPermission(loop.Permissions, name) {
 		return api.ContentBlock{
 			Type:    "tool_result",
@@ -1084,10 +1087,10 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 	// --- Lifecycle PreToolUse (in-process) ---
 	// Block short-circuits with a synthetic refusal so the model sees a
 	// tool_result indicating the tool did not run.
-	newInput, blocked, blockReason := loop.fireLifecyclePreToolUse(name, input)
+	newInput, blocked, blockReason := loop.fireLifecyclePreToolUse(ctx, name, input)
 	if blocked {
 		// Notify post hook so observers see the rejection symmetrically.
-		loop.fireLifecyclePostToolUse(name, input, blockReason, fmt.Errorf("blocked by hook"))
+		loop.fireLifecyclePostToolUse(ctx, name, input, blockReason, fmt.Errorf("blocked by hook"))
 		return api.ContentBlock{
 			Type:    "tool_result",
 			Content: []api.ContentBlock{{Type: "text", Text: blockReason}},
@@ -1361,7 +1364,7 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 		// Fall back to MCP registry.
 		if loop.MCPRegistry != nil {
 			if client, _, ok := loop.MCPRegistry.FindTool(name); ok {
-				mcpResult, mcpErr := client.CallTool(context.Background(), name, input)
+				mcpResult, mcpErr := client.CallTool(ctx, name, input)
 				if mcpErr != nil {
 					fmt.Fprintf(os.Stderr, "[MCP tool %s error]: %v\n", name, mcpErr)
 					mcpErrText := fmt.Sprintf("Error: %v", mcpErr)
@@ -1430,7 +1433,7 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 			postErr = fmt.Errorf("tool %s failed", name)
 		}
 	}
-	loop.fireLifecyclePostToolUse(name, input, text, postErr)
+	loop.fireLifecyclePostToolUse(ctx, name, input, text, postErr)
 
 	return api.ContentBlock{
 		Type: "tool_result",
@@ -1480,14 +1483,17 @@ func (loop *ConversationLoop) tryCompact(ctx context.Context) bool {
 // fireLifecyclePreToolUse runs the in-process PreToolUse hook. Returns
 // (newInput, blocked, reason). If blocked is true, the runtime must skip
 // tool execution and return a synthetic refusal tool_result.
-func (loop *ConversationLoop) fireLifecyclePreToolUse(name string, input map[string]any) (map[string]any, bool, string) {
+//
+// ctx is forwarded to LifecycleHooks.Fire so handlers can observe upstream
+// cancellation (e.g. user interrupt during a long-running pre-hook).
+func (loop *ConversationLoop) fireLifecyclePreToolUse(ctx context.Context, name string, input map[string]any) (map[string]any, bool, string) {
 	if loop.LifecycleHooks == nil {
 		return input, false, ""
 	}
 	hctx := loop.baseLifeCtx(lifehooks.PreToolUse)
 	hctx.ToolName = name
 	hctx.ToolInput = input
-	dec, _ := loop.LifecycleHooks.Fire(context.Background(), hctx)
+	dec, _ := loop.LifecycleHooks.Fire(ctx, hctx)
 	switch dec.Action {
 	case lifehooks.ActionBlock:
 		reason := dec.Reason
@@ -1506,7 +1512,10 @@ func (loop *ConversationLoop) fireLifecyclePreToolUse(name string, input map[str
 // fireLifecyclePostToolUse runs the in-process PostToolUse or
 // PostToolUseFailure hook. It is observational only — Block decisions are
 // logged and ignored at this point because the tool has already executed.
-func (loop *ConversationLoop) fireLifecyclePostToolUse(name string, input map[string]any, output string, toolErr error) {
+//
+// ctx is forwarded to LifecycleHooks.Fire so handlers can observe upstream
+// cancellation.
+func (loop *ConversationLoop) fireLifecyclePostToolUse(ctx context.Context, name string, input map[string]any, output string, toolErr error) {
 	if loop.LifecycleHooks == nil {
 		return
 	}
@@ -1519,7 +1528,7 @@ func (loop *ConversationLoop) fireLifecyclePostToolUse(name string, input map[st
 	hctx.ToolInput = input
 	hctx.ToolResult = output
 	hctx.ToolError = toolErr
-	_, _ = loop.LifecycleHooks.Fire(context.Background(), hctx)
+	_, _ = loop.LifecycleHooks.Fire(ctx, hctx)
 }
 
 // runPostToolHooks runs PostToolUse or PostToolUseFailure hooks if a HookRunner is configured.

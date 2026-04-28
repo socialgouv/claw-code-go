@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/SocialGouv/claw-code-go/hooks"
 	"github.com/SocialGouv/claw-code-go/internal/apikit"
@@ -49,7 +50,7 @@ func TestExecuteToolPluginDispatch(t *testing.T) {
 		PluginRegistry: registry,
 	}
 
-	result := loop.ExecuteTool("my_plugin_tool", map[string]any{"key": "value"})
+	result := loop.ExecuteTool(context.Background(), "my_plugin_tool", map[string]any{"key": "value"})
 
 	if result.IsError {
 		t.Fatalf("expected no error, got: %s", result.Content[0].Text)
@@ -73,7 +74,7 @@ func TestExecuteToolPluginPostHooksRun(t *testing.T) {
 		}),
 	}
 
-	result := loop.ExecuteTool("my_plugin_tool", map[string]any{})
+	result := loop.ExecuteTool(context.Background(), "my_plugin_tool", map[string]any{})
 
 	if !result.IsError {
 		t.Error("expected IsError=true when PostToolUse hook denies plugin tool")
@@ -98,7 +99,7 @@ func TestExecuteToolPluginTelemetryRecorded(t *testing.T) {
 		Tracer:         tracer,
 	}
 
-	result := loop.ExecuteTool("my_plugin_tool", map[string]any{})
+	result := loop.ExecuteTool(context.Background(), "my_plugin_tool", map[string]any{})
 
 	if result.IsError {
 		t.Fatalf("expected no error, got: %s", result.Content[0].Text)
@@ -128,7 +129,7 @@ func TestExecuteToolUnknownFallsThrough(t *testing.T) {
 		PluginRegistry: registry,
 	}
 
-	result := loop.ExecuteTool("totally_unknown_tool", map[string]any{})
+	result := loop.ExecuteTool(context.Background(), "totally_unknown_tool", map[string]any{})
 
 	if !result.IsError {
 		t.Error("expected IsError for unknown tool")

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/SocialGouv/claw-code-go/hooks"
 	"github.com/SocialGouv/claw-code-go/internal/api"
@@ -30,7 +31,7 @@ func TestConversationLoop_ToolCallCount_Increment(t *testing.T) {
 	// Execute 3 tools (use unknown tools — they fail but still increment the counter).
 	// The counter should track all execution attempts.
 	for range 3 {
-		loop.ExecuteTool("bash", map[string]any{"command": "echo hi"})
+		loop.ExecuteTool(context.Background(), "bash", map[string]any{"command": "echo hi"})
 	}
 
 	if got := loop.ToolCallCount(); got != 3 {
@@ -45,8 +46,8 @@ func TestLoopAdapter_ToolCallCount_ReadsFromLoop(t *testing.T) {
 	}
 
 	// Execute 2 tools.
-	loop.ExecuteTool("bash", map[string]any{"command": "echo 1"})
-	loop.ExecuteTool("bash", map[string]any{"command": "echo 2"})
+	loop.ExecuteTool(context.Background(), "bash", map[string]any{"command": "echo 1"})
+	loop.ExecuteTool(context.Background(), "bash", map[string]any{"command": "echo 2"})
 
 	adapter := NewLoopAdapter(loop)
 	if got := adapter.ToolCallCount(); got != 2 {
@@ -208,7 +209,7 @@ func TestExecuteTool_HookPermissionDeny(t *testing.T) {
 		HookRunner:  hookstesting.NewHookRunnerWithOverride(&deny, "policy says no"),
 	}
 
-	result := loop.ExecuteTool("bash", map[string]any{"command": "echo hi"})
+	result := loop.ExecuteTool(context.Background(), "bash", map[string]any{"command": "echo hi"})
 	if !result.IsError {
 		t.Error("hook deny should produce error result")
 	}
@@ -239,7 +240,7 @@ func TestExecuteTool_HookAllowRespectsAskRules(t *testing.T) {
 	// Execute — since ask-rule matches, the allow should NOT be remembered.
 	// The tool will still execute (no interactive prompt wired up in unit test),
 	// but the cache should not contain a remembered allow for bash.
-	_ = loop.ExecuteTool("bash", map[string]any{"command": "echo hi"})
+	_ = loop.ExecuteTool(context.Background(), "bash", map[string]any{"command": "echo hi"})
 
 	// Verify the ask-rule prevented auto-remembering: Check() should still
 	// return Ask (not Allow) since no decision was cached.
@@ -263,7 +264,7 @@ func TestExecuteTool_HookAllowRemembersWithoutAskRule(t *testing.T) {
 		PermManager: mgr,
 	}
 
-	_ = loop.ExecuteTool("bash", map[string]any{"command": "echo hi"})
+	_ = loop.ExecuteTool(context.Background(), "bash", map[string]any{"command": "echo hi"})
 
 	// Without ask-rules, the allow should be remembered.
 	decision := mgr.Check("bash", "echo hi")
@@ -285,7 +286,7 @@ func TestExecuteTool_HookAskDoesNotAutoAllow(t *testing.T) {
 		PermManager: mgr,
 	}
 
-	_ = loop.ExecuteTool("bash", map[string]any{"command": "echo hi"})
+	_ = loop.ExecuteTool(context.Background(), "bash", map[string]any{"command": "echo hi"})
 
 	// Ask override should not cache any decision.
 	decision := mgr.Check("bash", "echo hi")

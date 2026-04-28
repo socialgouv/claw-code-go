@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"github.com/SocialGouv/claw-code-go/internal/lsp"
 	"github.com/SocialGouv/claw-code-go/internal/mcp"
 	"testing"
@@ -32,7 +33,7 @@ func TestBatch3ToolDispatch(t *testing.T) {
 
 	for _, tt := range workerTools {
 		t.Run(tt.name, func(t *testing.T) {
-			cb := loop.ExecuteTool(tt.name, tt.input)
+			cb := loop.ExecuteTool(context.Background(), tt.name, tt.input)
 			if cb.Type != "tool_result" {
 				t.Errorf("expected tool_result type, got %q", cb.Type)
 			}
@@ -45,7 +46,7 @@ func TestBatch3ToolDispatch(t *testing.T) {
 
 	// LSP tool.
 	t.Run("lsp", func(t *testing.T) {
-		cb := loop.ExecuteTool("lsp", map[string]any{"action": "diagnostics"})
+		cb := loop.ExecuteTool(context.Background(), "lsp", map[string]any{"action": "diagnostics"})
 		if cb.Type != "tool_result" {
 			t.Errorf("expected tool_result type, got %q", cb.Type)
 		}
@@ -67,7 +68,7 @@ func TestBatch3ToolDispatch(t *testing.T) {
 
 	for _, tt := range mcpTools {
 		t.Run(tt.name, func(t *testing.T) {
-			cb := loop.ExecuteTool(tt.name, tt.input)
+			cb := loop.ExecuteTool(context.Background(), tt.name, tt.input)
 			if cb.Type != "tool_result" {
 				t.Errorf("expected tool_result type, got %q", cb.Type)
 			}
@@ -82,7 +83,7 @@ func TestBatch3ToolDispatch(t *testing.T) {
 // TestBatch3WorkerCreateDispatch verifies a successful worker_create through the full loop.
 func TestBatch3WorkerCreateDispatch(t *testing.T) {
 	loop := NewConversationLoop(&Config{Model: "test"}, nil)
-	cb := loop.ExecuteTool("worker_create", map[string]any{"cwd": "/tmp"})
+	cb := loop.ExecuteTool(context.Background(), "worker_create", map[string]any{"cwd": "/tmp"})
 	if cb.IsError {
 		t.Fatalf("worker_create dispatch failed: %v", cb.Content)
 	}
@@ -115,7 +116,7 @@ func TestBatch3NilRegistries(t *testing.T) {
 
 	for _, tt := range nilTests {
 		t.Run(tt.name+"_nil_registry", func(t *testing.T) {
-			cb := loop.ExecuteTool(tt.name, tt.input)
+			cb := loop.ExecuteTool(context.Background(), tt.name, tt.input)
 			if cb.Type != "tool_result" {
 				t.Errorf("expected tool_result type, got %q", cb.Type)
 			}

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	lifehooks "github.com/SocialGouv/claw-code-go/internal/hooks"
 )
@@ -43,7 +44,7 @@ func TestConversation_PreToolUseBlock_SkipsTool(t *testing.T) {
 
 	// Pattern that, if executed, would NOT error but would return some result.
 	// We rely on the Block decision to short-circuit before that point.
-	result := loop.ExecuteTool("glob", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "glob", map[string]any{
 		"pattern": "*.go",
 	})
 
@@ -97,7 +98,7 @@ func TestConversation_PreToolUseAllow_RunsTool(t *testing.T) {
 
 	// "*.go" succeeds (the working directory has Go files; even if it
 	// matched nothing the tool would still return a non-error empty result).
-	result := loop.ExecuteTool("glob", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "glob", map[string]any{
 		"pattern": "*.go",
 	})
 
@@ -125,10 +126,44 @@ func TestConversation_NoLifecycleHooks_NoChange(t *testing.T) {
 		// LifecycleHooks left nil.
 	}
 
-	result := loop.ExecuteTool("glob", map[string]any{
+	result := loop.ExecuteTool(context.Background(), "glob", map[string]any{
 		"pattern": "*.go",
 	})
 	if result.Type != "tool_result" {
 		t.Fatalf("expected tool_result, got %q", result.Type)
+	}
+}
+
+// TestExecuteTool_PropagatesCtxCancellation verifies that the ctx passed to
+// ExecuteTool flows into LifecycleHooks.Fire so handlers observe upstream
+// cancellation. Previously, lifecycle helpers used context.Background()
+// which made Stop signals invisible to long-running pre/post hooks.
+func TestExecuteTool_PropagatesCtxCancellation(t *testing.T) {
+	runner := lifehooks.NewRunner(lifehooks.WithLogger(io.Discard))
+
+	var observedErr error
+	runner.Register(lifehooks.PreToolUse, func(ctx context.Context, hctx lifehooks.Context) (lifehooks.Decision, error) {
+		select {
+		case <-ctx.Done():
+			observedErr = ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+			observedErr = nil
+		}
+		return lifehooks.Decision{Action: lifehooks.ActionContinue}, nil
+	})
+
+	loop := &ConversationLoop{
+		Config:         &Config{},
+		Permissions:    DefaultPermissions(),
+		LifecycleHooks: runner,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled before call
+
+	_ = loop.ExecuteTool(ctx, "glob", map[string]any{"pattern": "*.go"})
+
+	if observedErr != context.Canceled {
+		t.Fatalf("expected pre-hook to observe context.Canceled, got %v", observedErr)
 	}
 }

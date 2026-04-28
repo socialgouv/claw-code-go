@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"github.com/SocialGouv/claw-code-go/internal/api"
 	"os/exec"
@@ -71,7 +72,7 @@ func (a *LoopAdapter) WebFetch(url string) (string, error) {
 		return "", err
 	}
 	// Delegate to the web_fetch tool via ExecuteTool.
-	result := a.loop.ExecuteTool("web_fetch", map[string]any{
+	result := a.loop.ExecuteTool(context.Background(), "web_fetch", map[string]any{
 		"url": url,
 	})
 	if result.IsError {
