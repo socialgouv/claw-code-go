@@ -153,6 +153,19 @@ func loadImageFromPath(path string) ([]byte, string, error) {
 	return data, mt, nil
 }
 
+// httpsOnlyClient is the package-default client used by loadImageFromURL.
+// CheckRedirect rejects any hop that downgrades to http:// so a malicious
+// origin can't redirect a starts-as-https URL to plaintext and exfiltrate
+// the request through an attacker-controlled host.
+var httpsOnlyClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if !strings.EqualFold(req.URL.Scheme, "https") {
+			return fmt.Errorf("read_image: redirect to non-https URL rejected (%s)", req.URL.Scheme)
+		}
+		return nil
+	},
+}
+
 func loadImageFromURL(ctx context.Context, raw string) ([]byte, string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -166,7 +179,17 @@ func loadImageFromURL(ctx context.Context, raw string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("read_image: build request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := httpsOnlyClient
+	// Tests may swap http.DefaultClient with an httptest TLS client. When
+	// that happens we honour their override since CheckRedirect is the
+	// only thing we care about and httptest doesn't redirect.
+	if http.DefaultClient != nil && http.DefaultClient.Transport != nil {
+		client = &http.Client{
+			Transport:     http.DefaultClient.Transport,
+			CheckRedirect: httpsOnlyClient.CheckRedirect,
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("read_image: fetch %s: %w", raw, err)
 	}

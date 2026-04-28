@@ -145,6 +145,9 @@ func (t *SSETransport) Notify(n Notification) error {
 
 	httpResp, err := t.httpClient.Do(httpReq)
 	if err != nil {
+		// Note: Do returns (nil, err) on transport failure, so we
+		// MUST NOT touch httpResp before this guard. Body.Close()
+		// runs only on success below.
 		return fmt.Errorf("mcp sse: http post notification: %w", err)
 	}
 	httpResp.Body.Close()

@@ -16,10 +16,12 @@ import (
 	"strings"
 )
 
-// maxTarballBytes caps download size so a hostile catalog can't OOM the
-// host. 64 MB is generous for plugin tarballs (much bigger than any
-// reasonable bundle of TS/Go/Python code).
-const maxTarballBytes = 64 * 1024 * 1024
+// maxTarballBytes caps download AND cumulative extraction size so a
+// hostile catalog can't OOM or fill the disk. 64 MB is generous for
+// plugin tarballs (much bigger than any reasonable bundle of
+// TS/Go/Python code). Declared as a var rather than a const so tests
+// can lower it without realistically allocating 64 MB of fixture data.
+var maxTarballBytes int64 = 64 * 1024 * 1024
 
 // Installer materializes plugins from PluginEntry tarballs into a
 // per-plugin directory under Dir. Each plugin lives in
@@ -150,6 +152,11 @@ func (i *Installer) downloadAndVerify(ctx context.Context, entry PluginEntry) ([
 // (../) and absolute paths are rejected — every entry must resolve
 // inside dest. Symlinks are skipped entirely; we don't follow them and
 // we don't recreate them.
+//
+// The total bytes written across all extracted files is capped at
+// maxTarballBytes — a malicious tarball with N small headers each
+// claiming 64 MB of content can no longer chew through disk by
+// stacking entries.
 func extractTarGz(data []byte, dest string) error {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -158,6 +165,7 @@ func extractTarGz(data []byte, dest string) error {
 	defer gz.Close()
 
 	tr := tar.NewReader(gz)
+	remaining := int64(maxTarballBytes)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -191,12 +199,17 @@ func extractTarGz(data []byte, dest string) error {
 			if err != nil {
 				return fmt.Errorf("installer: create %s: %w", target, err)
 			}
-			if _, err := io.Copy(f, io.LimitReader(tr, maxTarballBytes)); err != nil {
-				f.Close()
+			// Copy at most `remaining+1` so we can detect tarballs that
+			// would push us past the cap and abort instead of silently
+			// truncating.
+			n, err := io.Copy(f, io.LimitReader(tr, remaining+1))
+			f.Close()
+			if err != nil {
 				return fmt.Errorf("installer: write %s: %w", target, err)
 			}
-			if err := f.Close(); err != nil {
-				return fmt.Errorf("installer: close %s: %w", target, err)
+			remaining -= n
+			if remaining < 0 {
+				return fmt.Errorf("installer: extracted contents exceed %d-byte cap", maxTarballBytes)
 			}
 		default:
 			// Skip symlinks, char devices, FIFOs, etc.

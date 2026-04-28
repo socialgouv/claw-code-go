@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -121,6 +122,36 @@ func TestManager_InstallRejectsUnknownPlugin(t *testing.T) {
 	mgr, _ := fixtureManager(t)
 	if _, err := mgr.Install(context.Background(), "ghost"); err == nil {
 		t.Fatal("expected error for unknown plugin")
+	}
+}
+
+func TestManager_ConcurrentInstall_SerializeOnMutex(t *testing.T) {
+	mgr, _ := fixtureManager(t)
+	const goroutines = 5
+
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := mgr.Install(context.Background(), "linter"); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent install returned error: %v", err)
+	}
+
+	list, err := mgr.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("expected exactly 1 installed plugin after %d concurrent installs, got %d", goroutines, len(list))
 	}
 }
 

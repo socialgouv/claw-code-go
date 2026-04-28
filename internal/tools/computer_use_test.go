@@ -117,6 +117,32 @@ func TestReadImage_HTTPSFetch(t *testing.T) {
 	}
 }
 
+func TestReadImage_RejectsHTTPSToHTTPRedirect(t *testing.T) {
+	// Plain HTTP target — the "evil" host the redirect would land on.
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("plain http server should never be hit; redirect must be blocked")
+		_, _ = w.Write(pngFixture)
+	}))
+	defer plain.Close()
+
+	// HTTPS origin that 302s to the plain http target. The starting URL
+	// passes the scheme check, so without CheckRedirect we'd silently
+	// follow into plaintext.
+	tls := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/img.png", http.StatusFound)
+	}))
+	defer tls.Close()
+
+	prev := http.DefaultClient
+	http.DefaultClient = tls.Client()
+	t.Cleanup(func() { http.DefaultClient = prev })
+
+	_, err := ExecuteReadImage(context.Background(), map[string]any{"url": tls.URL + "/start"})
+	if err == nil || !strings.Contains(err.Error(), "non-https") {
+		t.Fatalf("expected redirect-to-non-https error, got %v", err)
+	}
+}
+
 func TestReadImage_PathAndURL_Mutex(t *testing.T) {
 	_, err := ExecuteReadImage(context.Background(), map[string]any{
 		"path": "/tmp/x.png",

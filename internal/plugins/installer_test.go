@@ -155,6 +155,42 @@ func TestInstaller_Uninstall(t *testing.T) {
 	}
 }
 
+func TestInstaller_RejectsCumulativeOversize(t *testing.T) {
+	// A tarball with two entries that together exceed the cap. We
+	// shrink the cap to 60 KB for the test and ship 2x40 KB files —
+	// download passes (80 KB ≤ 60 KB+1 buffer), checksum passes, but
+	// the cumulative extraction must abort partway through.
+	saved := maxTarballBytes
+	defer func() { maxTarballBytes = saved }()
+	maxTarballBytes = 100 * 1024
+
+	chunk := strings.Repeat("X", 40*1024)
+	tarball := makeTarGz(t, map[string]string{
+		"a.bin": chunk,
+		"b.bin": chunk,
+		"c.bin": chunk, // 3×40 KB = 120 KB > 100 KB cap
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(tarball)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	inst := &Installer{Dir: dir, HTTPClient: srv.Client()}
+	err := inst.Install(context.Background(), PluginEntry{
+		Name:       "huge",
+		TarballURL: srv.URL,
+		SHA256:     sha256Hex(tarball),
+	})
+	if err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("expected size-cap error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "huge")); !os.IsNotExist(err) {
+		t.Errorf("expected target dir absent after over-cap install, got err=%v", err)
+	}
+}
+
 func TestInstaller_RejectsHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)

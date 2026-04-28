@@ -160,9 +160,21 @@ func (b *Broker) Acquire(ctx context.Context, cfg ServerConfig) (string, error) 
 }
 
 // Revoke removes the cached token for cfg.Name. When cfg.RevokeURL is
-// non-empty, it is posted with the access token first; failures there
-// are logged via the error return but the local cache entry is dropped
-// regardless so callers can recover from a partial outage.
+// non-empty, it is posted with the access token first.
+//
+// Error semantics — read this if you're integrating with an OAuth
+// provider that has a flaky revocation endpoint:
+//
+//   - revoke ok + delete ok → returns nil; remote and local both cleared.
+//   - revoke ok + delete err → returns the delete error; remote cleared,
+//     local probably stale (operator must clean up).
+//   - revoke err + delete ok → returns the revoke error; **local IS
+//     cleared** so the next Acquire restarts cleanly. Caller can treat
+//     a non-nil return here as "investigate the auth server" without
+//     worrying about a stale local cache.
+//   - revoke err + delete err → returns a wrapped error mentioning both.
+//
+// In other words: a non-nil return never leaves a stale local entry.
 func (b *Broker) Revoke(ctx context.Context, cfg ServerConfig) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

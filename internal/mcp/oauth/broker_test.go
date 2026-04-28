@@ -275,6 +275,28 @@ func TestBroker_RefreshOnExpiringToken(t *testing.T) {
 	}
 }
 
+func TestBroker_RevokeStillClearsLocalOnRemoteFailure(t *testing.T) {
+	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
+	_ = storage.Save("github", Token{AccessToken: "x"})
+
+	revokeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer revokeSrv.Close()
+
+	b := NewBroker(WithStorage(storage), WithHTTPClient(revokeSrv.Client()))
+	cfg := ServerConfig{Name: "github", RevokeURL: revokeSrv.URL, ClientID: "c"}
+	err := b.Revoke(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "400") {
+		t.Fatalf("expected 400 error, got %v", err)
+	}
+	// Critical invariant: local cache must be cleared even when the
+	// revoke endpoint rejects the request, so callers can re-Acquire.
+	if _, ok, _ := storage.Load("github"); ok {
+		t.Errorf("expected token cleared from local cache despite revoke 4xx")
+	}
+}
+
 func TestBroker_RevokeDropsToken(t *testing.T) {
 	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
 	_ = storage.Save("github", Token{AccessToken: "x"})
