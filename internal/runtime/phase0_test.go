@@ -1,11 +1,11 @@
 package runtime
 
 import (
+	"encoding/json"
 	"github.com/SocialGouv/claw-code-go/hooks"
 	"github.com/SocialGouv/claw-code-go/internal/api"
 	"github.com/SocialGouv/claw-code-go/internal/hooks/hookstesting"
 	"github.com/SocialGouv/claw-code-go/internal/permissions"
-	"encoding/json"
 	"strings"
 	"testing"
 )

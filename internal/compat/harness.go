@@ -1,13 +1,13 @@
 package compat
 
 import (
-	"github.com/SocialGouv/claw-code-go/internal/commands"
-	"github.com/SocialGouv/claw-code-go/internal/runtime"
-	"github.com/SocialGouv/claw-code-go/internal/tools"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/SocialGouv/claw-code-go/internal/commands"
+	"github.com/SocialGouv/claw-code-go/internal/runtime"
+	"github.com/SocialGouv/claw-code-go/internal/tools"
 	"os"
 	"path/filepath"
 	"strings"

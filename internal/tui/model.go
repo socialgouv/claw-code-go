@@ -1,11 +1,11 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"github.com/SocialGouv/claw-code-go/internal/auth"
 	"github.com/SocialGouv/claw-code-go/internal/config"
 	"github.com/SocialGouv/claw-code-go/internal/runtime"
-	"context"
-	"fmt"
 	"os"
 	"strings"
 

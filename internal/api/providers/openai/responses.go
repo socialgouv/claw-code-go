@@ -4,8 +4,8 @@
 // `reasoning_effort` and `tools` for gpt-5.5+ (and likely other reasoning
 // models in the future), with the explicit error:
 //
-//   Function tools with reasoning_effort are not supported for gpt-5.5
-//   in /v1/chat/completions. Please use /v1/responses instead.
+//	Function tools with reasoning_effort are not supported for gpt-5.5
+//	in /v1/chat/completions. Please use /v1/responses instead.
 //
 // This file implements a parallel streaming code path that targets the
 // /v1/responses endpoint and translates its (very different) SSE event
@@ -93,7 +93,7 @@ type oaiResponsesEvent struct {
 	Type string `json:"type"`
 
 	// response.output_item.added / response.output_item.done
-	OutputIndex int                    `json:"output_index"`
+	OutputIndex int                     `json:"output_index"`
 	Item        *oaiResponsesOutputItem `json:"item,omitempty"`
 
 	// response.output_text.delta / done
@@ -108,7 +108,7 @@ type oaiResponsesEvent struct {
 }
 
 type oaiResponsesOutputItem struct {
-	Type      string `json:"type"`       // "message" | "function_call" | "reasoning"
+	Type      string `json:"type"` // "message" | "function_call" | "reasoning"
 	ID        string `json:"id"`
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
@@ -117,10 +117,10 @@ type oaiResponsesOutputItem struct {
 }
 
 type oaiResponsesFinal struct {
-	ID         string                 `json:"id"`
-	Status     string                 `json:"status"`
-	Usage      *oaiResponsesUsage     `json:"usage,omitempty"`
-	Output     []oaiResponsesOutputItem `json:"output,omitempty"`
+	ID     string                   `json:"id"`
+	Status string                   `json:"status"`
+	Usage  *oaiResponsesUsage       `json:"usage,omitempty"`
+	Output []oaiResponsesOutputItem `json:"output,omitempty"`
 }
 
 type oaiResponsesUsage struct {
@@ -378,8 +378,8 @@ func (c *Client) streamResponsesEvents(ctx context.Context, resp *http.Response,
 		// Map keyed by item_id (function_call output item id) to track
 		// per-tool-call state. Some events use "item_id" directly, others
 		// reach us via the Item embedded in output_item.added.
-		fnByItem  = make(map[string]*pendingFn)
-		stopReason = "end_turn"
+		fnByItem     = make(map[string]*pendingFn)
+		stopReason   = "end_turn"
 		outputTokens int
 	)
 

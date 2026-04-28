@@ -1,8 +1,8 @@
 package tools
 
 import (
-	"github.com/SocialGouv/claw-code-go/internal/runtime/team"
 	"encoding/json"
+	"github.com/SocialGouv/claw-code-go/internal/runtime/team"
 	"strings"
 	"testing"
 )

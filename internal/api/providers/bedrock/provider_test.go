@@ -19,7 +19,7 @@ func TestNormalizeModelID(t *testing.T) {
 		"  bedrock/anthropic.claude-sonnet-4-20250514-v1:0  ": "anthropic.claude-sonnet-4-20250514-v1:0",
 		"anthropic.claude-sonnet-4-20250514-v1:0":             "anthropic.claude-sonnet-4-20250514-v1:0",
 		"us.anthropic.claude-sonnet-4-20250514-v1:0":          "us.anthropic.claude-sonnet-4-20250514-v1:0",
-		"":                                                    "",
+		"": "",
 	}
 	for in, want := range cases {
 		if got := normalizeModelID(in); got != want {

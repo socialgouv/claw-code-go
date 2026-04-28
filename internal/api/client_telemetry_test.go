@@ -1,9 +1,9 @@
 package api
 
 import (
-	"github.com/SocialGouv/claw-code-go/internal/apikit"
 	"context"
 	"fmt"
+	"github.com/SocialGouv/claw-code-go/internal/apikit"
 	"net/http"
 	"net/http/httptest"
 	"strings"

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"flag"
+	"fmt"
 	"github.com/SocialGouv/claw-code-go/hooks"
 	"github.com/SocialGouv/claw-code-go/internal/auth"
 	"github.com/SocialGouv/claw-code-go/internal/commands"
@@ -10,9 +13,6 @@ import (
 	"github.com/SocialGouv/claw-code-go/internal/runtime"
 	"github.com/SocialGouv/claw-code-go/internal/tui"
 	"github.com/SocialGouv/claw-code-go/plugin"
-	"context"
-	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"

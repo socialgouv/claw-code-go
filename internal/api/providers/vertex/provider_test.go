@@ -21,7 +21,7 @@ func TestMapModelID(t *testing.T) {
 	}{
 		{"claude-sonnet-4-20250514", "claude-sonnet-4@20250514"},
 		{"claude-haiku-4-5-20251001", "claude-haiku-4-5@20251001"},
-		{"claude-sonnet-4@20250514", "claude-sonnet-4@20250514"},      // already vertex-shaped
+		{"claude-sonnet-4@20250514", "claude-sonnet-4@20250514"},        // already vertex-shaped
 		{"vertex/claude-sonnet-4-20250514", "claude-sonnet-4@20250514"}, // strip routing prefix
 		{"claude-sonnet-4", "claude-sonnet-4"},                          // no date suffix
 		{"", ""},

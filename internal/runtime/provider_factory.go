@@ -1,14 +1,14 @@
 package runtime
 
 import (
+	"context"
+	"fmt"
 	"github.com/SocialGouv/claw-code-go/internal/api"
 	anthropicprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/anthropic"
 	bedrockprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/bedrock"
 	foundryprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/foundry"
 	openaiprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/openai"
 	vertexprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/vertex"
-	"context"
-	"fmt"
 )
 
 // SelectProvider returns the Provider for the given name.

@@ -160,18 +160,18 @@ func (c *Client) endpoint() string {
 // Anthropic /v1/messages request but (a) requires anthropic_version and
 // (b) does NOT carry the model field — that's encoded in the URL path.
 type vertexRequest struct {
-	AnthropicVersion string             `json:"anthropic_version"`
-	MaxTokens        int                `json:"max_tokens"`
-	System           json.RawMessage    `json:"system,omitempty"`
-	Messages         []api.Message      `json:"messages"`
-	Tools            []api.Tool         `json:"tools,omitempty"`
-	ToolChoice       *api.ToolChoice    `json:"tool_choice,omitempty"`
-	Stream           bool               `json:"stream"`
-	Temperature      *float64           `json:"temperature,omitempty"`
-	TopP             *float64           `json:"top_p,omitempty"`
-	FrequencyPenalty *float64           `json:"frequency_penalty,omitempty"`
-	PresencePenalty  *float64           `json:"presence_penalty,omitempty"`
-	Stop             []string           `json:"stop,omitempty"`
+	AnthropicVersion string          `json:"anthropic_version"`
+	MaxTokens        int             `json:"max_tokens"`
+	System           json.RawMessage `json:"system,omitempty"`
+	Messages         []api.Message   `json:"messages"`
+	Tools            []api.Tool      `json:"tools,omitempty"`
+	ToolChoice       *api.ToolChoice `json:"tool_choice,omitempty"`
+	Stream           bool            `json:"stream"`
+	Temperature      *float64        `json:"temperature,omitempty"`
+	TopP             *float64        `json:"top_p,omitempty"`
+	FrequencyPenalty *float64        `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64        `json:"presence_penalty,omitempty"`
+	Stop             []string        `json:"stop,omitempty"`
 }
 
 func (c *Client) buildRequest(req api.CreateMessageRequest) ([]byte, error) {

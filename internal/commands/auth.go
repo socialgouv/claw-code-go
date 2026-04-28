@@ -1,8 +1,8 @@
 package commands
 
 import (
-	"github.com/SocialGouv/claw-code-go/internal/auth"
 	"fmt"
+	"github.com/SocialGouv/claw-code-go/internal/auth"
 )
 
 // requireInteractiveLoop returns an error message and true if the loop is nil

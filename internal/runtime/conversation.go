@@ -1,6 +1,9 @@
 package runtime
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"github.com/SocialGouv/claw-code-go/hooks"
 	"github.com/SocialGouv/claw-code-go/internal/api"
 	"github.com/SocialGouv/claw-code-go/internal/apikit"
@@ -15,9 +18,6 @@ import (
 	"github.com/SocialGouv/claw-code-go/internal/tools"
 	"github.com/SocialGouv/claw-code-go/internal/usage"
 	"github.com/SocialGouv/claw-code-go/plugin"
-	"context"
-	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"

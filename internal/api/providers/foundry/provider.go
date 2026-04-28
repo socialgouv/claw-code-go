@@ -601,4 +601,3 @@ func truncateBody(body string, maxRunes int) string {
 	}
 	return string(r[:maxRunes]) + "…"
 }
-

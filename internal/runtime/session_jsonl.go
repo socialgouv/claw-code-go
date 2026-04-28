@@ -2,9 +2,9 @@ package runtime
 
 import (
 	"bufio"
-	"github.com/SocialGouv/claw-code-go/internal/api"
 	"encoding/json"
 	"fmt"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 	"io"
 	"os"
 	"path/filepath"

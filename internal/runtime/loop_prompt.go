@@ -1,8 +1,8 @@
 package runtime
 
 import (
-	"github.com/SocialGouv/claw-code-go/internal/api"
 	"fmt"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 	"os/exec"
 	"strings"
 	"time"
