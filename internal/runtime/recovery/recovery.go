@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"time"
 
-	"claw-code-go/internal/runtime/worker"
+	"github.com/SocialGouv/claw-code-go/internal/runtime/worker"
 )
 
 // ---------------------------------------------------------------------------

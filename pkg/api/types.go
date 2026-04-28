@@ -5,7 +5,7 @@
 package api
 
 import (
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 // CacheControlMarker is the Anthropic prompt caching marker.

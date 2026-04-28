@@ -2,7 +2,7 @@
 package anthropic
 
 import (
-	internal "claw-code-go/internal/api/providers/anthropic"
+	internal "github.com/SocialGouv/claw-code-go/internal/api/providers/anthropic"
 )
 
 // Provider implements api.Provider for the Anthropic direct API.

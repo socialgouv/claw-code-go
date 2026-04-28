@@ -2,7 +2,7 @@
 package openai
 
 import (
-	internal "claw-code-go/internal/api/providers/openai"
+	internal "github.com/SocialGouv/claw-code-go/internal/api/providers/openai"
 )
 
 // Provider implements api.Provider for the OpenAI API.

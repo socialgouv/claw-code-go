@@ -2,8 +2,8 @@ package tools
 
 import (
 	"bytes"
-	"claw-code-go/internal/api"
-	"claw-code-go/internal/permissions"
+	"github.com/SocialGouv/claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/permissions"
 	"context"
 	"fmt"
 	"io"

@@ -7,7 +7,7 @@ package foundry
 import (
 	"fmt"
 
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 // Provider implements api.Provider for Azure AI Foundry.

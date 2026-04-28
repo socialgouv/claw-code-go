@@ -1,7 +1,7 @@
 package hookstesting
 
 import (
-	"claw-code-go/hooks"
+	"github.com/SocialGouv/claw-code-go/hooks"
 	"testing"
 )
 

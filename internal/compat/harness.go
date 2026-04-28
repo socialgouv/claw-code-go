@@ -1,9 +1,9 @@
 package compat
 
 import (
-	"claw-code-go/internal/commands"
-	"claw-code-go/internal/runtime"
-	"claw-code-go/internal/tools"
+	"github.com/SocialGouv/claw-code-go/internal/commands"
+	"github.com/SocialGouv/claw-code-go/internal/runtime"
+	"github.com/SocialGouv/claw-code-go/internal/tools"
 	"context"
 	"encoding/json"
 	"flag"

@@ -1,7 +1,7 @@
 package commands
 
 import (
-	"claw-code-go/internal/auth"
+	"github.com/SocialGouv/claw-code-go/internal/auth"
 	"fmt"
 )
 

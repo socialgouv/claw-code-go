@@ -1,9 +1,9 @@
 package tools
 
 import (
-	"claw-code-go/internal/api"
-	"claw-code-go/internal/config"
-	"claw-code-go/internal/runtime/worker"
+	"github.com/SocialGouv/claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/config"
+	"github.com/SocialGouv/claw-code-go/internal/runtime/worker"
 	"encoding/json"
 	"fmt"
 )

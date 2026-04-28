@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 // AskUserQuestionTool returns the tool definition for asking the user a question.

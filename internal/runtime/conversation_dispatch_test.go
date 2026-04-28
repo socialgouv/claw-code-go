@@ -1,8 +1,8 @@
 package runtime
 
 import (
-	"claw-code-go/internal/lsp"
-	"claw-code-go/internal/mcp"
+	"github.com/SocialGouv/claw-code-go/internal/lsp"
+	"github.com/SocialGouv/claw-code-go/internal/mcp"
 	"testing"
 )
 

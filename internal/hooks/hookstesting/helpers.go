@@ -4,7 +4,7 @@
 // within the module can import it, and its test-only intent is clear.
 package hookstesting
 
-import "claw-code-go/hooks"
+import "github.com/SocialGouv/claw-code-go/hooks"
 
 // NewHookRunnerWithOverride creates a HookRunner for testing that will return
 // the given permission override on the first PreToolUse call. This is used

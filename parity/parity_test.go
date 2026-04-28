@@ -12,16 +12,16 @@ import (
 	"strings"
 	"testing"
 
-	"claw-code-go/internal/apikit"
-	"claw-code-go/internal/commands"
-	"claw-code-go/internal/config"
-	"claw-code-go/internal/mcp"
-	"claw-code-go/internal/permissions"
-	"claw-code-go/internal/runtime"
-	"claw-code-go/internal/runtime/recovery"
-	"claw-code-go/internal/runtime/worker"
-	"claw-code-go/internal/testutil"
-	"claw-code-go/internal/tools"
+	"github.com/SocialGouv/claw-code-go/internal/apikit"
+	"github.com/SocialGouv/claw-code-go/internal/commands"
+	"github.com/SocialGouv/claw-code-go/internal/config"
+	"github.com/SocialGouv/claw-code-go/internal/mcp"
+	"github.com/SocialGouv/claw-code-go/internal/permissions"
+	"github.com/SocialGouv/claw-code-go/internal/runtime"
+	"github.com/SocialGouv/claw-code-go/internal/runtime/recovery"
+	"github.com/SocialGouv/claw-code-go/internal/runtime/worker"
+	"github.com/SocialGouv/claw-code-go/internal/testutil"
+	"github.com/SocialGouv/claw-code-go/internal/tools"
 )
 
 // fixtureDir returns the path to the golden fixtures directory.

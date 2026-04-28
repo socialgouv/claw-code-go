@@ -1,7 +1,7 @@
 package api
 
 import (
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 // ProviderConfig holds the credentials and settings needed to create a provider client.

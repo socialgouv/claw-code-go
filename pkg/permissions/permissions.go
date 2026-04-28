@@ -3,7 +3,7 @@
 // without duplicating 1600+ lines of policy engine code.
 package permissions
 
-import "claw-code-go/internal/permissions"
+import "github.com/SocialGouv/claw-code-go/internal/permissions"
 
 // PermissionMode represents the security level of a session or tool requirement.
 type PermissionMode = permissions.PermissionMode

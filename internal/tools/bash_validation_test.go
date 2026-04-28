@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"claw-code-go/internal/permissions"
+	"github.com/SocialGouv/claw-code-go/internal/permissions"
 	"strings"
 	"testing"
 )

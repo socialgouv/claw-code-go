@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 	"fmt"
 	"io"
 	"net/http"

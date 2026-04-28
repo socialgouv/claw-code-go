@@ -4,9 +4,9 @@
 package runtime
 
 import (
-	"claw-code-go/pkg/api"
+	"github.com/SocialGouv/claw-code-go/pkg/api"
 
-	internalrt "claw-code-go/internal/runtime"
+	internalrt "github.com/SocialGouv/claw-code-go/internal/runtime"
 )
 
 // SelectProvider returns the Provider for the given name.

@@ -2,7 +2,7 @@
 package bedrock
 
 import (
-	internal "claw-code-go/internal/api/providers/bedrock"
+	internal "github.com/SocialGouv/claw-code-go/internal/api/providers/bedrock"
 )
 
 // Provider implements api.Provider for AWS Bedrock (stub).

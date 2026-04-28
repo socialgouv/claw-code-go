@@ -1,8 +1,8 @@
 package runtime
 
 import (
-	"claw-code-go/hooks"
-	"claw-code-go/internal/apikit"
+	"github.com/SocialGouv/claw-code-go/hooks"
+	"github.com/SocialGouv/claw-code-go/internal/apikit"
 	"strings"
 	"testing"
 )

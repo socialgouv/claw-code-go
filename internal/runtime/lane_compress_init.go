@@ -1,6 +1,6 @@
 package runtime
 
-import "claw-code-go/internal/runtime/lane"
+import "github.com/SocialGouv/claw-code-go/internal/runtime/lane"
 
 func init() {
 	// Wire the summary compressor into the lane package to avoid a circular

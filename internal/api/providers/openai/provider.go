@@ -5,8 +5,8 @@ package openai
 import (
 	"bufio"
 	"bytes"
-	"claw-code-go/internal/api"
-	"claw-code-go/internal/strutil"
+	"github.com/SocialGouv/claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/strutil"
 	"context"
 	"encoding/json"
 	"fmt"

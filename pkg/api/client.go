@@ -1,7 +1,7 @@
 package api
 
 import (
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 // Client is the Anthropic HTTP API client.

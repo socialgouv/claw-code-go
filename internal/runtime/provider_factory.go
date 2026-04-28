@@ -1,12 +1,12 @@
 package runtime
 
 import (
-	"claw-code-go/internal/api"
-	anthropicprovider "claw-code-go/internal/api/providers/anthropic"
-	bedrockprovider "claw-code-go/internal/api/providers/bedrock"
-	foundryprovider "claw-code-go/internal/api/providers/foundry"
-	openaiprovider "claw-code-go/internal/api/providers/openai"
-	vertexprovider "claw-code-go/internal/api/providers/vertex"
+	"github.com/SocialGouv/claw-code-go/internal/api"
+	anthropicprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/anthropic"
+	bedrockprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/bedrock"
+	foundryprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/foundry"
+	openaiprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/openai"
+	vertexprovider "github.com/SocialGouv/claw-code-go/internal/api/providers/vertex"
 	"context"
 	"fmt"
 )

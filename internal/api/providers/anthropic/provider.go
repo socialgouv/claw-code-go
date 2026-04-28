@@ -3,7 +3,7 @@
 package anthropic
 
 import (
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 const defaultBaseURL = "https://api.anthropic.com"

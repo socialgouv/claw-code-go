@@ -7,7 +7,7 @@
 package trust
 
 import (
-	"claw-code-go/internal/strutil"
+	"github.com/SocialGouv/claw-code-go/internal/strutil"
 	"encoding/json"
 	"fmt"
 	"path/filepath"

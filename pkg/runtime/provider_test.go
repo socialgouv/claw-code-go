@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"claw-code-go/pkg/api"
-	pkgrt "claw-code-go/pkg/runtime"
+	"github.com/SocialGouv/claw-code-go/pkg/api"
+	pkgrt "github.com/SocialGouv/claw-code-go/pkg/runtime"
 )
 
 func TestSelectProviderAllNames(t *testing.T) {

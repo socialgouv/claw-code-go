@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 func TestFormatCompactSummaryStripsAnalysisTags(t *testing.T) {

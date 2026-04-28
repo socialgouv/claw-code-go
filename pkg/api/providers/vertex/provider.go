@@ -2,7 +2,7 @@
 package vertex
 
 import (
-	internal "claw-code-go/internal/api/providers/vertex"
+	internal "github.com/SocialGouv/claw-code-go/internal/api/providers/vertex"
 )
 
 // Provider implements api.Provider for Google Cloud Vertex AI (stub).

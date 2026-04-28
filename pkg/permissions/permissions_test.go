@@ -3,7 +3,7 @@ package permissions_test
 import (
 	"testing"
 
-	"claw-code-go/pkg/permissions"
+	"github.com/SocialGouv/claw-code-go/pkg/permissions"
 )
 
 func TestTypeAliasesCompile(t *testing.T) {

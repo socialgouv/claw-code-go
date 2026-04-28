@@ -1,7 +1,7 @@
 package recovery
 
 import (
-	"claw-code-go/internal/runtime/worker"
+	"github.com/SocialGouv/claw-code-go/internal/runtime/worker"
 	"encoding/json"
 	"fmt"
 	"testing"

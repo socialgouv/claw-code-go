@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"claw-code-go/internal/permissions"
+	"github.com/SocialGouv/claw-code-go/internal/permissions"
 )
 
 // --- ConfigSwitcher interface (config_cmds.go) ---

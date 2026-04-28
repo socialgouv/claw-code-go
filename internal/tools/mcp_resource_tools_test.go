@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"claw-code-go/internal/mcp"
+	"github.com/SocialGouv/claw-code-go/internal/mcp"
 	"context"
 	"encoding/json"
 	"fmt"

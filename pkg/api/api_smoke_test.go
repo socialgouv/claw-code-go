@@ -1,8 +1,8 @@
 package api_test
 
 import (
-	internalapi "claw-code-go/internal/api"
-	"claw-code-go/pkg/api"
+	internalapi "github.com/SocialGouv/claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/pkg/api"
 	"testing"
 )
 

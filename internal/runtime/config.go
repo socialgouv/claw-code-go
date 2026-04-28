@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"claw-code-go/internal/config"
+	"github.com/SocialGouv/claw-code-go/internal/config"
 	"encoding/json"
 	"os"
 	"path/filepath"

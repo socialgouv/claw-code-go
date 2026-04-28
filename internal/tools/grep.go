@@ -2,7 +2,7 @@ package tools
 
 import (
 	"bufio"
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 	"fmt"
 	"os"
 	"path/filepath"

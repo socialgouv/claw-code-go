@@ -1,7 +1,7 @@
 package worker
 
 import (
-	"claw-code-go/internal/runtime/trust"
+	"github.com/SocialGouv/claw-code-go/internal/runtime/trust"
 	"encoding/json"
 	"fmt"
 	"os"

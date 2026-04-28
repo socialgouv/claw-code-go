@@ -1,4 +1,4 @@
-module claw-code-go
+module github.com/SocialGouv/claw-code-go
 
 go 1.25.0
 

@@ -4,7 +4,7 @@
 package apikit
 
 import (
-	"claw-code-go/internal/apikit"
+	"github.com/SocialGouv/claw-code-go/internal/apikit"
 )
 
 // SessionTracer records telemetry events scoped to a session.

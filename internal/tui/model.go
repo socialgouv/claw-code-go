@@ -1,9 +1,9 @@
 package tui
 
 import (
-	"claw-code-go/internal/auth"
-	"claw-code-go/internal/config"
-	"claw-code-go/internal/runtime"
+	"github.com/SocialGouv/claw-code-go/internal/auth"
+	"github.com/SocialGouv/claw-code-go/internal/config"
+	"github.com/SocialGouv/claw-code-go/internal/runtime"
 	"context"
 	"fmt"
 	"os"

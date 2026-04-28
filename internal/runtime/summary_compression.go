@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"claw-code-go/internal/strutil"
+	"github.com/SocialGouv/claw-code-go/internal/strutil"
 	"fmt"
 	"sort"
 	"strings"

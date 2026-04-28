@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"claw-code-go/internal/api"
-	"claw-code-go/internal/usage"
+	"github.com/SocialGouv/claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/usage"
 )
 
 // --- Compile-time interface checks ---

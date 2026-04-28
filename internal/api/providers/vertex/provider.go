@@ -7,7 +7,7 @@ package vertex
 import (
 	"fmt"
 
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 // Provider implements api.Provider for Google Cloud Vertex AI.

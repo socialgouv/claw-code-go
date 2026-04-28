@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 // Compaction continuation constants (matching Rust compact.rs).

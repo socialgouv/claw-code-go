@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"claw-code-go/internal/config"
+	"github.com/SocialGouv/claw-code-go/internal/config"
 )
 
 // Assembler collects and caches project context for injection into the system prompt.
