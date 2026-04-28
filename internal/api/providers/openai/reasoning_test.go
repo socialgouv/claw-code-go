@@ -2,8 +2,10 @@ package openai
 
 import (
 	"encoding/json"
-	"github.com/SocialGouv/claw-code-go/internal/api"
+	"strings"
 	"testing"
+
+	"github.com/SocialGouv/claw-code-go/internal/api"
 )
 
 func TestIsReasoningModel(t *testing.T) {
@@ -358,5 +360,42 @@ func TestStreamOptionsIncludedForOpenAI(t *testing.T) {
 
 	if v, ok := soMap["include_usage"]; !ok || v != true {
 		t.Errorf("stream_options.include_usage = %v, want true", v)
+	}
+}
+
+// TestConvertTools_PropagatesMarshalError pins the contract that tool
+// conversion bubbles up json.Marshal failures rather than silently dropping
+// the offending tool. Silently skipping a tool causes the model to emit
+// tool_use calls for an undeclared name, which derails the conversation.
+//
+// We trigger a marshal failure by stuffing a chan into the Property.Enum
+// slice (chan values are not JSON-marshallable). The chat-completions
+// buildRequest path is exercised here.
+func TestConvertTools_PropagatesMarshalError(t *testing.T) {
+	client := &Client{Model: "gpt-4o", APIKey: "stub"}
+	req := api.CreateMessageRequest{
+		Model:     "gpt-4o",
+		MaxTokens: 16,
+		Messages: []api.Message{
+			{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "hi"}}},
+		},
+		Tools: []api.Tool{
+			{
+				Name:        "broken",
+				Description: "schema with unmarshallable enum",
+				InputSchema: api.InputSchema{
+					Type: "object",
+					Properties: map[string]api.Property{
+						"x": {Type: "string", Enum: []any{make(chan int)}},
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := client.buildRequest(req); err == nil {
+		t.Fatal("expected buildRequest to fail when a tool's input schema cannot be marshalled")
+	} else if !strings.Contains(err.Error(), "broken") {
+		t.Errorf("error %q should mention the offending tool name %q", err.Error(), "broken")
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -265,12 +264,9 @@ func TestProviderMetadata(t *testing.T) {
 }
 
 func TestNewClientRequiresModel(t *testing.T) {
-	// AWS_REGION must be set or LoadDefaultConfig may still succeed (returns
-	// empty region). Skip this test when the env is unconfigured to stay
-	// hermetic on environments without AWS at all.
-	if os.Getenv("AWS_REGION") == "" {
-		t.Skip("AWS_REGION not set")
-	}
+	// LoadDefaultConfig needs a region to mint a sensible client; force one
+	// here so the test runs hermetically on environments without AWS at all.
+	t.Setenv("AWS_REGION", "us-east-1")
 	p := New()
 	if _, err := p.NewClient(api.ProviderConfig{}); err == nil {
 		t.Errorf("expected error for empty model")

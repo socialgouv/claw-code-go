@@ -3,6 +3,7 @@ package foundry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -185,8 +186,8 @@ func TestStreamResponseError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error from 500 response")
 	}
-	apiErr, ok := err.(*api.APIError)
-	if !ok {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected *api.APIError, got %T: %v", err, err)
 	}
 	if apiErr.Provider != "foundry" {
@@ -232,5 +233,44 @@ func TestStreamResponseLive(t *testing.T) {
 		if ev.Type == api.EventError {
 			t.Errorf("stream error: %s", ev.ErrorMessage)
 		}
+	}
+}
+
+// TestConvertTools_PropagatesMarshalError pins the contract that tool
+// conversion bubbles up json.Marshal failures rather than silently
+// dropping the offending tool. Silently skipping a tool causes the model
+// to emit tool_use calls for an undeclared name, which derails the
+// conversation. We trigger a marshal failure by stuffing a chan into
+// Property.Enum (chan values are not JSON-marshallable).
+func TestConvertTools_PropagatesMarshalError(t *testing.T) {
+	c := &Client{
+		Endpoint:   "https://x",
+		Deployment: "dep-1",
+		APIVersion: defaultAPIVersion,
+		APIKey:     "stub",
+	}
+	req := api.CreateMessageRequest{
+		MaxTokens: 16,
+		Messages: []api.Message{
+			{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "hi"}}},
+		},
+		Tools: []api.Tool{
+			{
+				Name:        "broken",
+				Description: "schema with unmarshallable enum",
+				InputSchema: api.InputSchema{
+					Type: "object",
+					Properties: map[string]api.Property{
+						"x": {Type: "string", Enum: []any{make(chan int)}},
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := c.buildRequest(req); err == nil {
+		t.Fatal("expected buildRequest to fail when a tool's input schema cannot be marshalled")
+	} else if !strings.Contains(err.Error(), "broken") {
+		t.Errorf("error %q should mention the offending tool name %q", err.Error(), "broken")
 	}
 }

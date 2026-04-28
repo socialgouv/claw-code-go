@@ -367,6 +367,140 @@ func TestStreamResponses_TranslatesEvents(t *testing.T) {
 	}
 }
 
+// TestStreamResponses_InterleavedMessageItems exercises the case where a
+// /v1/responses stream emits two message items separated by a function
+// call: message A → text deltas → function call → message B → text
+// deltas → completion.
+//
+// The translator must allocate distinct block indices for the two
+// message items; otherwise deltas from message B would silently
+// collapse into message A's block (textBlockIndex was hardcoded to 0).
+func TestStreamResponses_InterleavedMessageItems(t *testing.T) {
+	frames := []string{
+		`{"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}`,
+		// First message item: text deltas only.
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_A"}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_A","delta":"Alpha"}`,
+		`{"type":"response.output_text.delta","item_id":"msg_A","delta":"-A"}`,
+		`{"type":"response.output_text.done","item_id":"msg_A"}`,
+		// Function call between the two message items.
+		`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_x","name":"ping","status":"in_progress"}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{}"}`,
+		`{"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{}"}`,
+		// Second message item, post-tool: text deltas must NOT collapse into msg_A's block.
+		`{"type":"response.output_item.added","output_index":2,"item":{"type":"message","id":"msg_B"}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_B","delta":"Beta"}`,
+		`{"type":"response.output_text.delta","item_id":"msg_B","delta":"-B"}`,
+		`{"type":"response.output_text.done","item_id":"msg_B"}`,
+		`{"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":12,"output_tokens":9,"total_tokens":21}}}`,
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		APIKey:     "test-key",
+		BaseURL:    srv.URL,
+		Model:      "gpt-5.5",
+		MaxTokens:  256,
+		HTTPClient: srv.Client(),
+	}
+
+	req := api.CreateMessageRequest{
+		Model:           "gpt-5.5",
+		MaxTokens:       256,
+		ReasoningEffort: "high",
+		Messages: []api.Message{
+			{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "hi"}}},
+		},
+		Tools: []api.Tool{
+			{Name: "ping", Description: "", InputSchema: api.InputSchema{Type: "object"}},
+		},
+	}
+
+	ch, err := client.StreamResponse(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+
+	var events []api.StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
+	}
+
+	// Walk the event stream and bucket text deltas by content_block index.
+	// The block index assigned to each text content_block_start is
+	// remembered, so we can attribute later deltas to the correct block.
+	textStartIndices := []int{}
+	textByIndex := map[int]string{}
+	toolStartIndex := -1
+	stopIndices := []int{}
+	for _, ev := range events {
+		switch ev.Type {
+		case api.EventContentBlockStart:
+			switch ev.ContentBlock.Type {
+			case "text":
+				textStartIndices = append(textStartIndices, ev.Index)
+			case "tool_use":
+				toolStartIndex = ev.Index
+			}
+		case api.EventContentBlockDelta:
+			if ev.Delta.Type == "text_delta" {
+				textByIndex[ev.Index] += ev.Delta.Text
+			}
+		case api.EventContentBlockStop:
+			stopIndices = append(stopIndices, ev.Index)
+		}
+	}
+
+	if len(textStartIndices) != 2 {
+		t.Fatalf("expected 2 distinct text content_block_start events, got %d (indices=%v)",
+			len(textStartIndices), textStartIndices)
+	}
+	idxA := textStartIndices[0]
+	idxB := textStartIndices[1]
+	if idxA == idxB {
+		t.Fatalf("text blocks for msg_A and msg_B share index %d — second message collapsed into first", idxA)
+	}
+	if toolStartIndex == -1 {
+		t.Fatal("missing tool_use content_block_start")
+	}
+	if toolStartIndex == idxA || toolStartIndex == idxB {
+		t.Errorf("tool_use index %d collides with a text block index (A=%d, B=%d)",
+			toolStartIndex, idxA, idxB)
+	}
+
+	if got := textByIndex[idxA]; got != "Alpha-A" {
+		t.Errorf("msg_A text (index %d) = %q, want %q", idxA, got, "Alpha-A")
+	}
+	if got := textByIndex[idxB]; got != "Beta-B" {
+		t.Errorf("msg_B text (index %d) = %q, want %q", idxB, got, "Beta-B")
+	}
+
+	// Both text blocks and the tool block should be closed.
+	mustStop := map[int]bool{idxA: false, idxB: false, toolStartIndex: false}
+	for _, i := range stopIndices {
+		if _, ok := mustStop[i]; ok {
+			mustStop[i] = true
+		}
+	}
+	for i, ok := range mustStop {
+		if !ok {
+			t.Errorf("missing content_block_stop for index %d", i)
+		}
+	}
+}
+
 // TestStreamResponses_PropagatesAPIError verifies that non-2xx responses
 // surface as *api.APIError with status, message, and Retryable populated.
 func TestStreamResponses_PropagatesAPIError(t *testing.T) {
@@ -408,5 +542,39 @@ func TestStreamResponses_PropagatesAPIError(t *testing.T) {
 	}
 	if apiErr.Provider != "openai" {
 		t.Errorf("provider = %q, want openai", apiErr.Provider)
+	}
+}
+
+// TestConvertToolsToResponses_PropagatesMarshalError pins the contract
+// that the responses-API tool conversion bubbles up json.Marshal failures
+// rather than silently dropping the offending tool. We trigger a marshal
+// failure by stuffing a chan into Property.Enum.
+func TestConvertToolsToResponses_PropagatesMarshalError(t *testing.T) {
+	client := &Client{Model: "gpt-5.5", APIKey: "stub"}
+	req := api.CreateMessageRequest{
+		Model:           "gpt-5.5",
+		MaxTokens:       16,
+		ReasoningEffort: "high",
+		Messages: []api.Message{
+			{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "hi"}}},
+		},
+		Tools: []api.Tool{
+			{
+				Name:        "broken",
+				Description: "schema with unmarshallable enum",
+				InputSchema: api.InputSchema{
+					Type: "object",
+					Properties: map[string]api.Property{
+						"x": {Type: "string", Enum: []any{make(chan int)}},
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := client.buildResponsesRequest(req); err == nil {
+		t.Fatal("expected buildResponsesRequest to fail when a tool's input schema cannot be marshalled")
+	} else if !strings.Contains(err.Error(), "broken") {
+		t.Errorf("error %q should mention the offending tool name %q", err.Error(), "broken")
 	}
 }

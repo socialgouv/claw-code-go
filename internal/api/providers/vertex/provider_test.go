@@ -3,6 +3,7 @@ package vertex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,10 @@ func TestMapModelID(t *testing.T) {
 		{"vertex/claude-sonnet-4-20250514", "claude-sonnet-4@20250514"}, // strip routing prefix
 		{"claude-sonnet-4", "claude-sonnet-4"},                          // no date suffix
 		{"", ""},
+		// Trailing version suffix is preserved verbatim. The "-YYYYMMDD"
+		// run is rewritten to "@YYYYMMDD" even when it isn't the last
+		// hyphen-separated segment (mirrors Bedrock's "-v1:0" idiom).
+		{"claude-haiku-4-5-20251001-v1", "claude-haiku-4-5@20251001-v1"},
 	}
 	for _, c := range cases {
 		if got := MapModelID(c.in); got != c.want {
@@ -140,8 +145,8 @@ func TestStreamResponseError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error from 429 response")
 	}
-	apiErr, ok := err.(*api.APIError)
-	if !ok {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected *api.APIError, got %T: %v", err, err)
 	}
 	if apiErr.Provider != "vertex" {
