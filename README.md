@@ -12,13 +12,28 @@
   <img src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat-square&logo=go" />
   <img src="https://img.shields.io/badge/Claude-claude--sonnet--4-blueviolet?style=flat-square&logo=anthropic" />
   <img src="https://img.shields.io/badge/MCP-supported-green?style=flat-square" />
-  <img src="https://img.shields.io/badge/Multi--provider-Anthropic%20%7C%20OpenAI-orange?style=flat-square" />
+  <img src="https://img.shields.io/badge/Multi--provider-Anthropic%20%7C%20OpenAI%20%7C%20Bedrock%20%7C%20Vertex%20%7C%20Foundry-orange?style=flat-square" />
   <img src="https://img.shields.io/badge/status-experimental-red?style=flat-square" />
 </p>
 
 ---
 
 > **Warning**: This is an ongoing experiment and is **not tested**. Use at your own risk.
+
+---
+
+## Recent changes
+
+Highlights since the goai → claw-code-go migration landed in iterion:
+
+- Typed `api.APIError` with `StatusCode` / `Retryable` so callers drive retry classification via `errors.As` instead of string parsing (`internal/api/errors.go`).
+- OpenAI provider now routes `reasoning_effort` + tools through `/v1/responses` (was rejected by `/v1/chat/completions`); `internal/api/providers/openai/responses.go`.
+- Real Bedrock, Vertex, and Foundry providers — no longer stubs (`pkg/api/providers/{bedrock,vertex,foundry}/provider.go`).
+- Permission modes extended from 5 → 7: `ModeDontAsk` (strict allow-list) and `ModeAuto` with a pluggable `Classifier` (`internal/permissions/{mode.go,classifier.go}`).
+- In-process lifecycle hooks `Runner` (Pre/PostToolUse, UserPromptSubmit, Pre/PostCompact, Stop) integrated into `runtime/conversation.go` (`internal/hooks/runner.go`).
+- Shared `internal/api/{httputil,sseutil}` + `providers/openaiwire` packages, fixing args-before-id buffering and silent tool-conversion drops; tree-wide `gofmt`.
+
+See [`CHANGELOG.md`](./CHANGELOG.md) for the full list and [`docs/parity.md`](./docs/parity.md) for the current Claude Code parity matrix.
 
 ---
 
@@ -58,6 +73,78 @@ This repo serves as the real-world example that drove Iterion's development. The
 The workflow breaks the porting into dependency-ordered batches. Each batch goes through: **plan → implement → simplify → commit → test → parity scan → dual-judge review → fix loop**. Session continuity (fork/inherit) preserves KV cache across related phases. A human gate pauses for high-risk batches and auto-approves routine ones.
 
 See the [full writeup](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.md) for details on convergence strategies, stagnation detection, and model allocation.
+
+## Providers
+
+Five providers are wired through `pkg/api/providers/`:
+
+| Provider | Status | Path |
+|----------|--------|------|
+| Anthropic | validated end-to-end | `pkg/api/providers/anthropic` |
+| OpenAI    | validated end-to-end (`/v1/chat/completions` and `/v1/responses`) | `pkg/api/providers/openai` |
+| Bedrock   | available — built on `aws-sdk-go-v2`, untested in production | `pkg/api/providers/bedrock` |
+| Vertex AI | available — Google ADC + canonical `MapModelID`, untested in production | `pkg/api/providers/vertex` |
+| Azure Foundry | available — OpenAI-wire compatible, untested in production | `pkg/api/providers/foundry` |
+
+Models are addressed as `<provider>/<model-id>`, e.g. `openai/gpt-5.4-mini`, `anthropic/claude-sonnet-4-6`, `bedrock/anthropic.claude-sonnet-4-6`, `vertex/claude-sonnet-4-6`.
+
+## Built-in tools
+
+The `pkg/api/tools` package re-exports the built-in tools as a stable public API. Each tool is a pair of `XxxTool() api.Tool` (schema) + `ExecuteXxx(ctx, input)` (runtime).
+
+```go
+import (
+    "context"
+    "github.com/SocialGouv/claw-code-go/pkg/api"
+    "github.com/SocialGouv/claw-code-go/pkg/api/tools"
+)
+
+defs := []api.Tool{
+    tools.ReadFileTool(),
+    tools.WriteFileTool(),
+    tools.GlobTool(),
+    tools.GrepTool(),
+    tools.FileEditTool(),
+    tools.WebFetchTool(),
+    tools.BashTool(),
+}
+
+// Dispatch a tool call from the model:
+out, err := tools.ExecuteReadFile(ctx, map[string]any{"path": "README.md"})
+```
+
+`ExecuteBash` additionally takes a `workspace string` for command validation (pass `""` to skip). The wrapper pins permissions to `ModeAllow`; gate invocations upstream (e.g. an iterion workflow's `allowed_tools` list).
+
+## Permission modes
+
+Defined in `internal/permissions/mode.go`, re-exported from `pkg/permissions`:
+
+| Mode | Behavior |
+|------|----------|
+| `ModeAllow` | Permits all operations without prompting. |
+| `ModePrompt` | Consults the ruleset; asks the prompter when no rule matches. |
+| `ModeReadOnly` | Allows read-only operations only; denies writes/exec. |
+| `ModeWorkspaceWrite` | Allows writes within the workspace directory; denies outside. |
+| `ModeDangerFullAccess` | Allows arbitrary command execution and system access. |
+| `ModeDontAsk` | Strict allow-list: denies anything not explicitly listed by `WithToolRequirement` or an allow rule. Never prompts. |
+| `ModeAuto` | Delegates to a `Classifier` (default safe-list permits read-only ops, prompts on writes); custom classifiers via `WithClassifier`. |
+
+CLI aliases (`default`, `accept-edits`, `bypass`, `plan`) resolve to the modes above — see `ParsePermissionMode`.
+
+## Lifecycle hooks (in-process)
+
+`internal/hooks/runner.go` provides a programmatic `Runner` for `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `PreCompact`, `PostCompact`, and `Stop`. First non-`Continue` decision wins; panics and errors are logged and treated as `Continue`.
+
+```go
+runner := hooks.NewRunner()
+runner.Register(hooks.PreToolUse, func(ctx context.Context, hctx hooks.Context) (hooks.Decision, error) {
+    if hctx.ToolName == "bash" { return hooks.Decision{Action: hooks.ActionBlock, Reason: "no shell"}, nil }
+    return hooks.Decision{Action: hooks.ActionContinue}, nil
+})
+decision, _ := runner.Fire(ctx, hooks.Context{Event: hooks.PreToolUse, ToolName: "bash"})
+```
+
+The Runner is wired into `internal/runtime/conversation.go`; nil runners are a no-op.
 
 ## Status
 
