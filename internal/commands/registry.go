@@ -184,6 +184,7 @@ func (r *Registry) ResumeSupportedCommands() []Command {
 func NewFullRegistry() *Registry {
 	r := NewRegistry()
 	RegisterSessionCommands(r)
+	RegisterSessionTimelineCommands(r)
 	RegisterStatusCommands(r)
 	RegisterConfigCommands(r)
 	RegisterDiagnosticCommands(r)
@@ -201,6 +202,7 @@ func NewFullRegistry() *Registry {
 // InitializeAll registers all command categories into an existing registry.
 func InitializeAll(r *Registry) {
 	RegisterSessionCommands(r)
+	RegisterSessionTimelineCommands(r)
 	RegisterStatusCommands(r)
 	RegisterConfigCommands(r)
 	RegisterDiagnosticCommands(r)

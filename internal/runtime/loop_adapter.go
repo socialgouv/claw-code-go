@@ -118,6 +118,16 @@ func (a *LoopAdapter) requireLoop() error {
 
 // --- SessionManager interface ---
 
+// SessionDir returns the directory holding saved sessions, so read-only
+// callers (e.g. timeline / lineage renderers) can iterate JSON files
+// without needing a SessionManager wrapper.
+func (a *LoopAdapter) SessionDir() string {
+	if a.loop == nil || a.loop.Config == nil {
+		return ""
+	}
+	return a.loop.Config.SessionDir
+}
+
 // ListSessions returns saved session IDs.
 func (a *LoopAdapter) ListSessions() ([]string, error) {
 	if err := a.requireLoop(); err != nil {
