@@ -89,6 +89,13 @@ type Property struct {
 	Description string `json:"description"`
 }
 
+// ToolChoice controls which tool the model must use.
+// Type can be "auto", "any", or "tool". When Type is "tool", Name must be set.
+type ToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+}
+
 // CreateMessageRequest is the request body for /v1/messages.
 //
 // System vs SystemBlocks: for providers that support prompt caching (Anthropic),
@@ -102,6 +109,7 @@ type CreateMessageRequest struct {
 	SystemBlocks     []ContentBlock `json:"-"` // Anthropic array form; takes precedence over System when non-empty
 	Messages         []Message      `json:"messages"`
 	Tools            []Tool         `json:"tools,omitempty"`
+	ToolChoice       *ToolChoice    `json:"tool_choice,omitempty"`
 	Stream           bool           `json:"stream"`
 	Temperature      *float64       `json:"temperature,omitempty"`
 	TopP             *float64       `json:"top_p,omitempty"`

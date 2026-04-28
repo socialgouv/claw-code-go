@@ -335,6 +335,7 @@ func marshalAnthropicRequest(req CreateMessageRequest) ([]byte, error) {
 		System           json.RawMessage `json:"system,omitempty"`
 		Messages         []Message       `json:"messages"`
 		Tools            []Tool          `json:"tools,omitempty"`
+		ToolChoice       *ToolChoice     `json:"tool_choice,omitempty"`
 		Stream           bool            `json:"stream"`
 		Temperature      *float64        `json:"temperature,omitempty"`
 		TopP             *float64        `json:"top_p,omitempty"`
@@ -355,6 +356,7 @@ func marshalAnthropicRequest(req CreateMessageRequest) ([]byte, error) {
 		System:           systemJSON,
 		Messages:         req.Messages,
 		Tools:            req.Tools,
+		ToolChoice:       req.ToolChoice,
 		Stream:           req.Stream,
 		Temperature:      req.Temperature,
 		TopP:             req.TopP,
