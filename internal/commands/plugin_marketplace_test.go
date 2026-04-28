@@ -69,13 +69,13 @@ func TestPluginsCommand_DispatchesSubcommands(t *testing.T) {
 	provider := fakePluginProvider{mgr: mgr}
 
 	// Search should find alpha.
-	if _, err := r.Execute("/plugins search alpha", provider); err != nil {
-		t.Errorf("/plugins search: %v", err)
+	if _, err := r.Execute("/store search alpha", provider); err != nil {
+		t.Errorf("/store search: %v", err)
 	}
 
 	// Install should succeed and persist state.
-	if _, err := r.Execute("/plugins install alpha", provider); err != nil {
-		t.Errorf("/plugins install: %v", err)
+	if _, err := r.Execute("/store install alpha", provider); err != nil {
+		t.Errorf("/store install: %v", err)
 	}
 	list, err := mgr.List()
 	if err != nil || len(list) != 1 {
@@ -83,8 +83,8 @@ func TestPluginsCommand_DispatchesSubcommands(t *testing.T) {
 	}
 
 	// Uninstall should drop it.
-	if _, err := r.Execute("/plugins uninstall alpha", provider); err != nil {
-		t.Errorf("/plugins uninstall: %v", err)
+	if _, err := r.Execute("/store uninstall alpha", provider); err != nil {
+		t.Errorf("/store uninstall: %v", err)
 	}
 	list, _ = mgr.List()
 	if len(list) != 0 {
@@ -96,7 +96,7 @@ func TestPluginsCommand_NoProvider(t *testing.T) {
 	r := NewRegistry()
 	RegisterPluginMarketplaceCommands(r)
 	// loop does not implement PluginManagerProvider — should print and not error.
-	if _, err := r.Execute("/plugins list", struct{}{}); err != nil {
+	if _, err := r.Execute("/store list", struct{}{}); err != nil {
 		t.Errorf("expected nil error when provider missing, got %v", err)
 	}
 }

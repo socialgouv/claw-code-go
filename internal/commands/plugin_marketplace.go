@@ -16,12 +16,14 @@ type PluginManagerProvider interface {
 	PluginManager() *plugins.Manager
 }
 
-// RegisterPluginMarketplaceCommands adds /plugin install|uninstall|
-// list|search commands. They co-exist with the existing /plugin list
-// (in-process plugins) by attaching to a different name (/plugins).
+// RegisterPluginMarketplaceCommands adds /store install|uninstall|
+// list|search commands. /store is named separately from /plugin (the
+// in-process plugin runtime) because the two manage different things:
+// /plugin enables/disables already-loaded plugins; /store installs
+// from a remote marketplace.
 func RegisterPluginMarketplaceCommands(r *Registry) {
 	r.Register(Command{
-		Name:         "plugins",
+		Name:         "store",
 		Description:  "Manage marketplace plugins (install / uninstall / list / search)",
 		ArgumentHint: "[install|uninstall|list|search] <name|query>",
 		Category:     CategoryPlugin,
@@ -62,7 +64,7 @@ func RegisterPluginMarketplaceCommands(r *Registry) {
 
 			case "install":
 				if len(parts) < 2 {
-					fmt.Println("Usage: /plugins install <name>")
+					fmt.Println("Usage: /store install <name>")
 					return nil
 				}
 				row, err := mgr.Install(ctx, parts[1])
@@ -73,7 +75,7 @@ func RegisterPluginMarketplaceCommands(r *Registry) {
 
 			case "uninstall":
 				if len(parts) < 2 {
-					fmt.Println("Usage: /plugins uninstall <name>")
+					fmt.Println("Usage: /store uninstall <name>")
 					return nil
 				}
 				if err := mgr.Uninstall(ctx, parts[1]); err != nil {
@@ -104,7 +106,7 @@ func RegisterPluginMarketplaceCommands(r *Registry) {
 
 			default:
 				fmt.Printf("Unknown subcommand: %s\n", sub)
-				fmt.Println("Usage: /plugins [install|uninstall|list|search] <name|query>")
+				fmt.Println("Usage: /store [install|uninstall|list|search] <name|query>")
 			}
 			return nil
 		},
