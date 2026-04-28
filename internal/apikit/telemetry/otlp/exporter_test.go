@@ -209,6 +209,161 @@ func TestExporter_StopFlushesPending(t *testing.T) {
 	}
 }
 
+func TestExporter_RecordAfterStop_DoesNotPanic(t *testing.T) {
+	// Documented contract (docs/review_rationale.md): late records are
+	// dropped silently after Stop. This test pins that behavior so a
+	// future "fail loud after Stop" change is a deliberate decision.
+	srv, _ := captureRequests(t, http.StatusOK)
+	exp := makeExporter(t, srv, func(c *Config) { c.BatchSize = 1000 })
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := exp.Stop(ctx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// Record after Stop must not panic, even concurrently.
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Record panicked after Stop: %v", r)
+				}
+			}()
+			exp.Record(apikit.TelemetryEvent{Type: apikit.EventTypeAnalytics})
+		}()
+	}
+	wg.Wait()
+}
+
+func TestExporter_ConcurrentStop_IsSafe(t *testing.T) {
+	// Real-world Stop callers include defer chains AND signal
+	// handlers — both can fire at once. Without sync.Once, two
+	// concurrent Stops both close(stopReq) and panic.
+	srv, _ := captureRequests(t, http.StatusOK)
+	exp := makeExporter(t, srv)
+
+	const goroutines = 5
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("concurrent Stop panicked: %v", r)
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = exp.Stop(ctx)
+		}()
+	}
+	wg.Wait()
+}
+
+func TestExporter_StopIsIdempotent(t *testing.T) {
+	srv, _ := captureRequests(t, http.StatusOK)
+	exp := makeExporter(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := exp.Stop(ctx); err != nil {
+		t.Fatalf("first Stop: %v", err)
+	}
+	if err := exp.Stop(ctx); err != nil {
+		t.Errorf("second Stop must be a no-op, got %v", err)
+	}
+	if err := exp.Stop(ctx); err != nil {
+		t.Errorf("third Stop must be a no-op, got %v", err)
+	}
+}
+
+func TestExporter_StartIsIdempotent(t *testing.T) {
+	// Multiple Start calls must not spawn duplicate flusher
+	// goroutines (the once.Do guard does that work).
+	srv, _ := captureRequests(t, http.StatusOK)
+	cfg := Config{
+		Endpoint:      srv.URL,
+		BatchSize:     10,
+		FlushInterval: 50 * time.Millisecond,
+		HTTPClient:    srv.Client(),
+	}
+	exp, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := exp.Start(context.Background()); err != nil {
+			t.Fatalf("Start %d: %v", i, err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := exp.Stop(ctx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+func TestExporter_RetryGivesUpAfterAllAttempts(t *testing.T) {
+	// All 5xx forever: ErrorHandler must fire exactly once with the
+	// last error, no infinite retry loop.
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	var errMu sync.Mutex
+	var errs []error
+	cfg := Config{
+		Endpoint:      srv.URL,
+		BatchSize:     1,
+		FlushInterval: 1 * time.Hour,
+		HTTPClient:    srv.Client(),
+		RetryAttempts: 2, // Two attempts total
+		ErrorHandler: func(err error) {
+			errMu.Lock()
+			errs = append(errs, err)
+			errMu.Unlock()
+		},
+	}
+	exp, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := exp.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = exp.Stop(ctx)
+	})
+
+	// Override delay-doubling to keep the test fast — each retry
+	// would sleep 1s. We can't reach the private `delay` var, so
+	// instead we just record one event and wait for the error
+	// handler.
+	exp.Record(apikit.TelemetryEvent{Type: apikit.EventTypeAnalytics})
+
+	if !waitFor(t, 5*time.Second, func() bool {
+		errMu.Lock()
+		defer errMu.Unlock()
+		return len(errs) >= 1
+	}) {
+		t.Fatal("expected ErrorHandler to fire after retries exhausted")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("expected exactly 2 attempts (RetryAttempts=2), got %d", got)
+	}
+}
+
 func TestNew_RejectsEmptyEndpoint(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("expected error on empty endpoint")

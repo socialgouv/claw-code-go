@@ -93,10 +93,17 @@ func parseClaudeMdCommands(r io.Reader, source string) ([]Command, error) {
 		if current == nil {
 			return
 		}
+		// Skip headers with no name after the slash ("## /") — there
+		// is nothing for the user to invoke and registering an empty
+		// name shadows the registry's lookup table in surprising ways.
+		if current.Name == "" {
+			current = nil
+			bodyLines = nil
+			return
+		}
 		body := strings.TrimSpace(strings.Join(bodyLines, "\n"))
 		current.Description = describeFromBody(body)
 		body = strings.TrimSpace(body)
-		// Capture the body in the handler closure so it survives this loop.
 		captured := body
 		cmdName := current.Name
 		current.Handler = func(args string, _ interface{}) error {

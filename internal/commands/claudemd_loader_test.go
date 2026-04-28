@@ -127,6 +127,129 @@ func TestClaudeMdLoader_RegistersAsDynamicCommands(t *testing.T) {
 	}
 }
 
+func TestClaudeMdLoader_HandlesEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "")
+	r := NewRegistry()
+	if err := LoadClaudeMdCommands(r, dir); err != nil {
+		t.Errorf("expected nil error on empty CLAUDE.md, got %v", err)
+	}
+}
+
+func TestClaudeMdLoader_HandlesFileWithNoSlashHeaders(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), `# Project
+
+Just regular markdown — no slash commands here.
+
+## Architecture
+
+Some prose about how things work.
+
+## /not-a-cmd-because-no-slash-trailer
+Wait, this one IS a slash command actually.
+`)
+	r := NewRegistry()
+	if err := LoadClaudeMdCommands(r, dir); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, ok := r.commands["not-a-cmd-because-no-slash-trailer"]; !ok {
+		t.Error("expected the one slash header to register")
+	}
+}
+
+func TestClaudeMdLoader_IgnoresHeaderWithOnlySlash(t *testing.T) {
+	// A bare "## /" should not register a command with empty name.
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), `## /
+This is body without a name.
+
+## /valid
+With a name.
+`)
+	r := NewRegistry()
+	if err := LoadClaudeMdCommands(r, dir); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, ok := r.commands[""]; ok {
+		t.Error("registry must not contain a zero-name command")
+	}
+	if _, ok := r.commands["valid"]; !ok {
+		t.Error("expected /valid to register")
+	}
+}
+
+func TestClaudeMdLoader_PreservesBodyInHandler(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), `## /multi-line
+First line.
+
+Second line after blank.
+
+Third line.
+`)
+	r := NewRegistry()
+	if err := LoadClaudeMdCommands(r, dir); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	old := os.Stdout
+	rPipe, wPipe, _ := os.Pipe()
+	os.Stdout = wPipe
+	if _, err := r.Execute("/multi-line", nil); err != nil {
+		t.Errorf("execute: %v", err)
+	}
+	wPipe.Close()
+	os.Stdout = old
+	out, _ := readAll(rPipe)
+	for _, want := range []string{"First line.", "Second line", "Third line."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("body line %q missing from output:\n%s", want, out)
+		}
+	}
+}
+
+func TestClaudeMdLoader_PassesArgsToHandler(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "## /takes-args\nDoes a thing.\n")
+	r := NewRegistry()
+	if err := LoadClaudeMdCommands(r, dir); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	old := os.Stdout
+	rPipe, wPipe, _ := os.Pipe()
+	os.Stdout = wPipe
+	if _, err := r.Execute("/takes-args foo bar baz", nil); err != nil {
+		t.Errorf("execute: %v", err)
+	}
+	wPipe.Close()
+	os.Stdout = old
+	out, _ := readAll(rPipe)
+	if !strings.Contains(out, "args: foo bar baz") {
+		t.Errorf("expected args echoed, got:\n%s", out)
+	}
+}
+
+func TestClaudeMdLoader_HonoursResumeSupported(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "## /x\nbody\n")
+	r := NewRegistry()
+	if err := LoadClaudeMdCommands(r, dir); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cmd := r.commands["x"]
+	if !cmd.ResumeSupported {
+		t.Error("expected ResumeSupported=true on auto-loaded commands so they survive resume")
+	}
+}
+
+func TestClaudeMdLoader_NilRegistryReturnsError(t *testing.T) {
+	if err := LoadClaudeMdCommands(nil, t.TempDir()); err == nil {
+		t.Error("expected error on nil registry")
+	}
+}
+
 func TestExtractCommandName(t *testing.T) {
 	cases := []struct{ in, out string }{
 		{"## /foo", "foo"},

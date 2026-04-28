@@ -88,6 +88,7 @@ type Exporter struct {
 	stopReq  chan struct{}
 	stopped  chan struct{}
 	once     sync.Once
+	stopOnce sync.Once
 }
 
 // New constructs an exporter. It does not start the flusher goroutine —
@@ -163,14 +164,10 @@ func (e *Exporter) Record(event apikit.TelemetryEvent) {
 }
 
 // Stop drains pending events and waits for the flusher to exit. It is
-// idempotent — repeated calls return after the first completes.
+// idempotent and safe under concurrent calls — stopReq is closed
+// exactly once even when multiple goroutines race to Stop.
 func (e *Exporter) Stop(ctx context.Context) error {
-	select {
-	case <-e.stopped:
-		return nil
-	default:
-	}
-	close(e.stopReq)
+	e.stopOnce.Do(func() { close(e.stopReq) })
 	select {
 	case <-e.stopped:
 		return nil

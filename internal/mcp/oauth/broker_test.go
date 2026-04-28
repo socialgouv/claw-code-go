@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -272,6 +273,170 @@ func TestBroker_RefreshOnExpiringToken(t *testing.T) {
 	}
 	if form.Get("refresh_token") != "old-refresh" {
 		t.Errorf("expected refresh_token=old-refresh, got %q", form.Get("refresh_token"))
+	}
+}
+
+func TestBroker_RefreshPreservesOldTokenWhenNoneReturned(t *testing.T) {
+	// RFC 6749 §6: refresh response MAY omit a new refresh_token. The
+	// broker must keep the existing one in that case so the next
+	// refresh still works.
+	tokSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tokenResponse{
+			AccessToken: "rotated-access",
+			TokenType:   "Bearer",
+			ExpiresIn:   3600,
+			// No refresh_token in response.
+		})
+	}))
+	defer tokSrv.Close()
+
+	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
+	_ = storage.Save("github", Token{
+		AccessToken:  "expiring",
+		RefreshToken: "long-lived-refresh",
+		ExpiresAt:    time.Now().Add(5 * time.Second),
+	})
+
+	b := NewBroker(WithStorage(storage), WithHTTPClient(tokSrv.Client()))
+	tok, err := b.Acquire(context.Background(), ServerConfig{
+		Name:     "github",
+		AuthURL:  "http://nowhere/authorize",
+		TokenURL: tokSrv.URL,
+		ClientID: "client-123",
+	})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if tok != "rotated-access" {
+		t.Errorf("expected rotated-access, got %q", tok)
+	}
+	stored, _, _ := storage.Load("github")
+	if stored.RefreshToken != "long-lived-refresh" {
+		t.Errorf("expected old refresh_token preserved, got %q", stored.RefreshToken)
+	}
+}
+
+func TestBroker_RefreshPropagatesNewRotatedToken(t *testing.T) {
+	// Counterpart: when the AS rotates the refresh_token, the broker
+	// must persist the new one.
+	tokSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tokenResponse{
+			AccessToken:  "new-access",
+			RefreshToken: "rotated-refresh",
+			TokenType:    "Bearer",
+			ExpiresIn:    3600,
+		})
+	}))
+	defer tokSrv.Close()
+
+	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
+	_ = storage.Save("github", Token{
+		AccessToken:  "expiring",
+		RefreshToken: "old-refresh",
+		ExpiresAt:    time.Now().Add(5 * time.Second),
+	})
+
+	b := NewBroker(WithStorage(storage), WithHTTPClient(tokSrv.Client()))
+	if _, err := b.Acquire(context.Background(), ServerConfig{
+		Name: "github", AuthURL: "http://nowhere", TokenURL: tokSrv.URL, ClientID: "c",
+	}); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	stored, _, _ := storage.Load("github")
+	if stored.RefreshToken != "rotated-refresh" {
+		t.Errorf("expected rotated refresh persisted, got %q", stored.RefreshToken)
+	}
+}
+
+func TestBroker_TokenEndpointRejectsWithStructuredError(t *testing.T) {
+	// RFC 6749 §5.2 says error responses use status 400 + a JSON
+	// body with "error" and "error_description". Make sure we surface
+	// both fields rather than dropping context.
+	tokSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(tokenResponse{
+			Error:     "invalid_grant",
+			ErrorDesc: "The refresh token is malformed",
+		})
+	}))
+	defer tokSrv.Close()
+
+	b := NewBroker(WithHTTPClient(tokSrv.Client()))
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	_, err := b.postTokenForm(context.Background(), tokSrv.URL, form)
+	if err == nil {
+		t.Fatal("expected error from rejected exchange")
+	}
+	if !strings.Contains(err.Error(), "invalid_grant") || !strings.Contains(err.Error(), "malformed") {
+		t.Errorf("expected error to surface RFC 6749 error+desc, got %v", err)
+	}
+}
+
+func TestBroker_TokenEndpointRejectsWithGarbageBody(t *testing.T) {
+	// Some misconfigured providers return HTML error pages on 5xx.
+	// We must not panic on JSON decode and must include the status.
+	tokSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("<html><body>500 Server Error</body></html>"))
+	}))
+	defer tokSrv.Close()
+
+	b := NewBroker(WithHTTPClient(tokSrv.Client()))
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	_, err := b.postTokenForm(context.Background(), tokSrv.URL, form)
+	if err == nil || !strings.Contains(err.Error(), "500") {
+		t.Errorf("expected error mentioning 500, got %v", err)
+	}
+}
+
+func TestBroker_AcquireRejectsExpiredCachedTokenWithoutRefresh(t *testing.T) {
+	// When the cached token is expired AND no refresh_token is
+	// present, Acquire must fall through to a fresh interactive flow.
+	// In a unit test we can't run the browser, so we expect
+	// authOpener to be invoked.
+	tokSrv := newFakeTokenServer()
+	defer tokSrv.Close()
+
+	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
+	_ = storage.Save("github", Token{
+		AccessToken:  "expired",
+		RefreshToken: "", // No refresh available
+		ExpiresAt:    time.Now().Add(-1 * time.Hour),
+	})
+
+	openerCalled := make(chan struct{}, 1)
+	opener := func(authURL string) error {
+		openerCalled <- struct{}{}
+		return errors.New("user cancelled")
+	}
+
+	b := NewBroker(
+		WithStorage(storage),
+		WithHTTPClient(tokSrv.Client()),
+		WithAuthOpener(opener),
+		WithCallbackTimeout(100*time.Millisecond),
+	)
+	_, err := b.Acquire(context.Background(), ServerConfig{
+		Name:     "github",
+		AuthURL:  "http://nowhere/authorize",
+		TokenURL: tokSrv.URL,
+		ClientID: "c",
+	})
+	if err == nil {
+		t.Fatal("expected error when interactive flow is short-circuited")
+	}
+	select {
+	case <-openerCalled:
+		// Good — we did fall through to the interactive path.
+	case <-time.After(time.Second):
+		t.Fatal("authOpener was never invoked; expired-no-refresh token didn't fall through")
 	}
 }
 

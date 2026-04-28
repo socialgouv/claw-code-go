@@ -456,6 +456,48 @@ func assertIsLoopError(t *testing.T, err error, method string) {
 
 // --- Session management tests ---
 
+func TestLoopAdapter_SessionDir(t *testing.T) {
+	t.Run("nil loop returns empty", func(t *testing.T) {
+		a := NewLoopAdapter(nil)
+		if got := a.SessionDir(); got != "" {
+			t.Errorf("expected empty string for nil loop, got %q", got)
+		}
+	})
+
+	t.Run("loop with config returns SessionDir", func(t *testing.T) {
+		dir := t.TempDir()
+		loop := &ConversationLoop{Config: &Config{SessionDir: dir}}
+		a := NewLoopAdapter(loop)
+		if got := a.SessionDir(); got != dir {
+			t.Errorf("expected %q, got %q", dir, got)
+		}
+	})
+
+	t.Run("loop with nil config returns empty", func(t *testing.T) {
+		loop := &ConversationLoop{}
+		a := NewLoopAdapter(loop)
+		if got := a.SessionDir(); got != "" {
+			t.Errorf("expected empty string for nil config, got %q", got)
+		}
+	})
+}
+
+func TestLoopAdapter_PluginManagerSetterGetter(t *testing.T) {
+	a := NewLoopAdapter(&ConversationLoop{Config: &Config{}})
+	if a.PluginManager() != nil {
+		t.Error("expected nil PluginManager before SetPluginManager")
+	}
+	mgr := &plugins.Manager{StatePath: filepath.Join(t.TempDir(), "state.json")}
+	a.SetPluginManager(mgr)
+	if a.PluginManager() != mgr {
+		t.Error("PluginManager() must return the manager set via SetPluginManager")
+	}
+	a.SetPluginManager(nil)
+	if a.PluginManager() != nil {
+		t.Error("expected nil after SetPluginManager(nil) — needed to clear out a stale manager")
+	}
+}
+
 func TestLoopAdapter_SessionListForkDelete(t *testing.T) {
 	a := testLoopAdapter(t)
 
