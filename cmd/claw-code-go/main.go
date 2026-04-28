@@ -10,6 +10,7 @@ import (
 	"github.com/SocialGouv/claw-code-go/internal/compat"
 	"github.com/SocialGouv/claw-code-go/internal/config"
 	"github.com/SocialGouv/claw-code-go/internal/permissions"
+	"github.com/SocialGouv/claw-code-go/internal/plugins"
 	"github.com/SocialGouv/claw-code-go/internal/runtime"
 	"github.com/SocialGouv/claw-code-go/internal/tui"
 	"github.com/SocialGouv/claw-code-go/plugin"
@@ -182,6 +183,17 @@ func main() {
 	loop.BuildVersion = version
 	loop.BuildCommit = commit
 
+	// Marketplace plugin manager: opt-in via CLAW_MARKETPLACE_URL. When
+	// set, /store install|uninstall|list|search resolves against this
+	// catalog. We deliberately keep this off by default — the public
+	// marketplace contract is still in flux and we don't want users
+	// downloading from a placeholder endpoint.
+	if mktURL := strings.TrimSpace(os.Getenv("CLAW_MARKETPLACE_URL")); mktURL != "" {
+		if pluginDir, err := plugins.DefaultPluginDir(); err == nil {
+			loop.MarketplaceMgr = plugins.NewManager(pluginDir, mktURL)
+		}
+	}
+
 	// Bootstrap wires hooks, plugins, telemetry, and permissions in the correct order.
 	bootstrap(cfg, loop, *permModeFlag)
 
@@ -344,6 +356,12 @@ func resolveTelemetryPath(cfg *runtime.Config) string {
 func runTUI(cfg *runtime.Config, loop *runtime.ConversationLoop) {
 	// Register slash commands — fully initialized with all categories.
 	registry := commands.NewFullRegistry()
+	// Auto-load CLAUDE.md slash commands from the cwd up to the
+	// filesystem root. Errors are non-fatal: a malformed CLAUDE.md
+	// shouldn't block the TUI from booting.
+	if cwd, err := os.Getwd(); err == nil {
+		_ = commands.LoadClaudeMdCommands(registry, cwd)
+	}
 	loop.CommandRegistry = registry
 
 	// Save session on SIGTERM (Ctrl+C is handled by Bubble Tea itself).

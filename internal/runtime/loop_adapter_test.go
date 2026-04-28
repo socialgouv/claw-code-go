@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/SocialGouv/claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/plugins"
 	"github.com/SocialGouv/claw-code-go/internal/usage"
 )
 
@@ -19,6 +20,18 @@ var _ interface {
 	ForkSession(name string) (string, error)
 	LoadSession(id string) error
 	DeleteSession(id string) error
+} = (*LoopAdapter)(nil)
+
+// SessionDirProvider from session_timeline.go — read-only seam used by
+// /timeline and /lineage to locate the session JSON store.
+var _ interface {
+	SessionDir() string
+} = (*LoopAdapter)(nil)
+
+// PluginManagerProvider from plugin_marketplace.go — exposes the
+// marketplace manager to the /store slash command.
+var _ interface {
+	PluginManager() *plugins.Manager
 } = (*LoopAdapter)(nil)
 
 // sessionRenamer from session_cmds.go

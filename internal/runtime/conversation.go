@@ -12,6 +12,7 @@ import (
 	"github.com/SocialGouv/claw-code-go/internal/lsp"
 	"github.com/SocialGouv/claw-code-go/internal/mcp"
 	"github.com/SocialGouv/claw-code-go/internal/permissions"
+	"github.com/SocialGouv/claw-code-go/internal/plugins"
 	"github.com/SocialGouv/claw-code-go/internal/runtime/task"
 	"github.com/SocialGouv/claw-code-go/internal/runtime/team"
 	"github.com/SocialGouv/claw-code-go/internal/runtime/worker"
@@ -40,10 +41,11 @@ type ConversationLoop struct {
 	Usage           *usage.Tracker         // Phase 13 per-session token usage tracker
 	TelemetrySink   apikit.TelemetrySink   // Telemetry event sink (may be nil)
 	Tracer          *apikit.SessionTracer  // Session telemetry tracer (may be nil)
-	PluginRegistry  *plugin.PluginRegistry // Plugin registry (may be nil)
-	HookRunner      *hooks.HookRunner      // Shell-command hook runner (may be nil; wired from config + plugin hooks)
-	LifecycleHooks  *lifehooks.Runner      // In-process programmatic hooks (may be nil; default no-op)
-	CommandRegistry interface{}            // Slash command registry (may be nil; *commands.Registry)
+	PluginRegistry    *plugin.PluginRegistry // Plugin registry (may be nil)
+	MarketplaceMgr    *plugins.Manager       // Marketplace plugin manager (may be nil; wired by main when CLAW_MARKETPLACE_URL is set)
+	HookRunner        *hooks.HookRunner      // Shell-command hook runner (may be nil; wired from config + plugin hooks)
+	LifecycleHooks    *lifehooks.Runner      // In-process programmatic hooks (may be nil; default no-op)
+	CommandRegistry   interface{}            // Slash command registry (may be nil; *commands.Registry)
 
 	// --- Batch 2: registries for CRUD tools ---
 	TaskRegistry   *task.Registry         // Task registry (may be nil)
@@ -1779,6 +1781,7 @@ func (loop *ConversationLoop) HandleSlashCommand(input string) (bool, error) {
 	// Create a LoopAdapter to satisfy all command interface contracts.
 	adapter := NewLoopAdapter(loop)
 	adapter.SetBuildInfo(loop.BuildVersion, loop.BuildCommit)
+	adapter.SetPluginManager(loop.MarketplaceMgr)
 
 	// Type-assert to *commands.Registry interface.
 	type commandExecutor interface {

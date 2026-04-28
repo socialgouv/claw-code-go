@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/SocialGouv/claw-code-go/internal/plugins"
 )
 
 // LoopAdapter wraps a *ConversationLoop and implements the interface contracts
@@ -42,6 +44,10 @@ type LoopAdapter struct {
 	// Build-time info, set via SetBuildInfo().
 	buildVersion string
 	buildCommit  string
+
+	// Marketplace plugin manager. Optional — wired by main when a
+	// marketplace URL is configured. Used by the /store slash command.
+	pluginManager *plugins.Manager
 }
 
 // Bookmark records a labeled position in conversation history.
@@ -433,4 +439,20 @@ func (a *LoopAdapter) MessageCount() int {
 		return a.loop.MessageCount()
 	}
 	return 0
+}
+
+// --- PluginManagerProvider ---
+
+// SetPluginManager installs a marketplace plugin manager. Called by main
+// at boot when a marketplace endpoint is configured. Slash commands
+// (/store) check for this via the PluginManager() accessor.
+func (a *LoopAdapter) SetPluginManager(m *plugins.Manager) {
+	a.pluginManager = m
+}
+
+// PluginManager returns the registered marketplace plugin manager, or
+// nil when none is configured. The /store slash command treats nil as
+// "manager not available in this context".
+func (a *LoopAdapter) PluginManager() *plugins.Manager {
+	return a.pluginManager
 }
