@@ -378,7 +378,11 @@ func (b *Broker) postTokenForm(ctx context.Context, tokenURL string, form url.Va
 		// Some servers return form-encoded responses on error. We
 		// don't bother decoding those — the status line is enough.
 		if resp.StatusCode >= 400 {
-			return Token{}, fmt.Errorf("oauth token: %s returned %d: %s", tokenURL, resp.StatusCode, truncate(string(body), 256))
+			snippet := string(body)
+			if len(snippet) > 256 {
+				snippet = snippet[:256] + "…"
+			}
+			return Token{}, fmt.Errorf("oauth token: %s returned %d: %s", tokenURL, resp.StatusCode, snippet)
 		}
 		return Token{}, fmt.Errorf("oauth token: decode response: %w", jsonErr)
 	}
@@ -408,15 +412,6 @@ func (b *Broker) postTokenForm(ctx context.Context, tokenURL string, form url.Va
 // stderr is a seam for tests. Exposed so we can later route messages
 // somewhere quieter without touching the broker call sites.
 var stderr = func() io.Writer { return os.Stderr }
-
-// truncate trims s to n runes with an ellipsis. Used in error messages
-// only — never on tokens.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
 
 // BearerHeaderFunc returns a closure that calls Acquire on every
 // invocation and renders the result as a "Bearer <token>" string. This

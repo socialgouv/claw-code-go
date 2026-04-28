@@ -1,12 +1,7 @@
 package plugins
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,18 +15,8 @@ import (
 func fixtureManager(t *testing.T) (*Manager, string) {
 	t.Helper()
 
-	// Tarball
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	hdr := &tar.Header{Name: "plugin.json", Mode: 0o644, Size: 4}
-	_ = tw.WriteHeader(hdr)
-	_, _ = tw.Write([]byte("test"))
-	_ = tw.Close()
-	_ = gz.Close()
-	tarball := buf.Bytes()
-	sum := sha256.Sum256(tarball)
-	digest := hex.EncodeToString(sum[:])
+	tarball := makeTarGz(t, map[string]string{"plugin.json": "test"})
+	digest := sha256Hex(tarball)
 
 	// httptest server serving both /catalog.json and /linter.tgz.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

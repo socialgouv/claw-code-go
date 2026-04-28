@@ -28,6 +28,14 @@ const (
 	defaultRetryAttempts = 3
 )
 
+// OTLP SeverityNumber values per the OpenTelemetry logs data model.
+// We only emit two levels — INFO for everything except outright
+// failures, ERROR for HTTP-failed events.
+const (
+	severityNumberInfo  = 9
+	severityNumberError = 17
+)
+
 // Config configures the exporter. Endpoint is the only required field.
 type Config struct {
 	// Endpoint is the OTLP/HTTP receiver URL. The exporter appends
@@ -322,9 +330,9 @@ func severityFor(ev apikit.TelemetryEvent) string {
 
 func severityNumberFor(ev apikit.TelemetryEvent) int {
 	if ev.Type == apikit.EventTypeHTTPRequestFailed {
-		return 17 // ERROR per OTLP severity_number spec
+		return severityNumberError
 	}
-	return 9 // INFO
+	return severityNumberInfo
 }
 
 func buildLogsURL(endpoint string) string {

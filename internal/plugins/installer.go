@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -150,7 +151,7 @@ func (i *Installer) downloadAndVerify(ctx context.Context, entry PluginEntry) ([
 // inside dest. Symlinks are skipped entirely; we don't follow them and
 // we don't recreate them.
 func extractTarGz(data []byte, dest string) error {
-	gz, err := gzip.NewReader(strings.NewReader(string(data)))
+	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("installer: gunzip: %w", err)
 	}
