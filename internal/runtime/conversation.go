@@ -5,6 +5,7 @@ import (
 	"github.com/SocialGouv/claw-code-go/internal/api"
 	"github.com/SocialGouv/claw-code-go/internal/apikit"
 	clawctx "github.com/SocialGouv/claw-code-go/internal/context"
+	lifehooks "github.com/SocialGouv/claw-code-go/internal/hooks"
 	"github.com/SocialGouv/claw-code-go/internal/lsp"
 	"github.com/SocialGouv/claw-code-go/internal/mcp"
 	"github.com/SocialGouv/claw-code-go/internal/permissions"
@@ -40,7 +41,8 @@ type ConversationLoop struct {
 	TelemetrySink   apikit.TelemetrySink   // Telemetry event sink (may be nil)
 	Tracer          *apikit.SessionTracer  // Session telemetry tracer (may be nil)
 	PluginRegistry  *plugin.PluginRegistry // Plugin registry (may be nil)
-	HookRunner      *hooks.HookRunner      // Hook runner (may be nil; wired from config + plugin hooks)
+	HookRunner      *hooks.HookRunner      // Shell-command hook runner (may be nil; wired from config + plugin hooks)
+	LifecycleHooks  *lifehooks.Runner      // In-process programmatic hooks (may be nil; default no-op)
 	CommandRegistry interface{}            // Slash command registry (may be nil; *commands.Registry)
 
 	// --- Batch 2: registries for CRUD tools ---
@@ -275,8 +277,60 @@ func (loop *ConversationLoop) allTools() []api.Tool {
 	return combined
 }
 
+// baseLifeCtx returns a Context skeleton populated with the session-level
+// fields (SessionID, WorkDir) common to all events.
+func (loop *ConversationLoop) baseLifeCtx(event lifehooks.Event) lifehooks.Context {
+	c := lifehooks.Context{Event: event, WorkDir: loop.workspaceRoot()}
+	if loop.Session != nil {
+		c.SessionID = loop.Session.ID
+	}
+	return c
+}
+
+// fireUserPromptSubmit dispatches a UserPromptSubmit event and applies any
+// Modify decision to the prompt. Returns the (possibly rewritten) prompt and
+// a boolean indicating whether the runtime should reject the prompt entirely
+// (Block decision).
+func (loop *ConversationLoop) fireUserPromptSubmit(ctx context.Context, prompt string) (string, bool, string) {
+	if loop.LifecycleHooks == nil {
+		return prompt, false, ""
+	}
+	hctx := loop.baseLifeCtx(lifehooks.UserPromptSubmit)
+	hctx.UserPrompt = prompt
+	dec, _ := loop.LifecycleHooks.Fire(ctx, hctx)
+	switch dec.Action {
+	case lifehooks.ActionBlock:
+		return prompt, true, dec.Reason
+	case lifehooks.ActionModify:
+		if dec.Replacement != nil && dec.Replacement.UserPrompt != "" {
+			return dec.Replacement.UserPrompt, false, ""
+		}
+	}
+	return prompt, false, ""
+}
+
+// EmitStop fires the Stop lifecycle hook. Callers should invoke this once at
+// the end of a session (e.g. when tearing down the conversation loop). It is
+// a no-op when LifecycleHooks is nil.
+func (loop *ConversationLoop) EmitStop(ctx context.Context) {
+	if loop.LifecycleHooks == nil {
+		return
+	}
+	_, _ = loop.LifecycleHooks.Fire(ctx, loop.baseLifeCtx(lifehooks.Stop))
+}
+
 // SendMessage sends a user message and runs the full agentic loop.
 func (loop *ConversationLoop) SendMessage(ctx context.Context, userText string) error {
+	// Lifecycle: UserPromptSubmit may rewrite or block the prompt.
+	rewritten, blocked, reason := loop.fireUserPromptSubmit(ctx, userText)
+	if blocked {
+		if reason == "" {
+			reason = "user prompt rejected by hook"
+		}
+		return fmt.Errorf("hook blocked user prompt: %s", reason)
+	}
+	userText = rewritten
+
 	// Append user message
 	loop.Session.Messages = append(loop.Session.Messages, api.Message{
 		Role: "user",
@@ -287,10 +341,7 @@ func (loop *ConversationLoop) SendMessage(ctx context.Context, userText string) 
 
 	// Compact history if approaching the token budget (Phase 6).
 	if ShouldCompact(loop.Compaction.LastInputTokens, loop.Session.Messages, loop.Config) {
-		_, err := CompactSession(ctx, loop.Client, loop.Config, loop.Session)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[compact] warning: %v\n", err)
-		} else {
+		if loop.tryCompact(ctx) {
 			loop.Compaction.CompactionCount++
 		}
 	}
@@ -466,6 +517,18 @@ func (loop *ConversationLoop) runOneTurn(ctx context.Context) (string, error) {
 // TurnEvents to the provided channel. The channel is NOT closed by this function;
 // callers should close it after this returns.
 func (loop *ConversationLoop) SendMessageStreaming(ctx context.Context, userText string, events chan<- TurnEvent) error {
+	// Lifecycle: UserPromptSubmit may rewrite or block the prompt.
+	rewritten, blocked, reason := loop.fireUserPromptSubmit(ctx, userText)
+	if blocked {
+		if reason == "" {
+			reason = "user prompt rejected by hook"
+		}
+		err := fmt.Errorf("hook blocked user prompt: %s", reason)
+		events <- TurnEvent{Type: TurnEventError, Err: err}
+		return err
+	}
+	userText = rewritten
+
 	loop.Session.Messages = append(loop.Session.Messages, api.Message{
 		Role: "user",
 		Content: []api.ContentBlock{
@@ -475,10 +538,7 @@ func (loop *ConversationLoop) SendMessageStreaming(ctx context.Context, userText
 
 	// Compact history if approaching the token budget (Phase 6).
 	if ShouldCompact(loop.Compaction.LastInputTokens, loop.Session.Messages, loop.Config) {
-		_, err := CompactSession(ctx, loop.Client, loop.Config, loop.Session)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[compact] warning: %v\n", err)
-		} else {
+		if loop.tryCompact(ctx) {
 			loop.Compaction.CompactionCount++
 		}
 	}
@@ -1009,6 +1069,9 @@ func (loop *ConversationLoop) MessageCount() int {
 
 // ExecuteTool dispatches to the appropriate tool implementation.
 // When HookRunner is set, pre-tool and post-tool hooks wrap the execution.
+// When LifecycleHooks is set, in-process PreToolUse/PostToolUse hooks fire
+// around the dispatch. A PreToolUse Block decision short-circuits with a
+// synthetic refusal tool_result (no tool execution).
 func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api.ContentBlock {
 	if !CheckPermission(loop.Permissions, name) {
 		return api.ContentBlock{
@@ -1017,6 +1080,21 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 			IsError: true,
 		}
 	}
+
+	// --- Lifecycle PreToolUse (in-process) ---
+	// Block short-circuits with a synthetic refusal so the model sees a
+	// tool_result indicating the tool did not run.
+	newInput, blocked, blockReason := loop.fireLifecyclePreToolUse(name, input)
+	if blocked {
+		// Notify post hook so observers see the rejection symmetrically.
+		loop.fireLifecyclePostToolUse(name, input, blockReason, fmt.Errorf("blocked by hook"))
+		return api.ContentBlock{
+			Type:    "tool_result",
+			Content: []api.ContentBlock{{Type: "text", Text: blockReason}},
+			IsError: true,
+		}
+	}
+	input = newInput
 
 	// Serialize input for hook payload.
 	inputJSON, _ := json.Marshal(input)
@@ -1344,6 +1422,16 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 		})
 	}
 
+	// --- Lifecycle PostToolUse / PostToolUseFailure (in-process) ---
+	var postErr error
+	if isError {
+		postErr = err
+		if postErr == nil {
+			postErr = fmt.Errorf("tool %s failed", name)
+		}
+	}
+	loop.fireLifecyclePostToolUse(name, input, text, postErr)
+
 	return api.ContentBlock{
 		Type: "tool_result",
 		Content: []api.ContentBlock{
@@ -1351,6 +1439,87 @@ func (loop *ConversationLoop) ExecuteTool(name string, input map[string]any) api
 		},
 		IsError: isError,
 	}
+}
+
+// tryCompact wraps CompactSession with PreCompact / PostCompact lifecycle
+// hooks. Returns true on successful compaction (so the caller can bump the
+// CompactionCount). PreCompact Block decisions cause compaction to be
+// skipped this turn.
+func (loop *ConversationLoop) tryCompact(ctx context.Context) bool {
+	msgCount := 0
+	if loop.Session != nil {
+		msgCount = len(loop.Session.Messages)
+	}
+
+	// PreCompact lifecycle hook.
+	if loop.LifecycleHooks != nil {
+		hctx := loop.baseLifeCtx(lifehooks.PreCompact)
+		hctx.MessageCount = msgCount
+		if dec, _ := loop.LifecycleHooks.Fire(ctx, hctx); dec.Action == lifehooks.ActionBlock {
+			fmt.Fprintf(os.Stderr, "[compact] skipped: PreCompact hook blocked (%s)\n", dec.Reason)
+			return false
+		}
+	}
+
+	_, err := CompactSession(ctx, loop.Client, loop.Config, loop.Session)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[compact] warning: %v\n", err)
+		return false
+	}
+
+	if loop.LifecycleHooks != nil {
+		hctx := loop.baseLifeCtx(lifehooks.PostCompact)
+		if loop.Session != nil {
+			hctx.MessageCount = len(loop.Session.Messages)
+		}
+		_, _ = loop.LifecycleHooks.Fire(ctx, hctx)
+	}
+	return true
+}
+
+// fireLifecyclePreToolUse runs the in-process PreToolUse hook. Returns
+// (newInput, blocked, reason). If blocked is true, the runtime must skip
+// tool execution and return a synthetic refusal tool_result.
+func (loop *ConversationLoop) fireLifecyclePreToolUse(name string, input map[string]any) (map[string]any, bool, string) {
+	if loop.LifecycleHooks == nil {
+		return input, false, ""
+	}
+	hctx := loop.baseLifeCtx(lifehooks.PreToolUse)
+	hctx.ToolName = name
+	hctx.ToolInput = input
+	dec, _ := loop.LifecycleHooks.Fire(context.Background(), hctx)
+	switch dec.Action {
+	case lifehooks.ActionBlock:
+		reason := dec.Reason
+		if reason == "" {
+			reason = fmt.Sprintf("Tool %s blocked by hook", name)
+		}
+		return input, true, reason
+	case lifehooks.ActionModify:
+		if dec.Replacement != nil && dec.Replacement.ToolInput != nil {
+			return dec.Replacement.ToolInput, false, ""
+		}
+	}
+	return input, false, ""
+}
+
+// fireLifecyclePostToolUse runs the in-process PostToolUse or
+// PostToolUseFailure hook. It is observational only — Block decisions are
+// logged and ignored at this point because the tool has already executed.
+func (loop *ConversationLoop) fireLifecyclePostToolUse(name string, input map[string]any, output string, toolErr error) {
+	if loop.LifecycleHooks == nil {
+		return
+	}
+	event := lifehooks.PostToolUse
+	if toolErr != nil {
+		event = lifehooks.PostToolUseFailure
+	}
+	hctx := loop.baseLifeCtx(event)
+	hctx.ToolName = name
+	hctx.ToolInput = input
+	hctx.ToolResult = output
+	hctx.ToolError = toolErr
+	_, _ = loop.LifecycleHooks.Fire(context.Background(), hctx)
 }
 
 // runPostToolHooks runs PostToolUse or PostToolUseFailure hooks if a HookRunner is configured.
