@@ -100,3 +100,24 @@ func TestNewPermissionPolicy(t *testing.T) {
 		t.Error("ModeAllow policy should authorize any tool")
 	}
 }
+
+func TestLLMClassifierExportsResolveToInternal(t *testing.T) {
+	if permissions.DefaultLLMClassifierModel == "" {
+		t.Error("DefaultLLMClassifierModel should be re-exported and non-empty")
+	}
+	if permissions.DefaultLLMClassifierCacheSize <= 0 {
+		t.Error("DefaultLLMClassifierCacheSize should be positive")
+	}
+	if permissions.DefaultLLMClassifierCacheTTL <= 0 {
+		t.Error("DefaultLLMClassifierCacheTTL should be positive")
+	}
+	// Constructors must compile and accept the documented signatures.
+	cache := permissions.NewClassifierCache(permissions.DefaultLLMClassifierCacheTTL)
+	if cache == nil {
+		t.Fatal("NewClassifierCache returned nil")
+	}
+	cache2 := permissions.NewClassifierCacheWithSize(0, 8)
+	if cache2 == nil {
+		t.Fatal("NewClassifierCacheWithSize returned nil")
+	}
+}
