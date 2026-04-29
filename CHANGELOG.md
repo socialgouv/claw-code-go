@@ -11,6 +11,7 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 
 ### Added
 
+- `claw-code-go timeline --session <id>` subcommand renders a saved session's chronological event view. Flags: `--store <dir>` (defaults to `~/.claw-code/sessions`), `--format pretty|json|md` (default `pretty`), `--limit n` (keep last N events; for `json` keeps the last N message records plus session_meta and prompt_history). Reuses `runtime.LoadSessionAuto` (handles JSONL + legacy JSON) and `tui.MarkdownRenderer` for assistant text bodies. Closes the `Session timeline UI` parity gap. (`internal/compat/timeline.go`)
 - OTLP/gRPC log exporter built on the official `go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc` SDK. Translates `apikit.TelemetryEvent` into OTLP LogRecords and ships them through a SDK BatchProcessor to any standard OpenTelemetry collector. Resource attributes default to `service.name=claw-code-go` and accept an optional `service.version`. Configurable via the new `CLAWD_OTLP_GRPC_ENDPOINT` env var (use `FromEnv()`); supports `CLAWD_OTLP_GRPC_INSECURE`, `CLAWD_OTLP_GRPC_HEADERS` (comma-separated `key=value`), `CLAWD_SERVICE_NAME`, and `CLAWD_SERVICE_VERSION`. (`internal/apikit/telemetry/otlpgrpc/exporter.go`, `internal/apikit/telemetry/otlpgrpc/env.go`)
   - DEPRECATION WARNING: `ITERION_*` env vars are deprecated, use `CLAWD_*` instead. (Only `CLAWD_OTLP_GRPC_*` are recognised by the gRPC exporter — there is no `ITERION_*` legacy alias for telemetry.)
 - Plugin lifecycle hook events: `PrePluginInstall`, `PostPluginInstall`, `PrePluginUninstall`, `PostPluginUninstall`. The `plugin.PluginManager` accepts a `hooks.Runner` via the new `WithHooks(*hooks.Runner)` option; a Block decision on a Pre event aborts the install/uninstall before any filesystem mutation, and Post events always fire (success or failure) with `Plugin.Error` populated on failure. The hook payload is `hooks.PluginInfo` (ID, Name, Version, Description, InstallPath, Source, Error). New `InstallContext` / `UninstallContext` methods thread `context.Context` to the runner; the legacy `Install` / `Uninstall` signatures remain and route through `context.Background()`. Nil Runner is a documented no-op. (`internal/hooks/runner.go`, `plugin/manager.go`, `plugin/lifecycle_hooks_test.go`)
@@ -39,7 +40,12 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 ### Deferred
 
 - Computer-use tools — `ImageSource` types are in place but the screenshot/click/typing tool surface is not yet wired.
+<<<<<<< HEAD
 - Session timeline UI — the JSONL session store captures all data, but no CLI render of the timeline exists yet.
+=======
+- Full MCP OAuth broker — only the atomic on-disk token storage layer landed; the authorization-code flow and token-refresh broker are pending.
+- OTLP exporter — telemetry event types are defined, but there is no exporter to OpenTelemetry collectors.
+>>>>>>> 22a1e08 (docs: close Session timeline UI parity gap)
 - Plugin marketplace — plugin manifests + local registry exist; remote discovery / install is not wired.
 
 [Unreleased]: https://github.com/SocialGouv/claw-code-go/compare/bf21311...HEAD

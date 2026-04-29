@@ -26,6 +26,7 @@
 
 Highlights since the goai → claw-code-go migration landed in iterion:
 
+- New `claw-code-go timeline --session <id>` subcommand renders a saved session's chronological events through the TUI markdown renderer. Flags: `--store <dir>`, `--format pretty|json|md`, `--limit n`. Example: `claw-code-go timeline --session demo --format md` (`internal/compat/timeline.go`).
 - Typed `api.APIError` with `StatusCode` / `Retryable` so callers drive retry classification via `errors.As` instead of string parsing (`internal/api/errors.go`).
 - OpenAI provider now routes `reasoning_effort` + tools through `/v1/responses` (was rejected by `/v1/chat/completions`); `internal/api/providers/openai/responses.go`.
 - Real Bedrock, Vertex, and Foundry providers — no longer stubs (`pkg/api/providers/{bedrock,vertex,foundry}/provider.go`).

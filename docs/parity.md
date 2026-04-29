@@ -24,7 +24,7 @@ Rating legend:
 | Agent SDK (programmatic conversation loop) | yes | yes | COMPLETE | `pkg/api/client.go` (`StreamResponse`), `internal/runtime/conversation.go`. Used by iterion via `model/generation.go`. |
 | Vision / computer use | yes | partial | MISSING | `api.ImageSource` types in place: `internal/api/types.go`, `pkg/api/types.go`. Screenshot/click/typing tools are not implemented. |
 | Telemetry (event taxonomy + exporter) | yes (OTLP) | yes (OTLP/HTTP + OTLP/gRPC) | COMPLETE | Event types: `internal/runtime/events.go`. Internal client telemetry: `internal/api/client_telemetry_test.go`. OTLP/HTTP-JSON exporter: `internal/apikit/telemetry/otlp/exporter.go`. OTLP/gRPC exporter (official `otlploggrpc` SDK): `internal/apikit/telemetry/otlpgrpc/exporter.go` — env var `CLAWD_OTLP_GRPC_ENDPOINT` enables wiring. JSONL session log remains the default offline sink. |
-| Session timeline UI | yes (TUI render) | partial | PARTIAL | TUI primitives: `internal/tui/`. Session JSONL captures every turn, but no `claw-code timeline` render command exists yet. |
+| Session timeline UI | yes (TUI render) | yes | COMPLETE | `claw-code-go timeline --session <id> [--format pretty\|json\|md] [--limit n]` renders saved JSONL sessions through the TUI markdown renderer (`internal/compat/timeline.go`). Reuses `runtime.LoadSessionAuto` and `tui.MarkdownRenderer`. |
 | Plugin marketplace (remote discovery + install) | yes | partial | MISSING | Local plugin registry, manifest, and tool wiring shipped: `plugin/{manager.go,manifest.go,registry.go,tool.go}`. Remote marketplace / signed-manifest fetch is not wired. |
 
 ## Quick guidance for contributors
@@ -33,6 +33,5 @@ If you're adding a feature, the file:line citations above point to the package y
 
 If you're chasing a "PARTIAL" rating to "COMPLETE":
 
-- **Session UI**: read `internal/runtime/session_jsonl.go` and render through `internal/tui`.
 - **Vision / computer use**: implement screenshot/click tools that emit `api.ImageSource` content blocks.
 - **Plugin marketplace**: layer a remote fetch + manifest verification on top of `plugin/registry.go`.
