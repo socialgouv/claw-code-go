@@ -58,6 +58,11 @@ type ConversationLoop struct {
 	// PlanModeActive tracks whether plan mode is currently engaged.
 	PlanModeActive bool
 
+	// Asker is consulted by the non-streaming ExecuteTool path for ask_user.
+	// May be nil (legacy fallback prints to stdout). The streaming path uses
+	// the TurnEventAskUser channel and is unaffected by this field.
+	Asker tools.Asker
+
 	// toolCallCount is the number of tool_use blocks executed in this session.
 	// Incremented atomically in ExecuteTool for goroutine safety (Rust parity:
 	// pending_tool_use_count is tracked per-turn; we track cumulative for the
@@ -1206,32 +1211,42 @@ func (loop *ConversationLoop) ExecuteTool(ctx context.Context, name string, inpu
 	case "web_search":
 		result, err = tools.ExecuteWebSearch(input)
 	case "ask_user":
-		q, ok := tools.AskUserInput(input)
-		if !ok {
-			err = fmt.Errorf("ask_user: 'question' is required")
+		var askText string
+		var askErr error
+		if loop.Asker != nil {
+			askText, askErr = tools.ExecuteAskUser(ctx, loop.Asker, input)
 		} else {
-			cb := tools.AskUserFallback(q)
-			askText := cb.Content[0].Text
-			fmt.Fprintf(os.Stdout, "%s\n", askText)
-			// Run post-hooks and telemetry for ask_user (matching Rust behavior).
-			askText = hooks.MergeHookFeedback(preHookMessages, askText, false)
-			postResult := loop.runPostToolHooks(ctx, name, inputStr, askText, false)
-			if postResult.IsDenied() || postResult.IsFailed() || postResult.IsCancelled() {
-				askText = hooks.MergeHookFeedback(postResult.Messages, askText, true)
-				cb.Content[0].Text = askText
-				cb.IsError = true
+			q, ok := tools.AskUserInput(input)
+			if !ok {
+				askErr = fmt.Errorf("ask_user: 'question' is required")
 			} else {
-				askText = hooks.MergeHookFeedback(postResult.Messages, askText, false)
-				cb.Content[0].Text = askText
+				askText = tools.AskUserFallback(q).Content[0].Text
+				fmt.Fprintf(os.Stdout, "%s\n", askText)
 			}
-			if loop.Tracer != nil {
-				loop.Tracer.Record("tool_execute_end", map[string]any{
-					"tool_name": name,
-					"is_error":  cb.IsError,
-				})
-			}
-			return cb
 		}
+		cb := api.ContentBlock{Type: "tool_result"}
+		if askErr != nil {
+			cb.Content = []api.ContentBlock{{Type: "text", Text: askErr.Error()}}
+			cb.IsError = true
+		} else {
+			cb.Content = []api.ContentBlock{{Type: "text", Text: askText}}
+		}
+		askText = hooks.MergeHookFeedback(preHookMessages, cb.Content[0].Text, cb.IsError)
+		postResult := loop.runPostToolHooks(ctx, name, inputStr, askText, cb.IsError)
+		if postResult.IsDenied() || postResult.IsFailed() || postResult.IsCancelled() {
+			askText = hooks.MergeHookFeedback(postResult.Messages, askText, true)
+			cb.IsError = true
+		} else {
+			askText = hooks.MergeHookFeedback(postResult.Messages, askText, false)
+		}
+		cb.Content[0].Text = askText
+		if loop.Tracer != nil {
+			loop.Tracer.Record("tool_execute_end", map[string]any{
+				"tool_name": name,
+				"is_error":  cb.IsError,
+			})
+		}
+		return cb
 	case "todo_write":
 		result, err = tools.ExecuteTodoWrite(input)
 	// --- Batch 2: simple stateless tools ---
