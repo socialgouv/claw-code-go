@@ -2,6 +2,8 @@ package permissions
 
 import (
 	"context"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -158,6 +160,123 @@ func TestClassifierCache_UpdateInPlaceDoesNotEvict(t *testing.T) {
 	}
 }
 
+func TestNewLLMClassifier_Defaults(t *testing.T) {
+	client := &scriptedClient{body: `{"decision":"allow"}`}
+	lc := NewLLMClassifier(client, "")
+	if lc.Model != DefaultLLMClassifierModel {
+		t.Errorf("expected default model %q, got %q", DefaultLLMClassifierModel, lc.Model)
+	}
+	if lc.Fallback == nil {
+		t.Error("expected default Fallback (RuleClassifier) to be installed")
+	}
+	if _, ok := lc.Fallback.(*RuleClassifier); !ok {
+		t.Errorf("expected *RuleClassifier fallback, got %T", lc.Fallback)
+	}
+	if lc.Cache == nil {
+		t.Error("expected default Cache to be installed")
+	}
+	if lc.MaxTokens == 0 {
+		t.Error("expected non-zero default MaxTokens")
+	}
+}
+
+func TestNewLLMClassifier_RuleFallbackShortCircuitsOnSafeRead(t *testing.T) {
+	called := false
+	client := stubClient{
+		inner:      &scriptedClient{body: `{"decision":"deny"}`},
+		calledBool: &called,
+	}
+	lc := NewLLMClassifier(client, "")
+	dec, err := lc.Classify(context.Background(), "read_file", map[string]any{"path": "/tmp/x"})
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if dec != DecisionAllow {
+		t.Errorf("expected RuleClassifier Allow on read_file, got %v", dec)
+	}
+	if called {
+		t.Error("LLM should not be called when rule fast-path decides")
+	}
+}
+
+func TestNewLLMClassifier_DenyOnDestructiveBash(t *testing.T) {
+	client := &scriptedClient{body: `{"decision":"deny","reason":"destructive"}`}
+	lc := NewLLMClassifier(client, "anthropic/claude-haiku-4-5")
+	dec, _ := lc.Classify(context.Background(), "bash", map[string]any{"command": "rm -rf /"})
+	if dec != DecisionDeny {
+		t.Errorf("expected Deny for destructive command, got %v", dec)
+	}
+}
+
+func TestNewLLMClassifier_PromptOnAmbiguousEdit(t *testing.T) {
+	client := &scriptedClient{body: `{"decision":"ask"}`}
+	lc := NewLLMClassifier(client, "anthropic/claude-haiku-4-5")
+	dec, _ := lc.Classify(context.Background(), "write_file", map[string]any{
+		"path":    "/tmp/foo",
+		"content": "data",
+	})
+	if dec != DecisionAsk {
+		t.Errorf("expected Ask for ambiguous write_file, got %v", dec)
+	}
+}
+
+func TestNewLLMClassifier_FallsBackToAskOnError(t *testing.T) {
+	client := errClient{}
+	lc := NewLLMClassifier(client, "anthropic/claude-haiku-4-5",
+		WithFallbackClassifier(nil),
+		WithLogger(io.Discard),
+	)
+	dec, err := lc.Classify(context.Background(), "bash", map[string]any{"command": "ls"})
+	if err != nil {
+		t.Fatalf("Classify must never propagate errors: %v", err)
+	}
+	if dec != DecisionAsk {
+		t.Errorf("expected fail-safe DecisionAsk on client error, got %v", dec)
+	}
+}
+
+func TestNewLLMClassifier_OptionsApply(t *testing.T) {
+	cache := NewClassifierCache(0)
+	lc := NewLLMClassifier(&scriptedClient{body: `{"decision":"allow"}`}, "x",
+		WithFallbackClassifier(nil),
+		WithClassifierCache(cache),
+		WithMaxTokens(123),
+		WithLogger(io.Discard),
+	)
+	if lc.Fallback != nil {
+		t.Error("WithFallbackClassifier(nil) should clear default fallback")
+	}
+	if lc.Cache != cache {
+		t.Error("WithClassifierCache must install the provided cache")
+	}
+	if lc.MaxTokens != 123 {
+		t.Errorf("WithMaxTokens(123) must apply, got %d", lc.MaxTokens)
+	}
+	if lc.Logger == nil {
+		t.Error("WithLogger should install the provided writer")
+	}
+}
+
+func TestNewLLMClassifierManager_WiresClassifier(t *testing.T) {
+	hits := 0
+	client := stubClient{
+		inner:     &scriptedClient{body: `{"decision":"deny","reason":"shell"}`},
+		calledInt: &hits,
+	}
+	// ModeBypassPermissions normally short-circuits to Allow in the legacy
+	// path; here we use ModeDefault so the classifier is consulted.
+	m := NewLLMClassifierManager(ModeDefault, nil, client, "anthropic/claude-haiku-4-5",
+		WithFallbackClassifier(nil),
+	)
+	dec := m.CheckCtx(context.Background(), "bash", `{"command":"rm -rf /tmp/x"}`)
+	if dec != DecisionDeny {
+		t.Errorf("expected Manager to surface classifier Deny, got %v", dec)
+	}
+	if hits != 1 {
+		t.Errorf("expected exactly 1 LLM call, got %d", hits)
+	}
+}
+
 // ----- helpers -----
 
 // ClassifierFunc adapts a function into a Classifier (test-only).
@@ -182,4 +301,12 @@ func (s stubClient) StreamResponse(ctx context.Context, req api.CreateMessageReq
 		*s.calledInt++
 	}
 	return s.inner.StreamResponse(ctx, req)
+}
+
+// errClient simulates a transport-level failure so we can assert the
+// classifier's fail-safe path returns DecisionAsk.
+type errClient struct{}
+
+func (errClient) StreamResponse(_ context.Context, _ api.CreateMessageRequest) (<-chan api.StreamEvent, error) {
+	return nil, errors.New("synthetic transport failure")
 }
