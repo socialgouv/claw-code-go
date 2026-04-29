@@ -719,7 +719,7 @@ func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events ch
 
 			// --- Permission check (Phase 5) ---
 			if loop.PermManager != nil {
-				decision := loop.PermManager.Check(tb.name, summary)
+				decision := loop.PermManager.CheckCtx(ctx, tb.name, summary)
 
 				// Plan mode: describe without executing.
 				if loop.PermManager.Mode == permissions.ModePlan {

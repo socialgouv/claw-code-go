@@ -47,6 +47,24 @@ type PermissionPrompter = permissions.PermissionPrompter
 // HookPermissionOverride represents a hook's permission decision.
 type HookPermissionOverride = permissions.HookPermissionOverride
 
+// Classifier evaluates a tool invocation under ModeAuto and returns a Decision.
+type Classifier = permissions.Classifier
+
+// RuleClassifier is the default Classifier with a conservative read-only safe-list.
+type RuleClassifier = permissions.RuleClassifier
+
+// LLMClassifier delegates Allow/Ask/Deny decisions to a small fast model,
+// short-circuiting via a Fallback Classifier (typically RuleClassifier) for
+// well-known cases.
+type LLMClassifier = permissions.LLMClassifier
+
+// ClassifierCache is the in-memory TTL+FIFO cache used by LLMClassifier.
+type ClassifierCache = permissions.ClassifierCache
+
+// ClassifierLogger is the minimal logging surface Manager uses to surface
+// classifier errors and panics. Set via Manager.SetClassifierLogger.
+type ClassifierLogger = permissions.ClassifierLogger
+
 const (
 	ModeReadOnly         = permissions.ModeReadOnly
 	ModeWorkspaceWrite   = permissions.ModeWorkspaceWrite
@@ -95,3 +113,9 @@ var NewPermissionPolicy = permissions.NewPermissionPolicy
 
 // NewPermissionContext creates a context with optional override.
 var NewPermissionContext = permissions.NewPermissionContext
+
+// NewRuleClassifier returns a RuleClassifier with the documented default safe-list.
+var NewRuleClassifier = permissions.NewRuleClassifier
+
+// NewClassifierCache builds a TTL+FIFO classifier cache.
+var NewClassifierCache = permissions.NewClassifierCache

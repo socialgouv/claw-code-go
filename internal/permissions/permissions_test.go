@@ -1,6 +1,9 @@
 package permissions
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestPermissionModeOrdering(t *testing.T) {
 	// Verify the 5-mode ordering: ReadOnly < WorkspaceWrite < DangerFullAccess < Prompt < Allow
@@ -254,5 +257,106 @@ func TestSetPolicyDelegation(t *testing.T) {
 	d = m.Check("bash", "{}")
 	if d != DecisionAsk {
 		t.Errorf("expected Ask after clearing policy, got %v", d)
+	}
+}
+
+// stubClassifier is reused from dontask_auto_test.go — same package.
+
+func TestSetClassifierAllowShortCircuitsLegacy(t *testing.T) {
+	m := NewManager(ModeDefault, nil)
+	if d := m.Check("bash", "{}"); d != DecisionAsk {
+		t.Fatalf("expected Ask before classifier, got %v", d)
+	}
+
+	stub := &stubClassifier{decision: DecisionAllow}
+	m.SetClassifier(stub)
+
+	if d := m.Check("bash", `{"command":"echo hi"}`); d != DecisionAllow {
+		t.Errorf("expected Allow from classifier, got %v", d)
+	}
+	if stub.calls != 1 {
+		t.Errorf("expected classifier invoked once, got %d", stub.calls)
+	}
+
+	// Clearing returns to legacy behavior.
+	m.SetClassifier(nil)
+	if d := m.Check("bash", "{}"); d != DecisionAsk {
+		t.Errorf("expected Ask after clearing classifier, got %v", d)
+	}
+}
+
+func TestSetClassifierDenyShortCircuitsLegacy(t *testing.T) {
+	rules := &Ruleset{
+		Rules: []Rule{{Tool: "bash", Decision: DecisionAllow}},
+	}
+	m := NewManager(ModeDefault, rules)
+
+	// Legacy would Allow because of the rule.
+	if d := m.Check("bash", "{}"); d != DecisionAllow {
+		t.Fatalf("setup: legacy path should Allow via ruleset, got %v", d)
+	}
+
+	stub := &stubClassifier{decision: DecisionDeny}
+	m.SetClassifier(stub)
+
+	if d := m.Check("bash", `{"command":"rm -rf /"}`); d != DecisionDeny {
+		t.Errorf("expected Deny from classifier, got %v", d)
+	}
+}
+
+func TestSetClassifierAskFallsThroughToLegacy(t *testing.T) {
+	rules := &Ruleset{Rules: []Rule{{Tool: "bash", Decision: DecisionAllow}}}
+	m := NewManager(ModeDefault, rules)
+
+	stub := &stubClassifier{decision: DecisionAsk}
+	m.SetClassifier(stub)
+
+	// Classifier returns Ask → legacy ruleset says Allow.
+	if d := m.Check("bash", "{}"); d != DecisionAllow {
+		t.Errorf("expected Allow from legacy after classifier Ask, got %v", d)
+	}
+	if stub.calls != 1 {
+		t.Errorf("expected classifier invoked once, got %d", stub.calls)
+	}
+}
+
+func TestSetClassifierErrorFallsThroughToLegacy(t *testing.T) {
+	m := NewManager(ModeBypassPermissions, nil)
+	stub := &stubClassifier{decision: DecisionDeny, err: errors.New("model unavailable")}
+	m.SetClassifier(stub)
+
+	// Classifier error must NOT short-circuit; legacy ModeBypassPermissions Allows.
+	if d := m.Check("bash", "{}"); d != DecisionAllow {
+		t.Errorf("expected Allow from legacy after classifier error, got %v", d)
+	}
+}
+
+func TestPolicyTakesPrecedenceOverClassifier(t *testing.T) {
+	m := NewManager(ModeDefault, nil)
+
+	// Policy Allows everything in ModeAllow.
+	m.SetPolicy(NewPermissionPolicy(ModeAllow))
+	// Classifier would Deny.
+	m.SetClassifier(&stubClassifier{decision: DecisionDeny})
+
+	if d := m.Check("bash", "{}"); d != DecisionAllow {
+		t.Errorf("expected Allow from policy (precedence), got %v", d)
+	}
+}
+
+func TestCheckWithHookOverrideClassifier(t *testing.T) {
+	m := NewManager(ModeDefault, nil)
+	stub := &stubClassifier{decision: DecisionAllow}
+	m.SetClassifier(stub)
+
+	// No override: classifier Allows.
+	if d := m.CheckWithHookOverride("bash", "{}", nil); d != DecisionAllow {
+		t.Errorf("expected Allow from classifier without override, got %v", d)
+	}
+
+	// Hook override Deny wins over classifier Allow.
+	override := &HookPermissionOverride{Decision: DecisionDeny, Reason: "test"}
+	if d := m.CheckWithHookOverride("bash", "{}", override); d != DecisionDeny {
+		t.Errorf("expected Deny from hook override, got %v", d)
 	}
 }
