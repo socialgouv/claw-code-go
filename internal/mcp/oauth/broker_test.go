@@ -462,6 +462,101 @@ func TestBroker_RevokeStillClearsLocalOnRemoteFailure(t *testing.T) {
 	}
 }
 
+func TestBroker_AcquireNoninteractive_NoCacheReturnsReauthRequired(t *testing.T) {
+	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
+	b := NewBroker(WithStorage(storage))
+	_, err := b.AcquireNoninteractive(context.Background(), ServerConfig{
+		Name: "github", TokenURL: "http://nowhere", ClientID: "c",
+	})
+	if !errors.Is(err, ErrReauthRequired) {
+		t.Fatalf("expected ErrReauthRequired on empty cache, got %v", err)
+	}
+}
+
+func TestBroker_AcquireNoninteractive_FreshCacheReturnsToken(t *testing.T) {
+	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
+	_ = storage.Save("github", Token{
+		AccessToken: "still-good",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	})
+	b := NewBroker(WithStorage(storage))
+	tok, err := b.AcquireNoninteractive(context.Background(), ServerConfig{
+		Name: "github", TokenURL: "http://nowhere", ClientID: "c",
+	})
+	if err != nil {
+		t.Fatalf("AcquireNoninteractive: %v", err)
+	}
+	if tok != "still-good" {
+		t.Errorf("expected still-good, got %q", tok)
+	}
+}
+
+func TestBroker_AcquireNoninteractive_ExpiredWithoutRefreshIsReauth(t *testing.T) {
+	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
+	_ = storage.Save("github", Token{
+		AccessToken:  "expired",
+		RefreshToken: "",
+		ExpiresAt:    time.Now().Add(-time.Hour),
+	})
+	b := NewBroker(WithStorage(storage))
+	_, err := b.AcquireNoninteractive(context.Background(), ServerConfig{
+		Name: "github", TokenURL: "http://nowhere", ClientID: "c",
+	})
+	if !errors.Is(err, ErrReauthRequired) {
+		t.Fatalf("expected ErrReauthRequired, got %v", err)
+	}
+}
+
+func TestBroker_AcquireNoninteractive_InvalidGrantSurfacesAsReauth(t *testing.T) {
+	tokSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(tokenResponse{
+			Error:     "invalid_grant",
+			ErrorDesc: "refresh token expired",
+		})
+	}))
+	defer tokSrv.Close()
+
+	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
+	_ = storage.Save("github", Token{
+		AccessToken:  "expiring",
+		RefreshToken: "stale-refresh",
+		ExpiresAt:    time.Now().Add(5 * time.Second),
+	})
+	b := NewBroker(WithStorage(storage), WithHTTPClient(tokSrv.Client()))
+	_, err := b.AcquireNoninteractive(context.Background(), ServerConfig{
+		Name: "github", TokenURL: tokSrv.URL, ClientID: "c",
+	})
+	if !errors.Is(err, ErrReauthRequired) {
+		t.Fatalf("expected invalid_grant to surface as ErrReauthRequired, got %v", err)
+	}
+}
+
+func TestBroker_AcquireNoninteractive_TransientErrorIsNotReauth(t *testing.T) {
+	tokSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer tokSrv.Close()
+
+	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
+	_ = storage.Save("github", Token{
+		AccessToken:  "expiring",
+		RefreshToken: "ok-refresh",
+		ExpiresAt:    time.Now().Add(5 * time.Second),
+	})
+	b := NewBroker(WithStorage(storage), WithHTTPClient(tokSrv.Client()))
+	_, err := b.AcquireNoninteractive(context.Background(), ServerConfig{
+		Name: "github", TokenURL: tokSrv.URL, ClientID: "c",
+	})
+	if err == nil {
+		t.Fatal("expected error from 500")
+	}
+	if errors.Is(err, ErrReauthRequired) {
+		t.Errorf("transient 5xx must NOT be classified as ErrReauthRequired (got %v)", err)
+	}
+}
+
 func TestBroker_RevokeDropsToken(t *testing.T) {
 	storage := NewStorage(filepath.Join(t.TempDir(), "tokens.json"))
 	_ = storage.Save("github", Token{AccessToken: "x"})
