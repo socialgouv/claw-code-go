@@ -11,6 +11,7 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 
 ### Added
 
+- Live test coverage for Bedrock, Vertex, and Foundry providers under build tag `live`. Each test instantiates the real provider, runs a short streaming request, and asserts that at least one text delta plus a stop event are received; tests skip cleanly when the documented per-provider env vars are missing, so `go test ./...` (no tag) is unaffected. (`internal/api/providers/{bedrock,vertex,foundry}/provider_live_test.go`)
 - Typed `api.APIError` returned by provider clients on non-2xx responses, exposing `Provider`, `StatusCode`, `Message`, `Body`, and `Retryable`. Callers drive retry classification via `errors.As` instead of string parsing. `IsRetryableStatus` covers 408/409/429/5xx. (`internal/api/errors.go`, commit 2574d7f)
 - OpenAI provider routes `reasoning_effort` + tools through `/v1/responses` and translates its SSE event stream; `/v1/chat/completions` is kept for the legacy path. (`internal/api/providers/openai/responses.go`, commit 14716b8)
 - Real AWS Bedrock provider built on `aws-sdk-go-v2` (replaces the stub). (`pkg/api/providers/bedrock/provider.go` + `internal/api/providers/bedrock`, commit 3ce3cea)

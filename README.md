@@ -88,6 +88,33 @@ Five providers are wired through `pkg/api/providers/`:
 
 Models are addressed as `<provider>/<model-id>`, e.g. `openai/gpt-5.4-mini`, `anthropic/claude-sonnet-4-6`, `bedrock/anthropic.claude-sonnet-4-6`, `vertex/claude-sonnet-4-6`.
 
+### Running live provider tests
+
+Each cloud provider ships a smoke test gated by the `live` Go build tag. The tests skip cleanly when the relevant credentials are not set, so the default `go test ./...` is unaffected. To run them you must opt in by passing `-tags live` and the documented env vars:
+
+```bash
+# AWS Bedrock — uses the standard AWS SDK credentials chain.
+AWS_REGION=us-east-1 \
+AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+BEDROCK_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0 \
+go test -tags live -run TestLiveStreamSmokeBedrock -v ./internal/api/providers/bedrock/...
+
+# Google Vertex AI — uses Application Default Credentials.
+GOOGLE_CLOUD_PROJECT=my-project \
+GOOGLE_CLOUD_REGION=us-east5 \
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json \
+VERTEX_MODEL=claude-sonnet-4-20250514 \
+go test -tags live -run TestLiveStreamSmokeVertex -v ./internal/api/providers/vertex/...
+
+# Azure AI Foundry — api-key auth, or DefaultAzureCredential when key is unset.
+AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com \
+AZURE_OPENAI_API_KEY=... \
+FOUNDRY_MODEL=my-deployment \
+go test -tags live -run TestLiveStreamSmokeFoundry -v ./internal/api/providers/foundry/...
+```
+
+Each test asserts only that the stream produced at least one text delta and a `message_stop` event; it does not check the exact wording of the reply. That is enough to confirm authentication, request shape, and SSE decoding all work end-to-end. Test files: `internal/api/providers/{bedrock,vertex,foundry}/provider_live_test.go`.
+
 ## Built-in tools
 
 The `pkg/api/tools` package re-exports the built-in tools as a stable public API. Each tool is a pair of `XxxTool() api.Tool` (schema) + `ExecuteXxx(ctx, input)` (runtime).
