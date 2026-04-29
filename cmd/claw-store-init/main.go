@@ -85,11 +85,27 @@ against this directory.
 
 ## Optional: signed plugins
 
-To experiment forward-compatibly with plugin signatures, see
-docs/plugin_signing.md in the claw-code-go repo and populate the
+See docs/plugin_signing.md in the claw-code-go repo and populate the
 ` + "`signature_url`" + `, ` + "`signature_bundle`" + `, ` + "`certificate_identity`" + `, and
-` + "`certificate_oidc_issuer`" + ` fields. The verification engine is not yet
-wired into the installer, so these fields are advisory today.
+` + "`certificate_oidc_issuer`" + ` fields. The installer verifies cosign
+signatures via the ` + "`cosign`" + ` CLI on PATH; set
+` + "`CLAW_REQUIRE_SIGNED=1`" + ` to reject unsigned plugins, or
+` + "`CLAW_PLUGIN_PUBLIC_KEY=/path/to/cosign.pub`" + ` for key-based mode.
+
+## Two-tier marketplace (` + "`/index.json`" + ` + per-plugin ` + "`manifest.json`" + `)
+
+The ` + "`catalog.json`" + ` produced above feeds the legacy ` + "`/store`" + ` slash
+command. To also serve the public ` + "`plugin.RemoteMarketplace`" + ` API
+(used by ` + "`claw-code-go plugin install --marketplace <url> <name>`" + `),
+publish the same content under the two-tier layout described in
+` + "`docs/plugin_signing.md`" + `:
+
+` + "```" + `
+<base>/index.json                          # { plugins: [{ name, latest_version, url, ... }] }
+<base>/<plugin>/manifest.json              # PluginManifest + tarball_url + sha256 + signature_*
+<base>/<plugin>/<plugin>-<ver>.tar.gz
+<base>/<plugin>/<plugin>-<ver>.tar.gz.sig  # optional
+` + "```" + `
 `
 
 func main() {

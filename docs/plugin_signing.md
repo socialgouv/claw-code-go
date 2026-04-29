@@ -108,3 +108,106 @@ installer talks to that interface only.
   instance by default. Air-gapped deployments need a private Rekor
   and `cosign --rekor-url` — not currently configurable through
   `CosignVerifier` (PRs welcome).
+
+## Remote marketplace layout
+
+`plugin.RemoteMarketplace` (in `plugin/remote_marketplace.go`) consumes a
+two-tier static layout that any HTTPS server can host. The `claw-store-init`
+scaffolder generates this structure; the `internal/plugins.Marketplace`
+client and the `claw-code-go plugin install` command both speak the same
+schema, so a single catalog serves both surfaces.
+
+```
+<base-url>/
+  index.json
+  <plugin-name>/
+    manifest.json
+    <plugin-name>-<version>.tar.gz
+    <plugin-name>-<version>.tar.gz.sig         # optional, raw cosign sig
+    <plugin-name>-<version>.bundle.json        # optional, sigstore bundle
+```
+
+### `index.json`
+
+A list of pointers — minimal so a marketplace can carry hundreds of
+plugins without shipping every full manifest in one document.
+
+```json
+{
+  "version": 1,
+  "plugins": [
+    {
+      "name": "linter",
+      "latest_version": "1.0.0",
+      "url": "linter/manifest.json",
+      "description": "A linter plugin"
+    }
+  ]
+}
+```
+
+`url` may be relative to the marketplace base URL (recommended) or an
+absolute HTTPS URL. Relative paths resolve against `<base-url>/`.
+
+### Per-plugin `manifest.json`
+
+The full plugin manifest: extends `plugin.PluginManifest` (the
+plugin.json schema documented elsewhere) with the install coordinates.
+
+```json
+{
+  "name": "linter",
+  "version": "1.0.0",
+  "description": "A linter plugin",
+  "permissions": [],
+  "defaultEnabled": true,
+  "hooks": {"PreToolUse": [], "PostToolUse": [], "PostToolUseFailure": []},
+  "lifecycle": {"Init": [], "Shutdown": []},
+  "tools": [],
+  "commands": [],
+
+  "tarball_url": "https://example.com/linter/linter-1.0.0.tar.gz",
+  "sha256": "abc123…",
+  "signature_url": "https://example.com/linter/linter-1.0.0.bundle.json",
+  "certificate_identity": "ci@example.com",
+  "certificate_oidc_issuer": "https://accounts.google.com"
+}
+```
+
+The signature fields (`signature_url` / `signature_bundle` /
+`certificate_identity` / `certificate_oidc_issuer`) are the same ones
+`PluginEntry` already accepts and trigger the cosign verification
+chain documented above.
+
+## Installing from a remote marketplace
+
+CLI:
+
+```bash
+export CLAW_MARKETPLACE_URL=https://plugins.example.com
+claw-code-go plugin install linter
+```
+
+Flags:
+
+| Flag | Effect |
+|---|---|
+| `--marketplace <url>` | Override `$CLAW_MARKETPLACE_URL`. |
+| `--dest <dir>` | Install root (default: `plugins.DefaultPluginDir()`). |
+| `--require-signed` | Reject plugins without signature material. Equivalent to `CLAW_REQUIRE_SIGNED=1`. |
+| `--insecure-marketplace` | Permit `http://` URLs. Development only — production must run over HTTPS so an on-path attacker cannot tamper with tarballs before SHA-256 + cosign verification. |
+| `--timeout <duration>` | Total install timeout (default: 60s). |
+
+Programmatic:
+
+```go
+mkt, err := plugin.NewRemoteMarketplace("https://plugins.example.com",
+    plugin.WithMarketplaceRequireSigned(true),
+)
+if err != nil { return err }
+manifest, err := mkt.Install(ctx, "linter", "/var/lib/claw/plugins")
+```
+
+The install path: `index.json` → `<plugin>/manifest.json` →
+`<plugin>/<plugin>-<version>.tar.gz` (size-capped) → SHA-256 verify →
+optional cosign verify-blob → atomic extract under `<dest>/<name>`.
