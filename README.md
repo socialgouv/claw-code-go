@@ -26,6 +26,7 @@
 
 Highlights since the goai → claw-code-go migration landed in iterion:
 
+- Real `ask_user` and `remote_trigger` tools (previously stubs). `ask_user` exposes a pluggable `Asker` interface (`StdinAsker`, `ProgrammaticAsker`, `TUIAsker`) and the schema accepts structured `options` plus `allow_free_text`. `remote_trigger` is a real `http.Client` wrapper with per-request timeout, response-body cap (with `truncated` flag), input header blocklist (Cookie / Proxy-Authorization), output header allowlist (Set-Cookie filtered out), and a CRLF guard. Public façade in `pkg/api/tools` (`internal/tools/{ask_user,remote_trigger}.go`).
 - New `claw-code-go timeline --session <id>` subcommand renders a saved session's chronological events through the TUI markdown renderer. Flags: `--store <dir>`, `--format pretty|json|md`, `--limit n`. Example: `claw-code-go timeline --session demo --format md` (`internal/compat/timeline.go`).
 - Typed `api.APIError` with `StatusCode` / `Retryable` so callers drive retry classification via `errors.As` instead of string parsing (`internal/api/errors.go`).
 - OpenAI provider now routes `reasoning_effort` + tools through `/v1/responses` (was rejected by `/v1/chat/completions`); `internal/api/providers/openai/responses.go`.
