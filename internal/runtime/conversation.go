@@ -939,7 +939,7 @@ func (loop *ConversationLoop) ExecuteToolQuiet(ctx context.Context, name string,
 		result, err = tools.ExecuteCronDelete(input, loop.CronRegistry)
 	// --- Batch 2: remote trigger ---
 	case "remote_trigger":
-		result, err = tools.ExecuteRemoteTrigger(input)
+		result, err = tools.ExecuteRemoteTrigger(ctx, input)
 	// --- Batch 2: orchestration tools ---
 	case "agent":
 		result, err = tools.ExecuteAgent(input)
@@ -1301,7 +1301,7 @@ func (loop *ConversationLoop) ExecuteTool(ctx context.Context, name string, inpu
 		result, err = tools.ExecuteCronDelete(input, loop.CronRegistry)
 	// --- Batch 2: remote trigger ---
 	case "remote_trigger":
-		result, err = tools.ExecuteRemoteTrigger(input)
+		result, err = tools.ExecuteRemoteTrigger(ctx, input)
 	// --- Batch 2: orchestration tools ---
 	case "agent":
 		result, err = tools.ExecuteAgent(input)

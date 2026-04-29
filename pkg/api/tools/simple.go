@@ -30,7 +30,7 @@ func ExecuteSendUserMessage(ctx context.Context, input map[string]any) (string, 
 func RemoteTriggerTool() api.Tool { return intl.RemoteTriggerTool() }
 
 func ExecuteRemoteTrigger(ctx context.Context, input map[string]any) (string, error) {
-	return intl.ExecuteRemoteTrigger(input)
+	return intl.ExecuteRemoteTrigger(ctx, input)
 }
 
 // AskUserQuestionTool returns the schema for the ask_user tool.
