@@ -29,10 +29,10 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 - BUG 7 — Tool-call args-before-id buffering corrected via the new `sseutil.ToolCallAccumulator`; assistant turns no longer drop arguments that arrive before the tool-call id in OpenAI streams. (`internal/api/sseutil/toolcall.go`, commit 80f5a8c)
 - BUGs 2 / 3 — `/v1/responses` interleave assembly for parallel reasoning + tool calls. Each output item now keeps its own block index across the entire stream; opening a `function_call` no longer prematurely closes a sibling `message` text block, so trailing text deltas that resume after a tool call are preserved instead of being dropped on a closed block. Parallel `function_call` items keep arguments correctly partitioned by `item_id` even when their argument deltas are fully interleaved on the wire. (`internal/api/providers/openai/responses.go`)
 - 7 additional quality items rolled into the same refactor (validation gaps, error-wrapping consistency, dead branches in SSE decoding). (commit 80f5a8c)
+- BUG 4 — Conversation `context.Context` now flows into both the in-process `internal/hooks` `Runner.Fire` and the shell `hooks.HookRunner.Run*` methods. The shell runner uses `exec.CommandContext`, so cancelling the conversation kills any in-flight hook script and surfaces a `Cancelled` result instead of letting the hook outlive the session. (`hooks/runner.go`, `hooks/exec.go`, `internal/hooks/runner.go`, `internal/runtime/conversation.go`)
 
 ### Deferred
 
-- BUG 4 — Hook handlers still receive a freshly-derived context rather than the conversation context; hook cancellation will not propagate through the conversation until this is wired.
 - Computer-use tools — `ImageSource` types are in place but the screenshot/click/typing tool surface is not yet wired.
 - Full MCP OAuth broker — only the atomic on-disk token storage layer landed; the authorization-code flow and token-refresh broker are pending.
 - Session timeline UI — the JSONL session store captures all data, but no CLI render of the timeline exists yet.

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRunner_FiresAllHandlers(t *testing.T) {
@@ -208,6 +209,88 @@ func TestRunner_ConcurrentRegister(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestRunner_PropagatesCancelledContext(t *testing.T) {
+	r := NewRunner(WithLogger(io.Discard))
+
+	var observed error
+	r.Register(PreToolUse, func(ctx context.Context, hctx Context) (Decision, error) {
+		observed = ctx.Err()
+		return Decision{Action: ActionContinue}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	dec, err := r.Fire(ctx, Context{Event: PreToolUse, ToolName: "bash"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected Fire to surface context.Canceled, got %v", err)
+	}
+	if dec.Action != ActionContinue {
+		t.Fatalf("expected fallthrough decision Continue, got %v", dec.Action)
+	}
+	if !errors.Is(observed, context.Canceled) {
+		t.Fatalf("handler must see ctx.Err()=context.Canceled, got %v", observed)
+	}
+}
+
+func TestRunner_CancelsBetweenHandlers(t *testing.T) {
+	r := NewRunner(WithLogger(io.Discard))
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var firstRan, secondRan atomic.Int32
+	r.Register(PreToolUse, func(_ context.Context, _ Context) (Decision, error) {
+		firstRan.Add(1)
+		cancel()
+		return Decision{Action: ActionContinue}, nil
+	})
+	r.Register(PreToolUse, func(_ context.Context, _ Context) (Decision, error) {
+		secondRan.Add(1)
+		return Decision{Action: ActionContinue}, nil
+	})
+
+	_, err := r.Fire(ctx, Context{Event: PreToolUse})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if firstRan.Load() != 1 {
+		t.Fatalf("first handler should have run once, got %d", firstRan.Load())
+	}
+	if secondRan.Load() != 0 {
+		t.Fatalf("second handler must not run after cancellation, got %d", secondRan.Load())
+	}
+}
+
+func TestRunner_HandlerObservesCancellation(t *testing.T) {
+	r := NewRunner(WithLogger(io.Discard))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	r.Register(PreToolUse, func(hctx context.Context, _ Context) (Decision, error) {
+		select {
+		case <-hctx.Done():
+			close(done)
+			return Decision{Action: ActionContinue}, hctx.Err()
+		case <-time.After(2 * time.Second):
+			return Decision{Action: ActionContinue}, errors.New("handler not cancelled")
+		}
+	})
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	_, _ = r.Fire(ctx, Context{Event: PreToolUse})
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not observe ctx.Done() within deadline")
+	}
 }
 
 func TestEvent_String(t *testing.T) {

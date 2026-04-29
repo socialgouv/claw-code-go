@@ -226,6 +226,9 @@ func (r *Runner) Fire(ctx context.Context, hctx Context) (Decision, error) {
 	if r == nil {
 		return Decision{Action: ActionContinue}, nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Snapshot handler list under read lock so we don't hold the lock while
 	// invoking user code (which could block, take other locks, etc.).
@@ -241,16 +244,28 @@ func (r *Runner) Fire(ctx context.Context, hctx Context) (Decision, error) {
 		if err != nil {
 			fmt.Fprintf(logger, "[hooks] handler %d for %s returned error: %v (treating as Continue)\n",
 				i, hctx.Event, err)
+			// Continue past handler errors, but stop the chain if the
+			// context itself is cancelled — the remaining handlers cannot
+			// usefully run and we surface the cancellation to the caller.
+			if cerr := ctx.Err(); cerr != nil {
+				return Decision{Action: ActionContinue}, cerr
+			}
 			continue
 		}
 		if decision.Action == ActionContinue {
+			// Stop the chain if the context was cancelled mid-flight so a
+			// long handler list does not keep running after the conversation
+			// has been torn down.
+			if cerr := ctx.Err(); cerr != nil {
+				return Decision{Action: ActionContinue}, cerr
+			}
 			continue
 		}
 		// First non-Continue wins.
 		return decision, nil
 	}
 
-	return Decision{Action: ActionContinue}, nil
+	return Decision{Action: ActionContinue}, ctx.Err()
 }
 
 // errHandlerPanic is returned from safeInvoke when a handler panics.

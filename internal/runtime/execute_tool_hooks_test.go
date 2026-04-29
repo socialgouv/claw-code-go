@@ -174,7 +174,7 @@ func TestRunPostToolHooksReturnsResult(t *testing.T) {
 		}),
 	}
 
-	result := loop.runPostToolHooks("test_tool", "{}", "output", false)
+	result := loop.runPostToolHooks(context.Background(), "test_tool", "{}", "output", false)
 	if !result.IsDenied() {
 		t.Error("expected IsDenied()=true from runPostToolHooks")
 	}
@@ -186,7 +186,7 @@ func TestRunPostToolHooksReturnsResult(t *testing.T) {
 func TestRunPostToolHooksNilRunnerReturnsAllow(t *testing.T) {
 	loop := &ConversationLoop{Config: &Config{}}
 
-	result := loop.runPostToolHooks("test_tool", "{}", "output", false)
+	result := loop.runPostToolHooks(context.Background(), "test_tool", "{}", "output", false)
 	if result.IsDenied() || result.IsFailed() || result.IsCancelled() {
 		t.Error("nil HookRunner should return Allow result")
 	}

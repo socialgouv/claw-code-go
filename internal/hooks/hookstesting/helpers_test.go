@@ -1,8 +1,10 @@
 package hookstesting
 
 import (
-	"github.com/SocialGouv/claw-code-go/hooks"
+	"context"
 	"testing"
+
+	"github.com/SocialGouv/claw-code-go/hooks"
 )
 
 func TestNewHookRunnerWithOverride_Nil(t *testing.T) {
@@ -10,7 +12,7 @@ func TestNewHookRunnerWithOverride_Nil(t *testing.T) {
 	if runner == nil {
 		t.Fatal("expected non-nil runner for nil decision")
 	}
-	result := runner.RunPreToolUse("bash", `{"command":"echo"}`)
+	result := runner.RunPreToolUse(context.Background(), "bash", `{"command":"echo"}`)
 	if result.PermissionOverride != nil {
 		t.Error("nil decision should produce nil override")
 	}
@@ -22,7 +24,7 @@ func TestNewHookRunnerWithOverride_Allow(t *testing.T) {
 	if runner == nil {
 		t.Fatal("expected non-nil runner")
 	}
-	result := runner.RunPreToolUse("bash", `{"command":"echo"}`)
+	result := runner.RunPreToolUse(context.Background(), "bash", `{"command":"echo"}`)
 	if result.PermissionOverride == nil {
 		t.Fatal("expected non-nil permission override")
 	}
@@ -37,7 +39,7 @@ func TestNewHookRunnerWithOverride_Allow(t *testing.T) {
 func TestNewHookRunnerWithOverride_Deny(t *testing.T) {
 	deny := hooks.PermissionDeny
 	runner := NewHookRunnerWithOverride(&deny, "blocked")
-	result := runner.RunPreToolUse("bash", `{"command":"rm -rf /"}`)
+	result := runner.RunPreToolUse(context.Background(), "bash", `{"command":"rm -rf /"}`)
 	if result.PermissionOverride == nil || *result.PermissionOverride != hooks.PermissionDeny {
 		t.Error("expected PermissionDeny override")
 	}
@@ -46,7 +48,7 @@ func TestNewHookRunnerWithOverride_Deny(t *testing.T) {
 func TestNewHookRunnerWithOverride_Ask(t *testing.T) {
 	ask := hooks.PermissionAsk
 	runner := NewHookRunnerWithOverride(&ask, "needs confirmation")
-	result := runner.RunPreToolUse("bash", `{"command":"echo"}`)
+	result := runner.RunPreToolUse(context.Background(), "bash", `{"command":"echo"}`)
 	if result.PermissionOverride == nil || *result.PermissionOverride != hooks.PermissionAsk {
 		t.Error("expected PermissionAsk override")
 	}

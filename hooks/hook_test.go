@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -395,7 +396,7 @@ func TestBuildPayloadPostToolUseFailureNullError(t *testing.T) {
 
 func TestHookRunnerEmptyConfig(t *testing.T) {
 	runner := NewHookRunner(HookConfig{})
-	result := runner.RunPreToolUse("Read", `{"path":"x"}`)
+	result := runner.RunPreToolUse(context.Background(), "Read", `{"path":"x"}`)
 	if result.Denied || result.Failed || result.Cancelled {
 		t.Error("empty config should return Allow")
 	}
@@ -415,14 +416,14 @@ func (m *mockReporter) OnEvent(event HookProgressEvent) {
 
 func TestRunShellCommandTrimSpace(t *testing.T) {
 	// Verify that runShellCommand trims trailing whitespace from stdout/stderr.
-	result := runShellCommand("echo 'hello'", nil, nil, nil)
+	result := runShellCommand(context.Background(), "echo 'hello'", nil, nil, nil)
 	if result.Stdout != "hello" {
 		t.Errorf("expected trimmed stdout 'hello', got %q", result.Stdout)
 	}
 }
 
 func TestRunShellCommandTrimSpaceStderr(t *testing.T) {
-	result := runShellCommand("echo 'err msg' >&2 && exit 1", nil, nil, nil)
+	result := runShellCommand(context.Background(), "echo 'err msg' >&2 && exit 1", nil, nil, nil)
 	if result.Stderr != "err msg" {
 		t.Errorf("expected trimmed stderr 'err msg', got %q", result.Stderr)
 	}
@@ -435,7 +436,7 @@ func TestRunPreToolUseWithSignal(t *testing.T) {
 	runner := NewHookRunner(HookConfig{PreToolUse: []string{"echo test"}})
 	sig := NewHookAbortSignal()
 	sig.Abort()
-	result := runner.RunPreToolUseWithSignal("Read", `{"path":"x"}`, sig)
+	result := runner.RunPreToolUseWithSignal(context.Background(), "Read", `{"path":"x"}`, sig)
 	if !result.Cancelled {
 		t.Error("RunPreToolUseWithSignal with pre-aborted signal should return Cancelled=true")
 	}
@@ -443,7 +444,7 @@ func TestRunPreToolUseWithSignal(t *testing.T) {
 
 func TestRunPostToolUseWithSignal(t *testing.T) {
 	runner := NewHookRunner(HookConfig{})
-	result := runner.RunPostToolUseWithSignal("Read", `{}`, "output", false, nil)
+	result := runner.RunPostToolUseWithSignal(context.Background(), "Read", `{}`, "output", false, nil)
 	if result.Denied || result.Failed || result.Cancelled {
 		t.Error("empty config should return Allow")
 	}
@@ -451,7 +452,7 @@ func TestRunPostToolUseWithSignal(t *testing.T) {
 
 func TestRunPostToolUseFailureWithSignal(t *testing.T) {
 	runner := NewHookRunner(HookConfig{})
-	result := runner.RunPostToolUseFailureWithSignal("Read", `{}`, "error", nil)
+	result := runner.RunPostToolUseFailureWithSignal(context.Background(), "Read", `{}`, "error", nil)
 	if result.Denied || result.Failed || result.Cancelled {
 		t.Error("empty config should return Allow")
 	}

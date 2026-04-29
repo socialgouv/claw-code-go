@@ -106,11 +106,12 @@ func BenchmarkHttputil_TruncateBody_Long(b *testing.B) {
 // hits in the common case.
 func BenchmarkHooksRunner_Fire_NilHandlers(b *testing.B) {
 	runner := hooks.NewHookRunner(hooks.HookConfig{})
+	ctx := context.Background()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = runner.RunPreToolUse("read_file", `{"path":"/tmp/x"}`)
+		_ = runner.RunPreToolUse(ctx, "read_file", `{"path":"/tmp/x"}`)
 	}
 }
 
@@ -122,11 +123,12 @@ func BenchmarkHooksRunner_Fire_3Handlers(b *testing.B) {
 	runner := hooks.NewHookRunner(hooks.HookConfig{
 		PreToolUse: []string{"true", "true", "true"},
 	})
+	ctx := context.Background()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = runner.RunPreToolUse("read_file", `{"path":"/tmp/x"}`)
+		_ = runner.RunPreToolUse(ctx, "read_file", `{"path":"/tmp/x"}`)
 	}
 }
 
