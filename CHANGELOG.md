@@ -40,12 +40,6 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 ### Deferred
 
 - Computer-use tools — `ImageSource` types are in place but the screenshot/click/typing tool surface is not yet wired.
-<<<<<<< HEAD
-- Session timeline UI — the JSONL session store captures all data, but no CLI render of the timeline exists yet.
-=======
-- Full MCP OAuth broker — only the atomic on-disk token storage layer landed; the authorization-code flow and token-refresh broker are pending.
-- OTLP exporter — telemetry event types are defined, but there is no exporter to OpenTelemetry collectors.
->>>>>>> 22a1e08 (docs: close Session timeline UI parity gap)
 - Plugin marketplace — plugin manifests + local registry exist; remote discovery / install is not wired.
 
 [Unreleased]: https://github.com/SocialGouv/claw-code-go/compare/bf21311...HEAD
