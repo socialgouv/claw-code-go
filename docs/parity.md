@@ -19,7 +19,7 @@ Rating legend:
 | Sub-agents / team delegation | yes | yes | COMPLETE | `internal/runtime/team/registry.go`, `internal/tools/agent_test.go`, `internal/tools/team_tools_test.go`. |
 | Providers — anthropic + openai | yes | yes | COMPLETE | `pkg/api/providers/{anthropic,openai}`. OpenAI covers both `/v1/chat/completions` and `/v1/responses` (`internal/api/providers/openai/responses.go`); the responses translator handles parallel reasoning + tool_calls without dropping interleaved text or argument deltas. |
 | Providers — Bedrock / Vertex / Foundry | yes | available, live tests in repo (gated by env) | PARTIAL | Real implementations: `pkg/api/providers/{bedrock,vertex,foundry}/provider.go` + `internal/api/providers/{bedrock,vertex,foundry}`. Compile + unit tests pass. Live smoke tests under build tag `live`: `internal/api/providers/{bedrock,vertex,foundry}/provider_live_test.go` — skip cleanly without creds, exercise auth + streaming when the documented env vars are set (see "Running live provider tests" in the README). |
-| Permissions (mode + allow/deny rules + prompter) | yes (5 modes) | yes (7 modes + Classifier) | PARTIAL | All 7 modes shipped: `internal/permissions/mode.go`. `Classifier` interface ready: `internal/permissions/classifier.go`. The default `RuleClassifier` is rule-based; an LLM-backed default classifier (as Claude Code uses) is not implemented. |
+| Permissions (mode + allow/deny rules + prompter) | yes (5 modes) | yes (7 modes + Classifier) | COMPLETE | All 7 modes shipped: `internal/permissions/mode.go`. `Classifier` interface: `internal/permissions/classifier.go`. Two classifiers ship: the default rule-based `RuleClassifier` (read-only safe-list) and a small-model `LLMClassifier` (`internal/permissions/llm_classifier.go`) that mirrors what Claude Code uses, with a TTL+FIFO decision cache and a fail-safe-to-Ask invariant on transport errors. Pre-wired manager helper: `NewLLMClassifierManager`. |
 | Compaction (auto-trim history, preserve tool-call invariants) | yes | yes | COMPLETE | `internal/runtime/compact.go`, `internal/runtime/compact_test.go`. PreCompact/PostCompact hooks wired. |
 | Agent SDK (programmatic conversation loop) | yes | yes | COMPLETE | `pkg/api/client.go` (`StreamResponse`), `internal/runtime/conversation.go`. Used by iterion via `model/generation.go`. |
 | Vision / computer use | yes | partial | MISSING | `api.ImageSource` types in place: `internal/api/types.go`, `pkg/api/types.go`. Screenshot/click/typing tools are not implemented. |
@@ -34,7 +34,6 @@ If you're adding a feature, the file:line citations above point to the package y
 If you're chasing a "PARTIAL" rating to "COMPLETE":
 
 - **Hooks → plugin lifecycle**: extend `plugin/manager.go` to call `hooks.Runner.Fire` on install/uninstall events.
-- **Permissions → LLM classifier**: implement `permissions.Classifier` against a small classification prompt; register via `WithClassifier`.
 - **Telemetry → OTLP**: add an exporter that subscribes to events emitted from `internal/runtime/events.go`.
 - **Session UI**: read `internal/runtime/session_jsonl.go` and render through `internal/tui`.
 - **Vision / computer use**: implement screenshot/click tools that emit `api.ImageSource` content blocks.
