@@ -45,6 +45,9 @@ func main() {
 		case "resume-session":
 			compat.RunResumeSession(os.Args[2:])
 			return
+		case "timeline":
+			compat.RunTimeline(os.Args[2:])
+			return
 		}
 	}
 
@@ -75,7 +78,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  dump-manifests [--src <dir>] [--json]   List tools, slash commands, and source manifest\n")
 		fmt.Fprintf(os.Stderr, "  bootstrap-plan [--json]                 Print the ordered startup phase plan\n")
 		fmt.Fprintf(os.Stderr, "  print-system-prompt [--cwd] [--date]    Render the full system prompt\n")
-		fmt.Fprintf(os.Stderr, "  resume-session <file> [commands...]     Replay a saved session file\n\n")
+		fmt.Fprintf(os.Stderr, "  resume-session <file> [commands...]     Replay a saved session file\n")
+		fmt.Fprintf(os.Stderr, "  timeline --session <id> [...flags]      Render a saved session timeline\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nEnvironment variables:\n")
