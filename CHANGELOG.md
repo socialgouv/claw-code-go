@@ -19,7 +19,7 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 - `ModeDontAsk` (strict allow-list, never prompts) and `ModeAuto` (delegates to a `Classifier`) added to `PermissionMode`. Default `RuleClassifier` permits a small read-only safe-list and prompts otherwise; custom classifiers can be plugged in via `WithClassifier`. (`internal/permissions/mode.go`, `internal/permissions/classifier.go`, commit 6f29983)
 - In-process lifecycle hooks `Runner` with sequential, deterministic dispatch and "first non-Continue wins" semantics. Events: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `PreCompact`, `PostCompact`, `Stop`. Integrated into `runtime/conversation.go` and `runtime/compact.go`; nil Runner is a documented no-op. (`internal/hooks/runner.go`, commit bd616bf)
 - `api.ImageSource` type for Anthropic vision content blocks; re-exported from `pkg/api`. (`internal/api/types.go`, `pkg/api/types.go`, commit 52392bd)
-- Atomic disk-backed token storage layer for the MCP OAuth broker (storage shipped; broker integration pending). (`internal/mcp/oauth/storage.go`, commit 4a42881)
+- MCP OAuth Authorization Code + PKCE broker on top of the atomic disk-backed token storage. The broker drives the loopback callback flow (RFC 7636 S256 challenge), exchanges the code at the token endpoint, and silently refreshes near-expiry tokens. Transports plug it in via `broker.BearerHeaderFunc(cfg)` → `TransportConfig.AuthFunc`, so a stale access token triggers an automatic refresh on the next request. Headless callers use `Broker.AcquireNoninteractive`, which returns the typed `ErrReauthRequired` instead of opening a browser when refresh is impossible (no refresh_token, or AS replied `invalid_grant`); transient errors (network, 5xx) propagate verbatim so retry logic can distinguish them. The atomic disk-backed token storage is the persistence layer for the broker. Public façade in `pkg/api/mcp/oauth` re-exports `Broker`, `NewBroker`, `Token`, `Storage`, and `ErrReauthRequired`. (`internal/mcp/oauth/{broker.go,broker_test.go,pkce.go,pkce_test.go,storage.go}`, `pkg/api/mcp/oauth/oauth.go`, commit 4a42881 for the underlying storage layer)
 - Shared `internal/api/httputil` and `internal/api/sseutil` packages plus a dedicated `providers/openaiwire` package; eliminates duplicated request/SSE plumbing across providers. (commit 80f5a8c)
 
 ### Fixed
@@ -35,7 +35,6 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 ### Deferred
 
 - Computer-use tools — `ImageSource` types are in place but the screenshot/click/typing tool surface is not yet wired.
-- Full MCP OAuth broker — only the atomic on-disk token storage layer landed; the authorization-code flow and token-refresh broker are pending.
 - Session timeline UI — the JSONL session store captures all data, but no CLI render of the timeline exists yet.
 - OTLP exporter — telemetry event types are defined, but there is no exporter to OpenTelemetry collectors.
 - Plugin marketplace — plugin manifests + local registry exist; remote discovery / install is not wired.

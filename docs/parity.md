@@ -12,8 +12,8 @@ Rating legend:
 |-----------------|------------------------------|--------------|--------|-------|
 | Built-in tool surface (read_file, write_file, bash, glob, grep, file_edit, web_fetch) | yes | yes | COMPLETE | `pkg/api/tools/builtins.go`, `internal/tools/*.go`. Bash gates on the permissions package. |
 | Slash commands / skills | yes | yes | COMPLETE | Skill registry: `internal/tools/skill.go`. Slash dispatcher: `internal/commands/dispatcher.go`, `internal/commands/slash_test.go`. |
-| MCP (stdio + SSE + websocket clients, server SDK) | yes | yes | COMPLETE | Transport: `internal/mcp/{stdio,sse,websocket,transport_rpc}.go`. Server SDK: `internal/mcp/sdk_server.go`. Lifecycle: `internal/mcp/lifecycle.go`. (OAuth broker — see below.) |
-| MCP OAuth (authorize, refresh, store) | yes | partial | PARTIAL | Atomic disk storage layer shipped: `internal/mcp/oauth/storage.go`. Auth-code flow + token-refresh broker not yet wired. |
+| MCP (stdio + SSE + websocket clients, server SDK) | yes | yes | COMPLETE | Transport: `internal/mcp/{stdio,sse,websocket,transport_rpc}.go`. Server SDK: `internal/mcp/sdk_server.go`. Lifecycle: `internal/mcp/lifecycle.go`. OAuth broker plugs into `TransportConfig.AuthFunc` (see below). |
+| MCP OAuth (authorize, refresh, store) | yes | yes | COMPLETE | Auth-code + PKCE broker on top of the atomic disk storage: `internal/mcp/oauth/{broker.go,pkce.go,storage.go}`. Public façade re-exports `Broker`, `NewBroker`, `Token`, `Storage`, and the typed `ErrReauthRequired` for headless callers: `pkg/api/mcp/oauth/oauth.go`. Tests: `internal/mcp/oauth/{broker_test.go,pkce_test.go}` (RFC 6749 / 7636 happy path, refresh rotation, invalid_grant → ErrReauthRequired, transient 5xx, state-mismatch CSRF reject, revoke clears local cache on remote failure). Transports consume the broker via `broker.BearerHeaderFunc(cfg)` → `TransportConfig.AuthFunc`. |
 | Lifecycle hooks (PreToolUse, PostToolUse, UserPromptSubmit, PreCompact, PostCompact, Stop) | yes | partial | PARTIAL | In-process Runner shipped and integrated: `internal/hooks/runner.go`, used by `internal/runtime/conversation.go` and `internal/runtime/compact.go`. Conversation `context.Context` now flows into both `Runner.Fire` and the shell `HookRunner.Run*` methods, so cancellation propagates to lifecycle handlers and to running hook scripts (`exec.CommandContext`). Plugin lifecycle (per-plugin install/uninstall hooks) is deferred — see `internal/plugin/manager.go`. |
 | Session (jsonl persistence, fork, inherit) | yes | yes | COMPLETE | `internal/runtime/session.go`, `internal/runtime/session_jsonl.go`, `internal/runtime/session_store.go`. JSONL turn-by-turn replay validated. |
 | Sub-agents / team delegation | yes | yes | COMPLETE | `internal/runtime/team/registry.go`, `internal/tools/agent_test.go`, `internal/tools/team_tools_test.go`. |
@@ -35,7 +35,6 @@ If you're chasing a "PARTIAL" rating to "COMPLETE":
 
 - **Hooks → plugin lifecycle**: extend `plugin/manager.go` to call `hooks.Runner.Fire` on install/uninstall events.
 - **Permissions → LLM classifier**: implement `permissions.Classifier` against a small classification prompt; register via `WithClassifier`.
-- **MCP OAuth → broker**: build the auth-code dance on top of `internal/mcp/oauth/storage.go`.
 - **Telemetry → OTLP**: add an exporter that subscribes to events emitted from `internal/runtime/events.go`.
 - **Session UI**: read `internal/runtime/session_jsonl.go` and render through `internal/tui`.
 - **Vision / computer use**: implement screenshot/click tools that emit `api.ImageSource` content blocks.
