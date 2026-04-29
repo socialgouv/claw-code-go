@@ -501,6 +501,231 @@ func TestStreamResponses_InterleavedMessageItems(t *testing.T) {
 	}
 }
 
+// TestStreamResponses_InterleavedReasoningAndToolCalls covers the
+// parallel-reasoning + tool_calls case (CHANGELOG BUGs 2/3): the model
+// emits multiple parallel function_calls whose argument deltas
+// interleave on the wire, and the translator must keep each tool's
+// arguments on its own block index — never mixing deltas across calls.
+//
+// Frame timeline:
+//
+//	output_item.added(fc_1, output_index=0)
+//	output_item.added(fc_2, output_index=1)
+//	fc_1.delta "{"
+//	fc_2.delta "{"
+//	fc_1.delta "\"a\":1"
+//	fc_2.delta "\"b\":2"
+//	fc_1.delta "}"
+//	fc_2.delta "}"
+//	fc_1.done
+//	fc_2.done
+//	completed
+func TestStreamResponses_InterleavedReasoningAndToolCalls(t *testing.T) {
+	frames := []string{
+		`{"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}`,
+		// Two parallel function_calls open before any deltas land.
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"alpha","status":"in_progress"}}`,
+		`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_2","call_id":"call_2","name":"beta","status":"in_progress"}}`,
+		// Argument deltas arrive interleaved by item_id.
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{"}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_2","delta":"{"}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"\"a\":1"}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_2","delta":"\"b\":2"}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"}"}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_2","delta":"}"}`,
+		`{"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\"a\":1}"}`,
+		`{"type":"response.function_call_arguments.done","item_id":"fc_2","arguments":"{\"b\":2}"}`,
+		`{"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":8,"output_tokens":12,"total_tokens":20}}}`,
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		APIKey:     "test-key",
+		BaseURL:    srv.URL,
+		Model:      "gpt-5.5",
+		MaxTokens:  256,
+		HTTPClient: srv.Client(),
+	}
+	req := api.CreateMessageRequest{
+		Model:           "gpt-5.5",
+		MaxTokens:       256,
+		ReasoningEffort: "high",
+		Messages: []api.Message{
+			{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "do both"}}},
+		},
+		Tools: []api.Tool{
+			{Name: "alpha", InputSchema: api.InputSchema{Type: "object"}},
+			{Name: "beta", InputSchema: api.InputSchema{Type: "object"}},
+		},
+	}
+
+	ch, err := client.StreamResponse(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+
+	type startInfo struct {
+		index int
+		id    string
+		name  string
+	}
+	var (
+		starts        []startInfo
+		argsByIndex   = map[int]string{}
+		stoppedIndex  = map[int]bool{}
+		gotStopReason string
+	)
+	for ev := range ch {
+		switch ev.Type {
+		case api.EventContentBlockStart:
+			if ev.ContentBlock.Type == "tool_use" {
+				starts = append(starts, startInfo{ev.Index, ev.ContentBlock.ID, ev.ContentBlock.Name})
+			}
+		case api.EventContentBlockDelta:
+			if ev.Delta.Type == "input_json_delta" {
+				argsByIndex[ev.Index] += ev.Delta.PartialJSON
+			}
+		case api.EventContentBlockStop:
+			stoppedIndex[ev.Index] = true
+		case api.EventMessageDelta:
+			gotStopReason = ev.StopReason
+		}
+	}
+
+	if len(starts) != 2 {
+		t.Fatalf("expected 2 tool_use content_block_start events, got %d (%v)", len(starts), starts)
+	}
+	byID := map[string]startInfo{}
+	for _, s := range starts {
+		byID[s.id] = s
+	}
+	one, ok1 := byID["call_1"]
+	two, ok2 := byID["call_2"]
+	if !ok1 || !ok2 {
+		t.Fatalf("missing one of the call ids: starts=%v", starts)
+	}
+	if one.index == two.index {
+		t.Fatalf("two parallel tool_calls share block index %d (call_1 args would mix with call_2)", one.index)
+	}
+	if one.name != "alpha" || two.name != "beta" {
+		t.Errorf("tool names mismatch: call_1=%q (want alpha), call_2=%q (want beta)", one.name, two.name)
+	}
+	if got, want := argsByIndex[one.index], `{"a":1}`; got != want {
+		t.Errorf("call_1 args = %q, want %q (deltas mixed with sibling)", got, want)
+	}
+	if got, want := argsByIndex[two.index], `{"b":2}`; got != want {
+		t.Errorf("call_2 args = %q, want %q (deltas mixed with sibling)", got, want)
+	}
+	if !stoppedIndex[one.index] {
+		t.Errorf("missing content_block_stop for call_1 (index %d)", one.index)
+	}
+	if !stoppedIndex[two.index] {
+		t.Errorf("missing content_block_stop for call_2 (index %d)", two.index)
+	}
+	if gotStopReason != "tool_use" {
+		t.Errorf("stop_reason = %q, want tool_use", gotStopReason)
+	}
+}
+
+// TestStreamResponses_TextResumesAfterToolCall covers the case where a
+// message item emits text deltas, a function_call item is added in
+// parallel, and then the message item resumes with more text deltas
+// before its own response.output_text.done arrives.
+//
+// The translator must keep the message item's text block open across
+// the tool-call interruption so the trailing deltas are preserved
+// (CHANGELOG BUGs 2/3: best-effort interleave was dropping them).
+func TestStreamResponses_TextResumesAfterToolCall(t *testing.T) {
+	frames := []string{
+		`{"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_A"}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_A","delta":"before"}`,
+		// Tool call opens while msg_A is still streaming text.
+		`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"ping","status":"in_progress"}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{}"}`,
+		`{"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{}"}`,
+		// msg_A resumes text after the tool call lands.
+		`{"type":"response.output_text.delta","item_id":"msg_A","delta":"-after"}`,
+		`{"type":"response.output_text.done","item_id":"msg_A"}`,
+		`{"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":4,"output_tokens":6,"total_tokens":10}}}`,
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		APIKey:     "test-key",
+		BaseURL:    srv.URL,
+		Model:      "gpt-5.5",
+		MaxTokens:  256,
+		HTTPClient: srv.Client(),
+	}
+	req := api.CreateMessageRequest{
+		Model:           "gpt-5.5",
+		MaxTokens:       256,
+		ReasoningEffort: "high",
+		Messages: []api.Message{
+			{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "hi"}}},
+		},
+		Tools: []api.Tool{
+			{Name: "ping", InputSchema: api.InputSchema{Type: "object"}},
+		},
+	}
+
+	ch, err := client.StreamResponse(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+
+	textByIndex := map[int]string{}
+	textStartIndex := -1
+	startCount := 0
+	for ev := range ch {
+		switch ev.Type {
+		case api.EventContentBlockStart:
+			if ev.ContentBlock.Type == "text" {
+				if textStartIndex == -1 {
+					textStartIndex = ev.Index
+				}
+				startCount++
+			}
+		case api.EventContentBlockDelta:
+			if ev.Delta.Type == "text_delta" {
+				textByIndex[ev.Index] += ev.Delta.Text
+			}
+		}
+	}
+
+	if startCount != 1 {
+		t.Errorf("expected exactly 1 text content_block_start for msg_A, got %d (msg_A's text block was reopened or split)", startCount)
+	}
+	if got, want := textByIndex[textStartIndex], "before-after"; got != want {
+		t.Errorf("msg_A text concatenated = %q, want %q (trailing deltas dropped by premature close)", got, want)
+	}
+}
+
 // TestStreamResponses_PropagatesAPIError verifies that non-2xx responses
 // surface as *api.APIError with status, message, and Retryable populated.
 func TestStreamResponses_PropagatesAPIError(t *testing.T) {
