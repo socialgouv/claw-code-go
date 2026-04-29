@@ -132,7 +132,7 @@ func TestNew_RejectsNothing(t *testing.T) {
 	}
 }
 
-func TestMarketplace_FetchWarnsOnUnverifiedSignatureFields(t *testing.T) {
+func TestMarketplace_FetchSummarisesSignedCoverage(t *testing.T) {
 	cat := Catalog{
 		Version: 1,
 		Plugins: []PluginEntry{
@@ -154,16 +154,19 @@ func TestMarketplace_FetchWarnsOnUnverifiedSignatureFields(t *testing.T) {
 		t.Fatalf("Fetch: %v", err)
 	}
 	got := buf.String()
-	if !strings.Contains(got, "verification is not yet implemented") {
-		t.Errorf("expected unverified-signature warning, got %q", got)
+	if !strings.Contains(got, "verification runs at install time") {
+		t.Errorf("expected install-time verification summary, got %q", got)
+	}
+	if !strings.Contains(got, "2/3") {
+		t.Errorf("expected '2/3' coverage ratio in summary, got %q", got)
 	}
 	for _, want := range []string{"signed", "keyless"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("expected affected plugin %q in warning, got %q", want, got)
+			t.Errorf("expected signed plugin %q in summary, got %q", want, got)
 		}
 	}
 	if strings.Contains(got, "linter") {
-		t.Errorf("plugin without signature fields should not appear in warning, got %q", got)
+		t.Errorf("plugin without signature fields should not appear in summary, got %q", got)
 	}
 }
 

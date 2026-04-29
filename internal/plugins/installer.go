@@ -29,6 +29,19 @@ var maxTarballBytes int64 = 64 * 1024 * 1024
 type Installer struct {
 	Dir        string
 	HTTPClient *http.Client
+
+	// Verifier validates an optional cosign signature on the tarball
+	// after the SHA-256 check. When nil, signature fields on the
+	// entry are ignored unless RequireSigned is set (in which case
+	// the install fails up-front).
+	Verifier SignatureVerifier
+
+	// RequireSigned forces every install to carry a verified
+	// signature. Entries without signature material are rejected
+	// with a clear error. Operators set this via env
+	// CLAW_REQUIRE_SIGNED=1 (see Manager) or wire it directly when
+	// constructing the installer programmatically.
+	RequireSigned bool
 }
 
 // NewInstaller constructs an installer with sensible defaults.
@@ -37,9 +50,10 @@ func NewInstaller(dir string) *Installer {
 }
 
 // Install downloads entry.TarballURL, verifies its SHA-256 against
-// entry.SHA256, and extracts it into <Dir>/<entry.Name>. The extraction
-// is performed via a temp directory + atomic rename so partial failures
-// never leave a half-installed plugin in place.
+// entry.SHA256, optionally checks a cosign signature when configured,
+// and extracts it into <Dir>/<entry.Name>. The extraction is performed
+// via a temp directory + atomic rename so partial failures never leave
+// a half-installed plugin in place.
 func (i *Installer) Install(ctx context.Context, entry PluginEntry) error {
 	if i.Dir == "" {
 		return errors.New("installer: Dir is empty")
@@ -58,6 +72,21 @@ func (i *Installer) Install(ctx context.Context, entry PluginEntry) error {
 	body, err := i.downloadAndVerify(ctx, entry)
 	if err != nil {
 		return err
+	}
+
+	// Signature gate: enforce RequireSigned, then run the verifier
+	// when material is present. Failures here abort before extraction.
+	if i.RequireSigned && !entry.hasSignatureFields() {
+		return fmt.Errorf("installer: plugin %q has no signature material but RequireSigned is set", entry.Name)
+	}
+	if entry.hasSignatureFields() || i.RequireSigned {
+		v := i.Verifier
+		if v == nil {
+			v = unconfiguredVerifier{}
+		}
+		if err := v.Verify(ctx, body, entry); err != nil {
+			return fmt.Errorf("installer: signature verification failed for %q: %w", entry.Name, err)
+		}
 	}
 
 	stagingDir, err := os.MkdirTemp(i.Dir, ".staging-"+entry.Name+"-")

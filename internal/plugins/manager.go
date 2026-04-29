@@ -66,10 +66,33 @@ func DefaultPluginDir() (string, error) {
 
 // NewManager constructs a manager bound to the given plugin directory.
 // The state file lives at <pluginDir>/state.json.
+//
+// Environment-driven signature configuration is applied here so the
+// /store slash command and other call sites do not need to thread a
+// flag through every layer:
+//
+//   - CLAW_REQUIRE_SIGNED=1 — forces signature verification on
+//     every install; entries without signature fields are rejected.
+//   - CLAW_PLUGIN_PUBLIC_KEY — path to a PEM-encoded public key used
+//     for key-based verification when an entry has no certificate
+//     fields.
+//
+// When either env var is set, a default CosignVerifier is wired into
+// the installer. Programmatic users can replace it after construction
+// (m.Installer.Verifier = ...).
 func NewManager(pluginDir, marketplaceURL string) *Manager {
+	inst := NewInstaller(pluginDir)
+	if os.Getenv("CLAW_REQUIRE_SIGNED") == "1" {
+		inst.RequireSigned = true
+	}
+	if inst.Verifier == nil {
+		inst.Verifier = &CosignVerifier{
+			PublicKeyFile: os.Getenv("CLAW_PLUGIN_PUBLIC_KEY"),
+		}
+	}
 	return &Manager{
 		Marketplace: New(marketplaceURL),
-		Installer:   NewInstaller(pluginDir),
+		Installer:   inst,
 		StatePath:   filepath.Join(pluginDir, "state.json"),
 	}
 }

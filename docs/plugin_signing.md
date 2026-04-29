@@ -1,48 +1,62 @@
-# Plugin signature verification (status: schema only)
+# Plugin signature verification
 
-The marketplace catalog (`PluginEntry`) carries optional sigstore
-fields:
+The marketplace catalog (`PluginEntry`) carries optional cosign
+signature fields:
 
 | Field | Purpose |
 |---|---|
-| `signature_url` | URL pointing at a detached cosign signature blob |
-| `signature_bundle` | Inline cosign bundle (when no separate URL) |
-| `certificate_identity` | Pin the expected signer identity (e.g. email, GitHub Actions URI) |
-| `certificate_oidc_issuer` | Pin the expected OIDC issuer URL |
+| `signature_url` | URL pointing at a detached cosign signature blob (raw `.sig` or `.bundle.json`) |
+| `signature_bundle` | Inline cosign bundle (no separate URL fetch) |
+| `certificate_identity` | Pin the expected signer identity (e.g. email, GitHub Actions URI) — selects keyless mode |
+| `certificate_oidc_issuer` | Pin the expected OIDC issuer URL — selects keyless mode |
 
-The installer **does not yet verify these fields cryptographically**.
-SHA-256 of the tarball is the only enforced integrity check today.
+When any of these fields are populated **OR** when the operator sets
+`CLAW_REQUIRE_SIGNED=1`, the installer invokes
+`plugins.SignatureVerifier` after the SHA-256 hash check. Failure
+aborts the install before extraction.
 
-## Why deferred
+## How verification works
 
-Adding `github.com/sigstore/sigstore-go` is a substantive dependency
-choice (~30 transitive modules, public-key infra, certificate trust
-roots). Landing it requires:
+The default verifier (`plugins.CosignVerifier`) shells out to the
+`cosign` CLI. Subprocess was chosen over an in-process `sigstore-go`
+binding to keep the dependency footprint minimal: operators who care
+about signing already have `cosign` installed.
 
-- Pinning a sigstore-go release that is module-clean (no replace
-  directives that conflict with iterion's vendoring).
-- Deciding the trust policy: keyless via OIDC issuer + identity
-  matchers, key-based via a host-pinned public key, or both.
-- Surfacing a CLI flag (`--require-signed`, `--allow-unsigned`) so
-  operators can opt into strict mode incrementally.
+### Auto-detect keyless vs key-based
 
-These are ecosystem-level choices, not mechanical edits, so the
-current iteration ships the schema and signing flow documentation
-ahead of the verification engine.
+The verifier picks a mode at call time based on what the entry and
+environment declare:
+
+- **Keyless** (Fulcio + Rekor) — used when the entry has at least one
+  of `certificate_identity` or `certificate_oidc_issuer`. The
+  transparency log entry is checked by `cosign verify-blob`
+  automatically. Missing matcher fields are wildcarded
+  (`--certificate-identity-regexp .*`).
+- **Key-based** — used otherwise, when a public key is configured via
+  `CLAW_PLUGIN_PUBLIC_KEY` (path to PEM) or programmatically through
+  `CosignVerifier.PublicKeyPEM` / `PublicKeyFile`.
+- **No material** — install fails with a clear error so misconfigured
+  catalogs fail loudly.
+
+### Operator controls
+
+| Control | Effect |
+|---|---|
+| `CLAW_REQUIRE_SIGNED=1` | Every install must carry signature material. Entries without it are rejected up-front. |
+| `CLAW_PLUGIN_PUBLIC_KEY=/path/to/cosign.pub` | PEM file used for key-based verification. |
+| (no env vars set) | Default. Signed entries are verified; unsigned entries install with hash-only enforcement. |
+
+Strict-by-default is available by setting `CLAW_REQUIRE_SIGNED=1` in
+the operator's shell or service unit.
 
 ## Signing flow (for catalog authors)
 
-Use `cosign` with keyless signing (Sigstore Public Good Instance):
+### Keyless
 
 ```bash
-# Build the tarball
 tar czf my-plugin-1.0.0.tar.gz -C plugin-dir .
-
-# Sign keylessly (opens browser for OIDC)
 cosign sign-blob --bundle my-plugin-1.0.0.bundle.json my-plugin-1.0.0.tar.gz
 ```
-
-Then in your catalog entry:
 
 ```json
 {
@@ -56,10 +70,41 @@ Then in your catalog entry:
 }
 ```
 
-When the verification engine lands, the installer will reject any
-plugin whose signature doesn't match the pinned identity / issuer.
+### Key-based
 
-## Tracking issue
+```bash
+cosign generate-key-pair                   # produces cosign.key + cosign.pub
+cosign sign-blob --key cosign.key \
+                 --bundle my-plugin-1.0.0.bundle.json \
+                 my-plugin-1.0.0.tar.gz
+```
 
-Track the verification implementation under
-`docs/roadmap_progress.md` Track 7.
+Operators consuming this catalog set
+`CLAW_PLUGIN_PUBLIC_KEY=/path/to/cosign.pub` and the install verifies
+the signature with the pinned key. The `signature_bundle` field is
+sufficient — no certificate fields are required for key-based mode.
+
+## Programmatic configuration
+
+```go
+inst := plugins.NewInstaller("/var/lib/claw/plugins")
+inst.RequireSigned = true
+inst.Verifier = &plugins.CosignVerifier{
+    PublicKeyFile: "/etc/claw/cosign.pub", // optional, only for key-based mode
+    Timeout:       90 * time.Second,        // optional, defaults to 60 s
+}
+```
+
+A custom verifier (e.g. one using `sigstore-go` in-process) can be
+swapped in by implementing the `SignatureVerifier` interface; the
+installer talks to that interface only.
+
+## Limitations
+
+- Subprocess approach assumes `cosign` is on PATH. Install via
+  Homebrew, Go (`go install github.com/sigstore/cosign/v2/cmd/cosign@latest`),
+  or distribution packages.
+- The transparency log lookup runs over the public Sigstore Rekor
+  instance by default. Air-gapped deployments need a private Rekor
+  and `cosign --rekor-url` — not currently configurable through
+  `CosignVerifier` (PRs welcome).
