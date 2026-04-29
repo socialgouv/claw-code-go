@@ -51,6 +51,7 @@ func runShellCommand(ctx context.Context, command string, env map[string]string,
 	}
 	shell, args := shellArgs(command)
 	cmd := exec.CommandContext(ctx, shell, args...)
+	setProcGroup(cmd)
 
 	// Inherit parent process environment, then add hook-specific vars.
 	// Rust's Command::env() adds to the inherited env; in Go, setting
@@ -115,7 +116,7 @@ func runShellCommand(ctx context.Context, command string, env map[string]string,
 				ExitCode: exitCode,
 			}
 		case <-ctx.Done():
-			_ = cmd.Process.Kill()
+			killProcessTree(cmd)
 			<-done // wait for goroutine to finish
 			return commandExecution{
 				Stdout:    strings.TrimSpace(stdout.String()),
@@ -125,7 +126,7 @@ func runShellCommand(ctx context.Context, command string, env map[string]string,
 			}
 		case <-ticker.C:
 			if abort != nil && abort.IsAborted() {
-				_ = cmd.Process.Kill()
+				killProcessTree(cmd)
 				<-done // wait for goroutine to finish
 				return commandExecution{
 					Stdout:    strings.TrimSpace(stdout.String()),
