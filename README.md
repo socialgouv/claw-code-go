@@ -135,6 +135,8 @@ defs := []api.Tool{
     tools.FileEditTool(),
     tools.WebFetchTool(),
     tools.BashTool(),
+    tools.ReadImageTool(),
+    tools.ComputerUseTool(),
 }
 
 // Dispatch a tool call from the model:
@@ -142,6 +144,8 @@ out, err := tools.ExecuteReadFile(ctx, map[string]any{"path": "README.md"})
 ```
 
 `ExecuteBash` additionally takes a `workspace string` for command validation (pass `""` to skip). The wrapper pins permissions to `ModeAllow`; gate invocations upstream (e.g. an iterion workflow's `allowed_tools` list).
+
+`ComputerUseTool` exposes the Anthropic computer-use action surface (`screenshot`, `left_click`, `right_click`, `middle_click`, `double_click`, `type`, `key`, `mouse_move`, `cursor_position`, `left_click_drag`) backed by `xdotool` and ImageMagick `import` on Linux/X11. Install both binaries on the host (Debian/Ubuntu: `apt install xdotool imagemagick`); when they are missing or no display is reachable, `ExecuteComputerUse` returns `tools.ErrComputerUseUnavailable` (use `errors.Is`). No cgo, no extra Go dependencies.
 
 ## Permission modes
 

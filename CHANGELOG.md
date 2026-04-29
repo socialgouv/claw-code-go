@@ -11,6 +11,7 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 
 ### Added
 
+- `computer_use` tool with executive action dispatcher: `screenshot`, `left_click`, `right_click`, `middle_click`, `double_click`, `type`, `key`, `mouse_move`, `cursor_position`, `left_click_drag`. Action verbs mirror Anthropic's `computer_use_20241022` spec; the tool emits `api.ImageSource` content blocks for screenshots and structured success descriptions for input actions. Linux/X11-backed via `xdotool` (input) and ImageMagick `import` (capture) — no cgo, no new Go module dependencies. Returns the typed `ErrComputerUseUnavailable` (wrapped, `errors.Is`-detectable) when the host has no display, the required binaries are missing, or the OS is not Linux. The legacy `ScreenshotTool` / `ExecuteScreenshot` façade is preserved and now backed by the screenshot action instead of returning a 501 stub. (`internal/tools/computer_use_exec.go`, `pkg/api/tools/computer_use.go`, `internal/tools/computer_use_test.go`). Closes the `Vision / computer use` parity gap.
 - `claw-code-go timeline --session <id>` subcommand renders a saved session's chronological event view. Flags: `--store <dir>` (defaults to `~/.claw-code/sessions`), `--format pretty|json|md` (default `pretty`), `--limit n` (keep last N events; for `json` keeps the last N message records plus session_meta and prompt_history). Reuses `runtime.LoadSessionAuto` (handles JSONL + legacy JSON) and `tui.MarkdownRenderer` for assistant text bodies. Closes the `Session timeline UI` parity gap. (`internal/compat/timeline.go`)
 - OTLP/gRPC log exporter built on the official `go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc` SDK. Translates `apikit.TelemetryEvent` into OTLP LogRecords and ships them through a SDK BatchProcessor to any standard OpenTelemetry collector. Resource attributes default to `service.name=claw-code-go` and accept an optional `service.version`. Configurable via the new `CLAWD_OTLP_GRPC_ENDPOINT` env var (use `FromEnv()`); supports `CLAWD_OTLP_GRPC_INSECURE`, `CLAWD_OTLP_GRPC_HEADERS` (comma-separated `key=value`), `CLAWD_SERVICE_NAME`, and `CLAWD_SERVICE_VERSION`. (`internal/apikit/telemetry/otlpgrpc/exporter.go`, `internal/apikit/telemetry/otlpgrpc/env.go`)
   - DEPRECATION WARNING: `ITERION_*` env vars are deprecated, use `CLAWD_*` instead. (Only `CLAWD_OTLP_GRPC_*` are recognised by the gRPC exporter — there is no `ITERION_*` legacy alias for telemetry.)
@@ -39,7 +40,6 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 
 ### Deferred
 
-- Computer-use tools — `ImageSource` types are in place but the screenshot/click/typing tool surface is not yet wired.
 - Plugin marketplace — plugin manifests + local registry exist; remote discovery / install is not wired.
 
 [Unreleased]: https://github.com/SocialGouv/claw-code-go/compare/bf21311...HEAD
