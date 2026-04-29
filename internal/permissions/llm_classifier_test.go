@@ -1,0 +1,185 @@
+package permissions
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/SocialGouv/claw-code-go/internal/api"
+)
+
+// scriptedClient returns a single canned response.
+type scriptedClient struct {
+	body string
+}
+
+func (c *scriptedClient) StreamResponse(_ context.Context, _ api.CreateMessageRequest) (<-chan api.StreamEvent, error) {
+	out := make(chan api.StreamEvent, 2)
+	out <- api.StreamEvent{Delta: api.Delta{Type: "text_delta", Text: c.body}}
+	close(out)
+	return out, nil
+}
+
+func TestLLMClassifier_FallbackAllowsBeforeLLM(t *testing.T) {
+	called := false
+	client := &scriptedClient{body: `{"decision":"deny"}`}
+	lc := &LLMClassifier{
+		Client: stubClient{inner: client, calledBool: &called},
+		Model:  "anthropic/claude-haiku-4-5",
+		Fallback: ClassifierFunc(func(_ context.Context, _ string, _ map[string]any) (Decision, error) {
+			return DecisionAllow, nil
+		}),
+	}
+	dec, err := lc.Classify(context.Background(), "read_file", map[string]any{"path": "x"})
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if dec != DecisionAllow {
+		t.Errorf("expected fallback Allow short-circuit, got %v", dec)
+	}
+	if called {
+		t.Errorf("LLM should NOT be invoked when fallback decides")
+	}
+}
+
+func TestLLMClassifier_AskFallthroughHitsLLM(t *testing.T) {
+	called := false
+	client := &scriptedClient{body: `{"decision":"deny","reason":"shell"}`}
+	lc := &LLMClassifier{
+		Client: stubClient{inner: client, calledBool: &called},
+		Model:  "anthropic/claude-haiku-4-5",
+		Fallback: ClassifierFunc(func(_ context.Context, _ string, _ map[string]any) (Decision, error) {
+			return DecisionAsk, nil
+		}),
+	}
+	dec, _ := lc.Classify(context.Background(), "bash", map[string]any{"command": "rm -rf /tmp/x"})
+	if dec != DecisionDeny {
+		t.Errorf("expected LLM Deny, got %v", dec)
+	}
+	if !called {
+		t.Errorf("LLM should be invoked when fallback returns Ask")
+	}
+}
+
+func TestLLMClassifier_CacheHitAvoidsLLM(t *testing.T) {
+	hitCount := 0
+	client := &scriptedClient{body: `{"decision":"allow"}`}
+	lc := &LLMClassifier{
+		Client: stubClient{inner: client, calledInt: &hitCount},
+		Model:  "x",
+		Cache:  NewClassifierCache(time.Hour),
+	}
+	args := map[string]any{"path": "/tmp/foo"}
+	if _, _ = lc.Classify(context.Background(), "read_file", args); hitCount != 1 {
+		t.Fatalf("expected 1 LLM hit on first call, got %d", hitCount)
+	}
+	if _, _ = lc.Classify(context.Background(), "read_file", args); hitCount != 1 {
+		t.Errorf("expected cache hit on second call, got %d total LLM hits", hitCount)
+	}
+}
+
+func TestLLMClassifier_NoModel_DefaultsToAsk(t *testing.T) {
+	lc := &LLMClassifier{}
+	dec, _ := lc.Classify(context.Background(), "bash", map[string]any{"command": "ls"})
+	if dec != DecisionAsk {
+		t.Errorf("expected Ask when no client/model, got %v", dec)
+	}
+}
+
+func TestLLMClassifier_MalformedResponseFallsToAsk(t *testing.T) {
+	lc := &LLMClassifier{
+		Client: &scriptedClient{body: "not json"},
+		Model:  "x",
+	}
+	dec, _ := lc.Classify(context.Background(), "bash", map[string]any{"command": "ls"})
+	if dec != DecisionAsk {
+		t.Errorf("expected Ask for malformed response, got %v", dec)
+	}
+}
+
+func TestParseDecisionJSON_HandlesCodeFence(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want Decision
+	}{
+		{`{"decision":"allow"}`, DecisionAllow},
+		{"```json\n{\"decision\":\"deny\"}\n```", DecisionDeny},
+		{"```\n{\"decision\":\"ask\"}\n```", DecisionAsk},
+		{"junk", DecisionAsk},
+		{`{"decision":"weird"}`, DecisionAsk},
+	}
+	for _, tc := range cases {
+		if got := parseDecisionJSON(tc.raw); got != tc.want {
+			t.Errorf("parse %q → %v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestClassifierCache_ExpiresEntries(t *testing.T) {
+	c := NewClassifierCache(50 * time.Millisecond)
+	c.Set("k", DecisionAllow)
+	if _, ok := c.Get("k"); !ok {
+		t.Fatal("expected fresh hit")
+	}
+	time.Sleep(80 * time.Millisecond)
+	if _, ok := c.Get("k"); ok {
+		t.Errorf("expected expired entry to miss")
+	}
+}
+
+func TestClassifierCache_EvictsOldestWhenFull(t *testing.T) {
+	c := NewClassifierCacheWithSize(0, 3)
+	c.Set("a", DecisionAllow)
+	c.Set("b", DecisionDeny)
+	c.Set("c", DecisionAsk)
+	// Adding a 4th evicts "a" (FIFO).
+	c.Set("d", DecisionAllow)
+	if _, ok := c.Get("a"); ok {
+		t.Errorf("expected oldest entry %q to be evicted", "a")
+	}
+	for _, k := range []string{"b", "c", "d"} {
+		if _, ok := c.Get(k); !ok {
+			t.Errorf("expected %q to remain in cache", k)
+		}
+	}
+}
+
+func TestClassifierCache_UpdateInPlaceDoesNotEvict(t *testing.T) {
+	c := NewClassifierCacheWithSize(0, 2)
+	c.Set("a", DecisionAllow)
+	c.Set("b", DecisionDeny)
+	// Re-setting "a" must not evict "b".
+	c.Set("a", DecisionAsk)
+	if _, ok := c.Get("b"); !ok {
+		t.Errorf("update-in-place must not evict existing entries")
+	}
+	if d, _ := c.Get("a"); d != DecisionAsk {
+		t.Errorf("expected updated value DecisionAsk for %q, got %v", "a", d)
+	}
+}
+
+// ----- helpers -----
+
+// ClassifierFunc adapts a function into a Classifier (test-only).
+type ClassifierFunc func(ctx context.Context, toolName string, args map[string]any) (Decision, error)
+
+func (f ClassifierFunc) Classify(ctx context.Context, toolName string, args map[string]any) (Decision, error) {
+	return f(ctx, toolName, args)
+}
+
+// stubClient counts how many times StreamResponse is called.
+type stubClient struct {
+	inner      *scriptedClient
+	calledBool *bool
+	calledInt  *int
+}
+
+func (s stubClient) StreamResponse(ctx context.Context, req api.CreateMessageRequest) (<-chan api.StreamEvent, error) {
+	if s.calledBool != nil {
+		*s.calledBool = true
+	}
+	if s.calledInt != nil {
+		*s.calledInt++
+	}
+	return s.inner.StreamResponse(ctx, req)
+}

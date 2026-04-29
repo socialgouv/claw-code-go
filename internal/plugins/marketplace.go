@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -23,16 +24,56 @@ import (
 // PluginEntry is one row in a marketplace catalog. The TarballURL +
 // SHA256 fields are the install contract: the installer only proceeds
 // when the downloaded bytes hash to the announced digest.
+//
+// **TODAY: SHA-256 only.** SignatureURL / SignatureBundle /
+// CertificateIdentity / CertificateOIDCIssuer describe an optional
+// sigstore-style detached signature. The schema is in place so catalog
+// authors can populate forward-compatible entries — but cryptographic
+// verification is **NOT YET IMPLEMENTED** (gated on adding sigstore-go
+// to the module; see docs/plugin_signing.md). Catalog signature
+// fields are surfaced as a logged warning by Marketplace.Fetch when
+// they appear, so operators are not lulled into thinking they get
+// signed installs today.
 type PluginEntry struct {
 	Name        string `json:"name"`
 	Version     string `json:"version"`
 	Description string `json:"description,omitempty"`
 	TarballURL  string `json:"tarball_url"`
 	SHA256      string `json:"sha256"`
+
+	// SignatureURL points at a detached cosign signature for the
+	// tarball (raw .sig or bundle .json). Optional. **Currently
+	// unverified** — see PluginEntry doc-comment.
+	SignatureURL string `json:"signature_url,omitempty"`
+
+	// SignatureBundle is the inline cosign signature bundle when the
+	// catalog author prefers one document over a separate URL.
+	// SignatureURL wins when both are set. **Currently unverified.**
+	SignatureBundle string `json:"signature_bundle,omitempty"`
+
+	// CertificateIdentity pins the expected signer identity for
+	// keyless cosign verification (e.g. an email or workflow URI).
+	// **Currently unverified.**
+	CertificateIdentity string `json:"certificate_identity,omitempty"`
+
+	// CertificateOIDCIssuer pins the expected OIDC issuer URL.
+	// **Currently unverified.**
+	CertificateOIDCIssuer string `json:"certificate_oidc_issuer,omitempty"`
+
 	// Homepage and License are advisory metadata shown in /plugin search
 	// output. They have no effect on installation.
 	Homepage string `json:"homepage,omitempty"`
 	License  string `json:"license,omitempty"`
+}
+
+// hasSignatureFields reports whether the entry declares any of the
+// not-yet-verified signature/certificate fields. Used by Fetch to
+// warn operators about the parity gap.
+func (p PluginEntry) hasSignatureFields() bool {
+	return p.SignatureURL != "" ||
+		p.SignatureBundle != "" ||
+		p.CertificateIdentity != "" ||
+		p.CertificateOIDCIssuer != ""
 }
 
 // Catalog is the JSON shape returned by the marketplace endpoint. The
@@ -49,6 +90,7 @@ type Marketplace struct {
 	baseURL    string
 	httpClient *http.Client
 	userAgent  string
+	logger     io.Writer
 }
 
 // MarketplaceOption configures Marketplace.
@@ -66,6 +108,17 @@ func WithUserAgent(ua string) MarketplaceOption {
 	return func(m *Marketplace) { m.userAgent = ua }
 }
 
+// WithMarketplaceLogger sets the writer used for non-error advisories
+// (e.g. unverified signature warnings). Defaults to os.Stderr; pass
+// io.Discard to silence.
+func WithMarketplaceLogger(w io.Writer) MarketplaceOption {
+	return func(m *Marketplace) {
+		if w != nil {
+			m.logger = w
+		}
+	}
+}
+
 // New constructs a Marketplace pointed at baseURL. The catalog is
 // expected at <baseURL>/catalog.json — that path is appended unless
 // baseURL already ends in .json.
@@ -79,6 +132,14 @@ func New(baseURL string, opts ...MarketplaceOption) *Marketplace {
 		opt(m)
 	}
 	return m
+}
+
+func (m *Marketplace) log(format string, args ...any) {
+	w := m.logger
+	if w == nil {
+		w = os.Stderr
+	}
+	fmt.Fprintf(w, "[plugins] "+format+"\n", args...)
 }
 
 // Fetch downloads and decodes the marketplace catalog. The returned
@@ -113,6 +174,21 @@ func (m *Marketplace) Fetch(ctx context.Context) (*Catalog, error) {
 	sort.Slice(cat.Plugins, func(i, j int) bool {
 		return cat.Plugins[i].Name < cat.Plugins[j].Name
 	})
+
+	// Surface signature fields once per Fetch so operators do not
+	// silently assume cosign verification is happening. Group the
+	// warning to keep noise bounded for large catalogs.
+	var signed []string
+	for _, p := range cat.Plugins {
+		if p.hasSignatureFields() {
+			signed = append(signed, p.Name)
+		}
+	}
+	if len(signed) > 0 {
+		m.log("WARNING: %d plugin(s) declare signature/cert fields but cryptographic verification is not yet implemented; only SHA-256 is enforced. Affected: %s",
+			len(signed), strings.Join(signed, ", "))
+	}
+
 	return &cat, nil
 }
 

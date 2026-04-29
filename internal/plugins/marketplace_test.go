@@ -1,10 +1,12 @@
 package plugins
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -127,5 +129,52 @@ func TestNew_RejectsNothing(t *testing.T) {
 	m := New("")
 	if _, err := m.Fetch(context.Background()); err == nil {
 		t.Error("expected error fetching from empty baseURL")
+	}
+}
+
+func TestMarketplace_FetchWarnsOnUnverifiedSignatureFields(t *testing.T) {
+	cat := Catalog{
+		Version: 1,
+		Plugins: []PluginEntry{
+			{Name: "linter", Version: "1.0", TarballURL: "https://x/l.tgz", SHA256: "aa"},
+			{Name: "signed", Version: "1.0", TarballURL: "https://x/s.tgz", SHA256: "bb",
+				SignatureURL: "https://x/s.tgz.sig"},
+			{Name: "keyless", Version: "1.0", TarballURL: "https://x/k.tgz", SHA256: "cc",
+				CertificateIdentity: "alice@example.com"},
+		},
+	}
+	srv := newCatalogServer(t, cat)
+
+	var buf bytes.Buffer
+	m := New(srv.URL,
+		WithHTTPClient(srv.Client()),
+		WithMarketplaceLogger(&buf),
+	)
+	if _, err := m.Fetch(context.Background()); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "verification is not yet implemented") {
+		t.Errorf("expected unverified-signature warning, got %q", got)
+	}
+	for _, want := range []string{"signed", "keyless"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected affected plugin %q in warning, got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "linter") {
+		t.Errorf("plugin without signature fields should not appear in warning, got %q", got)
+	}
+}
+
+func TestMarketplace_FetchSilentWhenNoSignatureFields(t *testing.T) {
+	srv := newCatalogServer(t, sampleCatalog())
+	var buf bytes.Buffer
+	m := New(srv.URL, WithHTTPClient(srv.Client()), WithMarketplaceLogger(&buf))
+	if _, err := m.Fetch(context.Background()); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no advisory output, got %q", buf.String())
 	}
 }
