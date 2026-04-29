@@ -23,7 +23,7 @@ Rating legend:
 | Compaction (auto-trim history, preserve tool-call invariants) | yes | yes | COMPLETE | `internal/runtime/compact.go`, `internal/runtime/compact_test.go`. PreCompact/PostCompact hooks wired. |
 | Agent SDK (programmatic conversation loop) | yes | yes | COMPLETE | `pkg/api/client.go` (`StreamResponse`), `internal/runtime/conversation.go`. Used by iterion via `model/generation.go`. |
 | Vision / computer use | yes | partial | MISSING | `api.ImageSource` types in place: `internal/api/types.go`, `pkg/api/types.go`. Screenshot/click/typing tools are not implemented. |
-| Telemetry (event taxonomy + exporter) | yes (OTLP) | partial | PARTIAL | Event types: `internal/runtime/events.go`. Internal client telemetry: `internal/api/client_telemetry_test.go`. No OTLP / OpenTelemetry exporter — current sink is stderr / JSONL session log. |
+| Telemetry (event taxonomy + exporter) | yes (OTLP) | yes (OTLP/HTTP + OTLP/gRPC) | COMPLETE | Event types: `internal/runtime/events.go`. Internal client telemetry: `internal/api/client_telemetry_test.go`. OTLP/HTTP-JSON exporter: `internal/apikit/telemetry/otlp/exporter.go`. OTLP/gRPC exporter (official `otlploggrpc` SDK): `internal/apikit/telemetry/otlpgrpc/exporter.go` — env var `CLAWD_OTLP_GRPC_ENDPOINT` enables wiring. JSONL session log remains the default offline sink. |
 | Session timeline UI | yes (TUI render) | partial | PARTIAL | TUI primitives: `internal/tui/`. Session JSONL captures every turn, but no `claw-code timeline` render command exists yet. |
 | Plugin marketplace (remote discovery + install) | yes | partial | MISSING | Local plugin registry, manifest, and tool wiring shipped: `plugin/{manager.go,manifest.go,registry.go,tool.go}`. Remote marketplace / signed-manifest fetch is not wired. |
 
@@ -33,7 +33,6 @@ If you're adding a feature, the file:line citations above point to the package y
 
 If you're chasing a "PARTIAL" rating to "COMPLETE":
 
-- **Telemetry → OTLP**: add an exporter that subscribes to events emitted from `internal/runtime/events.go`.
 - **Session UI**: read `internal/runtime/session_jsonl.go` and render through `internal/tui`.
 - **Vision / computer use**: implement screenshot/click tools that emit `api.ImageSource` content blocks.
 - **Plugin marketplace**: layer a remote fetch + manifest verification on top of `plugin/registry.go`.

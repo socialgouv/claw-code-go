@@ -11,6 +11,8 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 
 ### Added
 
+- OTLP/gRPC log exporter built on the official `go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc` SDK. Translates `apikit.TelemetryEvent` into OTLP LogRecords and ships them through a SDK BatchProcessor to any standard OpenTelemetry collector. Resource attributes default to `service.name=claw-code-go` and accept an optional `service.version`. Configurable via the new `CLAWD_OTLP_GRPC_ENDPOINT` env var (use `FromEnv()`); supports `CLAWD_OTLP_GRPC_INSECURE`, `CLAWD_OTLP_GRPC_HEADERS` (comma-separated `key=value`), `CLAWD_SERVICE_NAME`, and `CLAWD_SERVICE_VERSION`. (`internal/apikit/telemetry/otlpgrpc/exporter.go`, `internal/apikit/telemetry/otlpgrpc/env.go`)
+  - DEPRECATION WARNING: `ITERION_*` env vars are deprecated, use `CLAWD_*` instead. (Only `CLAWD_OTLP_GRPC_*` are recognised by the gRPC exporter — there is no `ITERION_*` legacy alias for telemetry.)
 - Plugin lifecycle hook events: `PrePluginInstall`, `PostPluginInstall`, `PrePluginUninstall`, `PostPluginUninstall`. The `plugin.PluginManager` accepts a `hooks.Runner` via the new `WithHooks(*hooks.Runner)` option; a Block decision on a Pre event aborts the install/uninstall before any filesystem mutation, and Post events always fire (success or failure) with `Plugin.Error` populated on failure. The hook payload is `hooks.PluginInfo` (ID, Name, Version, Description, InstallPath, Source, Error). New `InstallContext` / `UninstallContext` methods thread `context.Context` to the runner; the legacy `Install` / `Uninstall` signatures remain and route through `context.Background()`. Nil Runner is a documented no-op. (`internal/hooks/runner.go`, `plugin/manager.go`, `plugin/lifecycle_hooks_test.go`)
 - Live test coverage for Bedrock, Vertex, and Foundry providers under build tag `live`. Each test instantiates the real provider, runs a short streaming request, and asserts that at least one text delta plus a stop event are received; tests skip cleanly when the documented per-provider env vars are missing, so `go test ./...` (no tag) is unaffected. (`internal/api/providers/{bedrock,vertex,foundry}/provider_live_test.go`)
 - Typed `api.APIError` returned by provider clients on non-2xx responses, exposing `Provider`, `StatusCode`, `Message`, `Body`, and `Retryable`. Callers drive retry classification via `errors.As` instead of string parsing. `IsRetryableStatus` covers 408/409/429/5xx. (`internal/api/errors.go`, commit 2574d7f)
@@ -38,7 +40,6 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 
 - Computer-use tools — `ImageSource` types are in place but the screenshot/click/typing tool surface is not yet wired.
 - Session timeline UI — the JSONL session store captures all data, but no CLI render of the timeline exists yet.
-- OTLP exporter — telemetry event types are defined, but there is no exporter to OpenTelemetry collectors.
 - Plugin marketplace — plugin manifests + local registry exist; remote discovery / install is not wired.
 
 [Unreleased]: https://github.com/SocialGouv/claw-code-go/compare/bf21311...HEAD
