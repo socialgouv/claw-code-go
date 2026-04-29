@@ -42,10 +42,6 @@ Changes since `bf21311` (last stable commit before the multi-phase port session 
 
 ### Deferred
 
-<<<<<<< HEAD
-- Plugin marketplace — plugin manifests + local registry exist; remote discovery / install is not wired.
-=======
-- Computer-use tools — `ImageSource` types are in place but the screenshot/click/typing tool surface is not yet wired.
->>>>>>> 8bc422c (docs: close Plugin marketplace parity gap)
+_(none — all P0/P1/P2 parity gaps closed.)_
 
 [Unreleased]: https://github.com/SocialGouv/claw-code-go/compare/bf21311...HEAD
