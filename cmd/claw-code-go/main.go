@@ -48,6 +48,20 @@ func main() {
 		case "timeline":
 			compat.RunTimeline(os.Args[2:])
 			return
+		case "plugin":
+			rest := os.Args[2:]
+			if len(rest) == 0 {
+				fmt.Fprintln(os.Stderr, "Usage: claw-code-go plugin install --marketplace <url> <name>")
+				os.Exit(1)
+			}
+			switch rest[0] {
+			case "install":
+				compat.RunPluginInstall(rest[1:])
+				return
+			default:
+				fmt.Fprintf(os.Stderr, "claw-code-go plugin: unknown subcommand %q (expected: install)\n", rest[0])
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -79,7 +93,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  bootstrap-plan [--json]                 Print the ordered startup phase plan\n")
 		fmt.Fprintf(os.Stderr, "  print-system-prompt [--cwd] [--date]    Render the full system prompt\n")
 		fmt.Fprintf(os.Stderr, "  resume-session <file> [commands...]     Replay a saved session file\n")
-		fmt.Fprintf(os.Stderr, "  timeline --session <id> [...flags]      Render a saved session timeline\n\n")
+		fmt.Fprintf(os.Stderr, "  timeline --session <id> [...flags]      Render a saved session timeline\n")
+		fmt.Fprintf(os.Stderr, "  plugin install --marketplace <url> <n>  Fetch + verify + install a plugin from a remote marketplace\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nEnvironment variables:\n")
