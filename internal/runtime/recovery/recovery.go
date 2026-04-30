@@ -562,11 +562,16 @@ func (d *ProductionRecoveryDeps) RedirectPrompt() error {
 	return d.Workers.SendPrompt("default", "")
 }
 
+// RebaseBranch runs `git rebase --autostash` inside d.WorkDir. WorkDir MUST
+// be non-empty: rebasing in the process CWD is never what a caller wants
+// (it would mutate whatever directory the iterion / claw process was
+// launched from, which can be arbitrary).
 func (d *ProductionRecoveryDeps) RebaseBranch() error {
-	cmd := exec.Command("git", "rebase", "--autostash")
-	if d.WorkDir != "" {
-		cmd.Dir = d.WorkDir
+	if d.WorkDir == "" {
+		return fmt.Errorf("recovery: WorkDir is required for RebaseBranch (refusing to operate on process CWD)")
 	}
+	cmd := exec.Command("git", "rebase", "--autostash")
+	cmd.Dir = d.WorkDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git rebase: %s: %w", string(out), err)
@@ -574,11 +579,16 @@ func (d *ProductionRecoveryDeps) RebaseBranch() error {
 	return nil
 }
 
+// CleanBuild runs `git clean -fdx` inside d.WorkDir. WorkDir MUST be
+// non-empty: `git clean -fdx` deletes ALL untracked files (including
+// those in .gitignore), so silently falling back to the process CWD
+// would destroy arbitrary user files. Refuse rather than risk it.
 func (d *ProductionRecoveryDeps) CleanBuild() error {
-	cmd := exec.Command("git", "clean", "-fdx")
-	if d.WorkDir != "" {
-		cmd.Dir = d.WorkDir
+	if d.WorkDir == "" {
+		return fmt.Errorf("recovery: WorkDir is required for CleanBuild (refusing to run `git clean -fdx` on process CWD)")
 	}
+	cmd := exec.Command("git", "clean", "-fdx")
+	cmd.Dir = d.WorkDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git clean: %s: %w", string(out), err)

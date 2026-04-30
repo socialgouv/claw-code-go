@@ -3,9 +3,45 @@ package recovery
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/SocialGouv/claw-code-go/internal/runtime/worker"
+	"os/exec"
+	"strings"
 	"testing"
+
+	"github.com/SocialGouv/claw-code-go/internal/runtime/worker"
 )
+
+// setupRecoveryTestRepo creates a self-contained git repository in a fresh
+// t.TempDir() configured so that `git rebase --autostash` and
+// `git clean -fdx` both succeed as no-ops:
+//
+//   - branch `main` exists with one empty commit (so HEAD is valid)
+//   - `branch.main.remote = .` and `branch.main.merge = refs/heads/main`
+//     give `git rebase --autostash` an upstream that is itself, making
+//     the rebase a no-op rather than failing with "no tracking
+//     information for the current branch"
+//   - the working tree is clean, so `git clean -fdx` has nothing to
+//     remove
+//
+// This isolates ProductionRecoveryDeps tests from the runner's CWD and
+// removes the previous environment-dependent flake.
+func setupRecoveryTestRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %s: %v", strings.Join(args, " "), string(out), err)
+		}
+	}
+	runGit("init", "-q", "-b", "main")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "test")
+	runGit("commit", "--allow-empty", "-q", "-m", "init")
+	runGit("config", "branch.main.remote", ".")
+	runGit("config", "branch.main.merge", "refs/heads/main")
+	return dir
+}
 
 func TestRecipeForAllScenarios(t *testing.T) {
 	t.Parallel()
@@ -611,6 +647,12 @@ func TestProductionDepsNilGuards(t *testing.T) {
 		d.RestartWorker,
 		func() error { return d.RetryMcpHandshake(100) },
 		func() error { return d.RestartPlugin("x") },
+		// RebaseBranch / CleanBuild must refuse to run when WorkDir
+		// is empty: they shell out to git, and a missing WorkDir
+		// would silently target the process CWD — `git clean -fdx`
+		// in particular would delete arbitrary untracked files.
+		d.RebaseBranch,
+		d.CleanBuild,
 	}
 	for _, fn := range fns {
 		if err := fn(); err == nil {
@@ -623,10 +665,15 @@ func TestProductionDepsAllScenarios(t *testing.T) {
 	t.Parallel()
 	for _, s := range AllScenarios() {
 		t.Run(s.String(), func(t *testing.T) {
+			// Each subtest gets its own isolated git repo so the
+			// stale_branch / compile_red_cross_crate scenarios (which
+			// shell out to git via RebaseBranch / CleanBuild) are
+			// deterministic regardless of the runner's CWD git state.
 			d := &ProductionRecoveryDeps{
 				Workers: &prodMockWorkerRegistry{},
 				MCP:     &prodMockMCPRegistry{},
 				Plugins: &prodMockPluginManager{},
+				WorkDir: setupRecoveryTestRepo(t),
 			}
 			ctx := NewRecoveryContext()
 			r := AttemptRecoveryWithDeps(s, ctx, d)
