@@ -12,9 +12,10 @@ func TestResolveModelAliasRouting(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"opus", "claude-opus-4-6"},
-		{"sonnet", "claude-sonnet-4-6"},
-		{"haiku", "claude-haiku-4-5-20251213"},
+		{"opus", "claude-opus-4-7"},
+		{"sonnet", "claude-sonnet-4-7"},
+		{"haiku", "claude-haiku-4-5"},
+		{"claude-haiku-4-5-20251213", "claude-haiku-4-5"},
 		{"grok", "grok-3"},
 		{"grok-3", "grok-3"},
 		{"grok-mini", "grok-3-mini"},
@@ -27,9 +28,9 @@ func TestResolveModelAliasRouting(t *testing.T) {
 		{"qwen-turbo", "qwen-turbo"},
 		{"qwen-qwq-32b", "qwen-qwq-32b"},
 		// Case insensitivity
-		{"Opus", "claude-opus-4-6"},
-		{"SONNET", "claude-sonnet-4-6"},
-		{"Haiku", "claude-haiku-4-5-20251213"},
+		{"Opus", "claude-opus-4-7"},
+		{"SONNET", "claude-sonnet-4-7"},
+		{"Haiku", "claude-haiku-4-5"},
 		{"GROK", "grok-3"},
 		// Unknown model passes through
 		{"my-custom-model", "my-custom-model"},
@@ -201,14 +202,16 @@ func TestMaxTokensForModel(t *testing.T) {
 		model string
 		want  uint32
 	}{
-		{"claude-opus-4-6", 32_000},
+		{"claude-opus-4-7", 128_000},
+		{"claude-opus-4-6", 128_000},
+		{"claude-sonnet-4-7", 128_000},
 		{"claude-sonnet-4-6", 64_000},
 		{"claude-haiku-4-5-20251213", 64_000},
 		{"grok-3", 64_000},
 		{"grok-3-mini", 64_000},
 		// Aliases
-		{"opus", 32_000},
-		{"sonnet", 64_000},
+		{"opus", 128_000},
+		{"sonnet", 128_000},
 		{"haiku", 64_000},
 		{"grok", 64_000},
 		// Unknown models use heuristic: opus → 32k, others → 64k
@@ -425,11 +428,16 @@ func TestLookupModelTokenLimit(t *testing.T) {
 		wantOutput  uint32
 		wantContext uint32
 	}{
-		{"claude-opus-4-6", false, 32000, 200000},
-		{"claude-sonnet-4-6", false, 64000, 200000},
-		{"claude-haiku-4-5-20251213", false, 64000, 200000},
-		{"grok-3", false, 64000, 131072},
-		{"grok-3-mini", false, 64000, 131072},
+		{"claude-opus-4-7", false, 128_000, 1_000_000},
+		{"claude-opus-4-6", false, 128_000, 1_000_000},
+		{"claude-sonnet-4-7", false, 128_000, 1_000_000},
+		{"claude-sonnet-4-6", false, 64_000, 1_000_000},
+		{"claude-haiku-4-5", false, 64_000, 200_000},
+		{"claude-haiku-4-5-20251213", false, 64_000, 200_000}, // alias
+		{"gpt-5.5", false, 128_000, 1_050_000},
+		{"openai/gpt-5.5", false, 128_000, 1_050_000}, // alias
+		{"grok-3", false, 64_000, 131_072},
+		{"grok-3-mini", false, 64_000, 131_072},
 		{"unknown-model", true, 0, 0},
 	}
 	for _, tt := range tests {

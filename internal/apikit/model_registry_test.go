@@ -14,19 +14,21 @@ func TestModelRegistryLookup(t *testing.T) {
 		canonical string
 		maxOutput uint32
 	}{
-		{"opus", false, "claude-opus-4-6", 32_000},
-		{"sonnet", false, "claude-sonnet-4-6", 64_000},
-		{"haiku", false, "claude-haiku-4-5-20251213", 64_000},
+		{"opus", false, "claude-opus-4-7", 128_000},
+		{"sonnet", false, "claude-sonnet-4-7", 128_000},
+		{"haiku", false, "claude-haiku-4-5", 64_000},
 		{"grok", false, "grok-3", 64_000},
 		{"grok-mini", false, "grok-3-mini", 64_000},
-		{"grok-2", false, "grok-2", 0},
+		{"grok-2", false, "grok-2", 64_000},
 		{"qwen-max", false, "qwen-max", 0},
 		{"qwen-plus", false, "qwen-plus", 0},
 		{"qwen-turbo", false, "qwen-turbo", 0},
 		{"qwen-qwq-32b", false, "qwen-qwq-32b", 0},
 		{"qwen", false, "qwen-max", 0},
-		{"claude-opus-4-6", false, "claude-opus-4-6", 32_000},
-		{"OPUS", false, "claude-opus-4-6", 32_000},
+		{"claude-opus-4-6", false, "claude-opus-4-6", 128_000},
+		{"OPUS", false, "claude-opus-4-7", 128_000},
+		{"gpt-5.5", false, "gpt-5.5", 128_000},
+		{"openai/gpt-5.5", false, "gpt-5.5", 128_000},
 		{"unknown-model", true, "", 0},
 	}
 
@@ -59,9 +61,9 @@ func TestModelRegistryResolveAlias(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"opus", "claude-opus-4-6"},
-		{"sonnet", "claude-sonnet-4-6"},
-		{"haiku", "claude-haiku-4-5-20251213"},
+		{"opus", "claude-opus-4-7"},
+		{"sonnet", "claude-sonnet-4-7"},
+		{"haiku", "claude-haiku-4-5"},
 		{"grok", "grok-3"},
 		{"grok-mini", "grok-3-mini"},
 		{"grok-2", "grok-2"},
@@ -71,6 +73,7 @@ func TestModelRegistryResolveAlias(t *testing.T) {
 		{"qwen-turbo", "qwen-turbo"},
 		{"qwen-qwq-32b", "qwen-qwq-32b"},
 		{"claude-sonnet-4-6", "claude-sonnet-4-6"},
+		{"openai/gpt-5.5", "gpt-5.5"},
 		{"unknown", "unknown"},
 	}
 
