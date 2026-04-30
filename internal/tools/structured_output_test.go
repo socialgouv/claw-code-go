@@ -13,8 +13,13 @@ func TestStructuredOutput(t *testing.T) {
 		wantOut string
 	}{
 		{
-			name:    "happy path with data",
-			input:   map[string]any{"key": "value", "count": float64(42)},
+			name:    "happy path with payload wrapper",
+			input:   map[string]any{"payload": map[string]any{"key": "value", "count": float64(42)}},
+			wantOut: "Structured output provided successfully",
+		},
+		{
+			name:    "happy path bare keys (back-compat with non-wrapped callers)",
+			input:   map[string]any{"key": "value"},
 			wantOut: "Structured output provided successfully",
 		},
 		{
