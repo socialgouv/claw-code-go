@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/SocialGouv/claw-code-go/internal/mcp"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/SocialGouv/claw-code-go/internal/mcp"
 )
 
 // mockTransport is a test-only MCP Transport that returns canned responses.
@@ -76,21 +77,21 @@ func (m *mockTransport) Send(_ context.Context, req mcp.Request) (mcp.Response, 
 func (m *mockTransport) Notify(_ mcp.Notification) error { return nil }
 func (m *mockTransport) Close() error                    { return nil }
 
-// setupMockRegistry creates a Registry with a mock server registered under the given name.
-func setupMockRegistry(t *testing.T, serverName string) *mcp.Registry {
+// setupMockProvider creates a Registry-backed Provider with a mock server registered.
+func setupMockProvider(t *testing.T, serverName string) mcp.Provider {
 	t.Helper()
 	reg := mcp.NewRegistry()
 	transport := newMockTransport()
 	if err := reg.AddServer(context.Background(), serverName, transport); err != nil {
 		t.Fatalf("failed to add mock server: %v", err)
 	}
-	return reg
+	return mcp.NewRegistryProvider(reg, mcp.NewAuthState())
 }
 
-func TestListMcpResources_NilRegistry(t *testing.T) {
-	_, err := ExecuteListMcpResources(map[string]any{}, nil)
+func TestListMcpResources_NilProvider(t *testing.T) {
+	_, err := ExecuteListMcpResources(context.Background(), map[string]any{}, nil)
 	if err == nil {
-		t.Fatal("expected error for nil registry")
+		t.Fatal("expected error for nil provider")
 	}
 	if !strings.Contains(err.Error(), "not available") {
 		t.Errorf("expected 'not available' error, got: %v", err)
@@ -98,10 +99,10 @@ func TestListMcpResources_NilRegistry(t *testing.T) {
 }
 
 func TestListMcpResources_ServerNotFound(t *testing.T) {
-	reg := mcp.NewRegistry()
-	result, err := ExecuteListMcpResources(map[string]any{
+	provider := mcp.NewRegistryProvider(mcp.NewRegistry(), mcp.NewAuthState())
+	result, err := ExecuteListMcpResources(context.Background(), map[string]any{
 		"server": "nonexistent",
-	}, reg)
+	}, provider)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -117,16 +118,16 @@ func TestListMcpResources_ServerNotFound(t *testing.T) {
 	}
 }
 
-func TestReadMcpResource_NilRegistry(t *testing.T) {
-	_, err := ExecuteReadMcpResource(map[string]any{"uri": "test://resource"}, nil)
+func TestReadMcpResource_NilProvider(t *testing.T) {
+	_, err := ExecuteReadMcpResource(context.Background(), map[string]any{"uri": "test://resource"}, nil)
 	if err == nil {
-		t.Fatal("expected error for nil registry")
+		t.Fatal("expected error for nil provider")
 	}
 }
 
 func TestReadMcpResource_MissingUri(t *testing.T) {
-	reg := mcp.NewRegistry()
-	_, err := ExecuteReadMcpResource(map[string]any{}, reg)
+	provider := mcp.NewRegistryProvider(mcp.NewRegistry(), mcp.NewAuthState())
+	_, err := ExecuteReadMcpResource(context.Background(), map[string]any{}, provider)
 	if err == nil {
 		t.Fatal("expected error for missing uri")
 	}
@@ -136,11 +137,11 @@ func TestReadMcpResource_MissingUri(t *testing.T) {
 }
 
 func TestReadMcpResource_ServerNotFound(t *testing.T) {
-	reg := mcp.NewRegistry()
-	result, err := ExecuteReadMcpResource(map[string]any{
+	provider := mcp.NewRegistryProvider(mcp.NewRegistry(), mcp.NewAuthState())
+	result, err := ExecuteReadMcpResource(context.Background(), map[string]any{
 		"uri":    "test://resource",
 		"server": "nonexistent",
-	}, reg)
+	}, provider)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -153,16 +154,16 @@ func TestReadMcpResource_ServerNotFound(t *testing.T) {
 	}
 }
 
-func TestMcpAuth_NilRegistry(t *testing.T) {
-	_, err := ExecuteMcpAuth(map[string]any{"server": "test"}, nil, nil)
+func TestMcpAuth_NilProvider(t *testing.T) {
+	_, err := ExecuteMcpAuth(context.Background(), map[string]any{"server": "test"}, nil)
 	if err == nil {
-		t.Fatal("expected error for nil registry")
+		t.Fatal("expected error for nil provider")
 	}
 }
 
 func TestMcpAuth_MissingServer(t *testing.T) {
-	reg := mcp.NewRegistry()
-	_, err := ExecuteMcpAuth(map[string]any{}, reg, nil)
+	provider := mcp.NewRegistryProvider(mcp.NewRegistry(), mcp.NewAuthState())
+	_, err := ExecuteMcpAuth(context.Background(), map[string]any{}, provider)
 	if err == nil {
 		t.Fatal("expected error for missing server")
 	}
@@ -172,10 +173,9 @@ func TestMcpAuth_MissingServer(t *testing.T) {
 }
 
 func TestMcpAuth_ServerNotRegistered(t *testing.T) {
-	reg := mcp.NewRegistry()
-	authState := mcp.NewAuthState()
+	provider := mcp.NewRegistryProvider(mcp.NewRegistry(), mcp.NewAuthState())
 
-	result, err := ExecuteMcpAuth(map[string]any{"server": "unknown"}, reg, authState)
+	result, err := ExecuteMcpAuth(context.Background(), map[string]any{"server": "unknown"}, provider)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,12 +192,12 @@ func TestMcpAuth_ServerNotRegistered(t *testing.T) {
 }
 
 func TestReadMcpResource_Success(t *testing.T) {
-	reg := setupMockRegistry(t, "test-server")
+	provider := setupMockProvider(t, "test-server")
 
-	result, err := ExecuteReadMcpResource(map[string]any{
+	result, err := ExecuteReadMcpResource(context.Background(), map[string]any{
 		"uri":    "test://doc",
 		"server": "test-server",
-	}, reg)
+	}, provider)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -207,8 +207,8 @@ func TestReadMcpResource_Success(t *testing.T) {
 		t.Fatalf("failed to parse result: %v", err)
 	}
 
-	// Assert exactly 5 keys matching Rust response shape.
-	expectedKeys := []string{"server", "uri", "name", "description", "mime_type"}
+	// Response shape: {server, uri, name, description, mime_type, content}.
+	expectedKeys := []string{"server", "uri", "name", "description", "mime_type", "content"}
 	if len(parsed) != len(expectedKeys) {
 		t.Errorf("expected %d keys, got %d: %v", len(expectedKeys), len(parsed), parsed)
 	}
@@ -218,12 +218,6 @@ func TestReadMcpResource_Success(t *testing.T) {
 		}
 	}
 
-	// Assert 'content' key is absent (Rust parity).
-	if _, ok := parsed["content"]; ok {
-		t.Error("response should not contain 'content' key (Rust parity)")
-	}
-
-	// Assert values.
 	if parsed["server"] != "test-server" {
 		t.Errorf("expected server 'test-server', got %v", parsed["server"])
 	}
@@ -233,14 +227,17 @@ func TestReadMcpResource_Success(t *testing.T) {
 	if parsed["name"] != "doc" {
 		t.Errorf("expected name 'doc', got %v", parsed["name"])
 	}
+	if parsed["content"] != "Hello, world!" {
+		t.Errorf("expected content 'Hello, world!', got %v", parsed["content"])
+	}
 }
 
 func TestListMcpResources_Success(t *testing.T) {
-	reg := setupMockRegistry(t, "test-server")
+	provider := setupMockProvider(t, "test-server")
 
-	result, err := ExecuteListMcpResources(map[string]any{
+	result, err := ExecuteListMcpResources(context.Background(), map[string]any{
 		"server": "test-server",
-	}, reg)
+	}, provider)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,7 +247,6 @@ func TestListMcpResources_Success(t *testing.T) {
 		t.Fatalf("failed to parse result: %v", err)
 	}
 
-	// Assert response has server, resources, count.
 	if parsed["server"] != "test-server" {
 		t.Errorf("expected server 'test-server', got %v", parsed["server"])
 	}
@@ -265,17 +261,14 @@ func TestListMcpResources_Success(t *testing.T) {
 		t.Fatalf("expected count to be a number, got %T", parsed["count"])
 	}
 
-	// count must match array length.
 	if int(count) != len(resources) {
 		t.Errorf("expected count=%d to match resources length=%d", int(count), len(resources))
 	}
 
-	// Our mock has 2 resources.
 	if len(resources) != 2 {
 		t.Errorf("expected 2 resources, got %d", len(resources))
 	}
 
-	// No error key on success.
 	if _, ok := parsed["error"]; ok {
 		t.Error("response should not contain 'error' key on success")
 	}

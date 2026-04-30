@@ -573,15 +573,18 @@ func TestWorkerCreateTrustedRootsMergeParity(t *testing.T) {
 }
 
 // TestReadMcpResourceResponseShapeParity verifies that read_mcp_resource returns
-// the Rust-matching response shape: exactly {server, uri, name, description, mime_type}.
-// The `content` field must NOT be present in tool output (content is internal only).
+// the canonical response shape: {server, uri, name, description, mime_type, content}.
+// `content` is included so callers don't need a second round-trip.
 func TestReadMcpResourceResponseShapeParity(t *testing.T) {
 	_ = fixtureDir(t)
 
+	provider := mcp.NewRegistryProvider(mcp.NewRegistry(), mcp.NewAuthState())
+
 	// Verify the error path response shape (server + uri + error).
 	result, err := tools.ExecuteReadMcpResource(
+		context.Background(),
 		map[string]any{"uri": "test://resource", "server": "nonexistent"},
-		mcp.NewRegistry(),
+		provider,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -626,11 +629,13 @@ func TestMcpAuthResponseShapeParity(t *testing.T) {
 
 	registry := mcp.NewRegistry()
 	authState := mcp.NewAuthState()
+	provider := mcp.NewRegistryProvider(registry, authState)
 
 	// Test disconnected server response shape.
 	result, err := tools.ExecuteMcpAuth(
+		context.Background(),
 		map[string]any{"server": "unknown"},
-		registry, authState,
+		provider,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
