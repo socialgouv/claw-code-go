@@ -9,7 +9,7 @@ import (
 
 func TestLoadLiveCache_Missing(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	cache, err := loadLiveCache()
+	cache, err := LoadLiveCache()
 	if err != nil {
 		t.Fatalf("missing cache should not error: %v", err)
 	}
@@ -28,8 +28,62 @@ func TestLoadLiveCache_Corrupt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(clawDir, liveCacheFilename), []byte("not json"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := loadLiveCache(); err == nil {
+	if _, err := LoadLiveCache(); err == nil {
 		t.Error("expected error on corrupt cache, got nil")
+	}
+}
+
+func TestParseUSDPerToken(t *testing.T) {
+	cases := []struct {
+		in   string
+		want float64
+	}{
+		{"", 0},
+		{"0", 0},                  // free model — treated as unknown
+		{"-1", 0},                 // malformed → unknown
+		{"not a number", 0},       // unparseable → unknown
+		{"0.000001", 1},           // $1 / M
+		{"1e-6", 1},               // scientific form → $1 / M
+		{"0.0000125", 12.5},       // $12.50 / M (gpt-5 input)
+		{"0.000075", 75},          // $75 / M (opus-4-7 output)
+	}
+	for _, c := range cases {
+		got := parseUSDPerToken(c.in)
+		if got != c.want {
+			t.Errorf("parseUSDPerToken(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestSaveAndLoadLiveCachePreservesPricing(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	want := &LiveCache{
+		Entries: []LiveCacheEntry{
+			{
+				Canonical:     "gpt-5.5",
+				Provider:      "openai",
+				ContextWindow: 1_050_000,
+				MaxOutput:     128_000,
+				InputUSDPerM:  2.0,
+				OutputUSDPerM: 15.0,
+			},
+		},
+		FetchedAt: time.Now().UTC(),
+		Source:    "test",
+	}
+	if err := saveLiveCache(want); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := LoadLiveCache()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got == nil || len(got.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %+v", got)
+	}
+	e := got.Entries[0]
+	if e.InputUSDPerM != 2.0 || e.OutputUSDPerM != 15.0 {
+		t.Errorf("pricing not preserved: %+v", e)
 	}
 }
 
@@ -45,7 +99,7 @@ func TestSaveAndLoadLiveCacheRoundtrip(t *testing.T) {
 	if err := saveLiveCache(want); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	got, err := loadLiveCache()
+	got, err := LoadLiveCache()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
