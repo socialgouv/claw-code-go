@@ -52,13 +52,13 @@ func TestEffortCapabilities(t *testing.T) {
 			name:          "openai gpt-5.5",
 			input:         "gpt-5.5",
 			wantSupported: []string{"minimal", "low", "medium", "high"},
-			wantDefault:   "",
+			wantDefault:   "medium",
 		},
 		{
 			name:          "openai openrouter alias",
 			input:         "openai/gpt-5.4-mini",
 			wantSupported: []string{"minimal", "low", "medium", "high"},
-			wantDefault:   "",
+			wantDefault:   "medium",
 		},
 		{
 			name:             "grok no documented matrix",
