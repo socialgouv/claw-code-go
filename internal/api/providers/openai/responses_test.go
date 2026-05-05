@@ -803,3 +803,127 @@ func TestConvertToolsToResponses_PropagatesMarshalError(t *testing.T) {
 		t.Errorf("error %q should mention the offending tool name %q", err.Error(), "broken")
 	}
 }
+
+// TestConvertMessagesToResponsesInput_EmptyToolOutput pins the contract
+// that a `function_call_output` item ALWAYS serializes its `output`
+// field on the wire — even when the tool produced no text (e.g. a shell
+// command that completed silently, or an empty file read).
+//
+// The OpenAI Responses API rejects the request with
+//
+//	400: Missing required parameter: 'input[N].output'
+//
+// when this field is absent. Earlier versions modeled `Output` as a
+// `string` with `omitempty`, which stripped the field for empty
+// outputs; switching to `*string` keeps `"output": ""` on the wire
+// while still omitting the field on item shapes that don't use it.
+func TestConvertMessagesToResponsesInput_EmptyToolOutput(t *testing.T) {
+	messages := []api.Message{
+		{
+			Role: "assistant",
+			Content: []api.ContentBlock{
+				{
+					Type:  "tool_use",
+					ID:    "call_1",
+					Name:  "bash",
+					Input: map[string]any{"command": "true"},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: []api.ContentBlock{
+				api.ToolResult{ToolUseID: "call_1", Content: ""}.ToContentBlock(),
+			},
+		},
+	}
+
+	got := convertMessagesToResponsesInput(messages)
+
+	body, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if !strings.Contains(string(body), `"output":""`) {
+		t.Errorf("function_call_output is missing `\"output\":\"\"` on the wire; got %s", body)
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal(body, &items); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	var sawCallOutput bool
+	for _, it := range items {
+		if it["type"] != "function_call_output" {
+			continue
+		}
+		sawCallOutput = true
+		out, ok := it["output"]
+		if !ok {
+			t.Errorf("function_call_output item is missing the `output` field: %v", it)
+		}
+		if out != "" {
+			t.Errorf("output = %v, want \"\" (empty string, present)", out)
+		}
+		if it["call_id"] != "call_1" {
+			t.Errorf("call_id = %v, want \"call_1\"", it["call_id"])
+		}
+	}
+	if !sawCallOutput {
+		t.Fatalf("no function_call_output item produced; got items=%v", items)
+	}
+
+	// Sanity: a non-empty tool output still round-trips correctly and
+	// carries its text in `output`.
+	messages[1].Content[0] = api.ToolResult{ToolUseID: "call_1", Content: "ok\n"}.ToContentBlock()
+	body, _ = json.Marshal(convertMessagesToResponsesInput(messages))
+	if !strings.Contains(string(body), `"output":"ok\n"`) {
+		t.Errorf("non-empty tool output failed to round-trip; got %s", body)
+	}
+}
+
+// TestConvertMessagesToResponsesInput_NoSpuriousOutputField ensures the
+// `output` field is NOT emitted on item shapes that don't use it
+// (regular role/content turns and `function_call` items). The pointer
+// representation lets us keep `omitempty` working for those shapes.
+func TestConvertMessagesToResponsesInput_NoSpuriousOutputField(t *testing.T) {
+	messages := []api.Message{
+		{
+			Role:    "user",
+			Content: []api.ContentBlock{{Type: "text", Text: "hi"}},
+		},
+		{
+			Role: "assistant",
+			Content: []api.ContentBlock{
+				{
+					Type:  "tool_use",
+					ID:    "call_1",
+					Name:  "bash",
+					Input: map[string]any{"command": "echo"},
+				},
+			},
+		},
+	}
+
+	body, err := json.Marshal(convertMessagesToResponsesInput(messages))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal(body, &items); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	for _, it := range items {
+		typ, _ := it["type"].(string)
+		if typ == "function_call_output" {
+			t.Fatalf("unexpected function_call_output item: %v", it)
+		}
+		if _, hasOutput := it["output"]; hasOutput {
+			t.Errorf("item type=%q must not carry an `output` field: %v", typ, it)
+		}
+	}
+}
