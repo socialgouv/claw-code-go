@@ -5,121 +5,170 @@
 </p>
 
 <p align="center">
-  <strong>Experimental fork — ingesting features from claw-code (Rust) into claw-code-go (Go)</strong>
+  <strong>An agentic coding runtime in Go — multi-provider, MCP-native, plugin-extensible.</strong>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat-square&logo=go" />
-  <img src="https://img.shields.io/badge/Claude-claude--sonnet--4-blueviolet?style=flat-square&logo=anthropic" />
-  <img src="https://img.shields.io/badge/MCP-supported-green?style=flat-square" />
-  <img src="https://img.shields.io/badge/Multi--provider-Anthropic%20%7C%20OpenAI%20%7C%20Bedrock%20%7C%20Vertex%20%7C%20Foundry-orange?style=flat-square" />
+  <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square&logo=go" />
+  <img src="https://img.shields.io/badge/Providers-Anthropic%20%7C%20OpenAI%20%7C%20Bedrock%20%7C%20Vertex%20%7C%20Foundry-orange?style=flat-square" />
+  <img src="https://img.shields.io/badge/MCP-3%20transports%20%2B%20OAuth-green?style=flat-square" />
+  <img src="https://img.shields.io/badge/Plugins-marketplace%20%2B%20cosign-blue?style=flat-square" />
+  <img src="https://img.shields.io/badge/Sandbox-linux%20namespaces-purple?style=flat-square" />
+  <img src="https://img.shields.io/badge/Telemetry-OTLP%20HTTP%20%2B%20gRPC-9cf?style=flat-square" />
   <img src="https://img.shields.io/badge/status-experimental-red?style=flat-square" />
 </p>
 
----
-
-> **Warning**: This is an ongoing experiment and is **not tested**. Use at your own risk.
+> ⚠️ **Experimental.** The code compiles and passes `go vet`, but most ported features have not been manually validated. Use at your own risk. Contributions and testing are very welcome.
 
 ---
 
-## Recent changes
+## ✨ What is this?
 
-Highlights since the goai → claw-code-go migration landed in iterion:
+**claw-code-go** is a Go-native runtime for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)–style agentic coding sessions: a streaming model loop, a permissions engine, a tool registry, MCP integration, plugins, sandboxing, and persistence — all callable from Go *and* runnable as a single CLI binary.
 
-- Real `ask_user` and `remote_trigger` tools (previously stubs). `ask_user` exposes a pluggable `Asker` interface (`StdinAsker`, `ProgrammaticAsker`, `TUIAsker`) and the schema accepts structured `options` plus `allow_free_text`. `remote_trigger` is a real `http.Client` wrapper with per-request timeout, response-body cap (with `truncated` flag), input header blocklist (Cookie / Proxy-Authorization), output header allowlist (Set-Cookie filtered out), and a CRLF guard. Public façade in `pkg/api/tools` (`internal/tools/{ask_user,remote_trigger}.go`).
-- New `claw-code-go timeline --session <id>` subcommand renders a saved session's chronological events through the TUI markdown renderer. Flags: `--store <dir>`, `--format pretty|json|md`, `--limit n`. Example: `claw-code-go timeline --session demo --format md` (`internal/compat/timeline.go`).
-- Typed `api.APIError` with `StatusCode` / `Retryable` so callers drive retry classification via `errors.As` instead of string parsing (`internal/api/errors.go`).
-- OpenAI provider now routes `reasoning_effort` + tools through `/v1/responses` (was rejected by `/v1/chat/completions`); `internal/api/providers/openai/responses.go`.
-- Real Bedrock, Vertex, and Foundry providers — no longer stubs (`pkg/api/providers/{bedrock,vertex,foundry}/provider.go`).
-- Permission modes extended from 5 → 7: `ModeDontAsk` (strict allow-list) and `ModeAuto` with a pluggable `Classifier` (`internal/permissions/{mode.go,classifier.go}`).
-- In-process lifecycle hooks `Runner` (Pre/PostToolUse, UserPromptSubmit, Pre/PostCompact, Stop) integrated into `runtime/conversation.go` (`internal/hooks/runner.go`).
-- Shared `internal/api/{httputil,sseutil}` + `providers/openaiwire` packages, fixing args-before-id buffering and silent tool-conversion drops; tree-wide `gofmt`.
+It is a fork of [daolmedo/claw-code-go](https://github.com/daolmedo/claw-code-go) (the original Go port) augmented with features ingested from [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) (a Rust port that emerged after the source leak): hooks, plugins, MCP lifecycle + OAuth, sandbox, classifier-driven permissions, multi-provider routing, prompt caching, OTLP telemetry, and more.
 
-See [`CHANGELOG.md`](./CHANGELOG.md) for the full list and [`docs/parity.md`](./docs/parity.md) for the current Claude Code parity matrix.
+The Rust → Go porting was driven end-to-end by [**Iterion**](https://github.com/SocialGouv/iterion), a workflow engine for multi-agent LLM pipelines. See [How this was built](#%EF%B8%8F-how-this-was-built) below for the run stats.
 
 ---
 
-## What is this?
+## 🚀 Features
 
-This repo is a fork of [daolmedo/claw-code-go](https://github.com/daolmedo/claw-code-go), a Go reimplementation of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's agentic coding assistant.
+### 🌐 Multi-provider LLM client
 
-On top of the upstream codebase, this fork ingests features from [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) — a Rust port of Claude Code that emerged after the source leak. The goal is to bring the more complete Rust implementation's capabilities into the Go codebase: hooks, plugins, MCP lifecycle, sandbox, permissions engine, runtime session management, apikit with multi-provider routing, prompt caching, and much more.
+Five providers are wired through a unified `<provider>/<model-id>` addressing scheme (e.g. `openai/gpt-5.4-mini`, `anthropic/claude-sonnet-4-6`, `bedrock/anthropic.claude-sonnet-4-6`):
 
-**This is an experiment, not a product.** The ported code has not been manually tested or validated beyond automated build checks.
+- **Anthropic** & **OpenAI** — validated end-to-end (OpenAI routes through both `/v1/chat/completions` and `/v1/responses` for reasoning + tools).
+- **AWS Bedrock**, **Google Vertex AI**, **Azure AI Foundry** — real implementations on top of the official SDKs, with live smoke tests under build tag `live`.
+- Capability-aware routing, fallback chains, and per-provider `reasoning_effort` translation in `internal/apikit`.
+- Typed `api.APIError` (`StatusCode`, `Retryable`) so callers drive retry classification via `errors.As`.
 
-## How was this done?
+### 🛠️ Built-in tools
 
-The Rust-to-Go feature porting was orchestrated by [**Iterion**](https://github.com/SocialGouv/iterion) — a workflow engine for complex multi-agent LLM pipelines, using Claude Code, Codex, and other backends.
+A rich tool surface re-exported from [`pkg/api/tools`](pkg/api/tools/) — pair of `XxxTool() api.Tool` (schema) + `ExecuteXxx(ctx, input)` (runtime):
 
-This repo serves as the real-world example that drove Iterion's development. The full workflow configuration and writeup are available:
+- 📄 **File I/O** — `ReadFile`, `WriteFile`, `FileEdit`, `Glob`, `Grep`, `ReadImage`, `NotebookEdit`, PDF extraction.
+- 💻 **Execution** — `Bash` (with workspace validation), `WebFetch` (size cap, header filtering).
+- 🖱️ **Computer use** — full Anthropic action surface (`screenshot`, `*_click`, `type`, `key`, `mouse_move`, `cursor_position`, `left_click_drag`) backed by `xdotool` + ImageMagick on Linux/X11. Returns typed `ErrComputerUseUnavailable` when display/binaries are missing.
+- 🗣️ **Interaction** — `AskUser` with pluggable `Asker` interface (`StdinAsker`, `ProgrammaticAsker`, `TUIAsker`) and structured options; `RemoteTrigger` HTTP wrapper with timeout, body cap, header allow/deny lists, CRLF guard.
+- 🤖 **Multi-agent** — `Worker*`, `Team*`, `Task*`, `Cron*` tools (create / get / list / update / stop) for spawning isolated agents, scheduling, and parallel orchestration.
+- 🔌 **MCP & LSP** — `ListMcpResources`, `ReadMcpResource`, `McpAuth`, plus first-class LSP queries.
+- 🧠 **Workflow** — `TodoWrite`, `Sleep`, `StructuredOutput`, `REPL`, `Skill` (slash command dispatch), `ToolSearch` (discover tools by description), plan-mode toggles.
 
-- [**rust_to_go_port.iter**](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.iter) — the Iterion workflow definition (DSL)
-- [**rust_to_go_port.md**](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.md) — design decisions, lessons learned, and empirical data
+### 🔐 Permissions engine — 7 modes + pluggable classifier
 
-### Run stats
+| Mode | Behavior |
+|------|----------|
+| `ModeAllow` | Permits all operations without prompting. |
+| `ModePrompt` | Consults the ruleset; asks the prompter when no rule matches. |
+| `ModeReadOnly` | Allows read-only operations only; denies writes/exec. |
+| `ModeWorkspaceWrite` | Allows writes within the workspace directory; denies outside. |
+| `ModeDangerFullAccess` | Allows arbitrary command execution and system access. |
+| `ModeDontAsk` | Strict allow-list — never prompts; denies anything not explicitly listed. |
+| `ModeAuto` | Delegates to a `Classifier` (default safe-list permits read-only ops, prompts on writes). |
 
-| Metric | Value |
-|--------|-------|
-| Refinement runs | 4 (workflow iterated alongside the engine) |
-| Outer loop iterations | 25+ batches across all runs |
-| Commits added | 48 (47 by Iterion, 1 by Claude Code) |
-| Go code generated | 37,995 lines across 173 files + 96 test files |
-| New Go packages | 30+ (hooks, plugin, apikit, worker, lane, policy, recovery, sandbox, lsp, task, team...) |
-| Feature parity | 100% (37/37 features) |
-| Final run | 100% parity in 41 min, single batch, zero fix loops, zero interventions |
-| Longest autonomous stretch | 2h25m without human intervention |
-| Dual-judge verdicts | 30+ across all runs (Claude + Codex) |
+Pluggable classifiers in [`internal/permissions/`](internal/permissions/):
 
-### How the workflow operates
+- **`RuleClassifier`** — rule-based safe-list.
+- **`LLMClassifier`** — small-model (Haiku-backed) classifier with TTL+FIFO decision cache (1024 entries, 1h TTL by default) and fail-safe-to-Ask invariant on transport errors. Untrusted args are wrapped in `<tool_invocation>` tags so payloads cannot hijack the decision.
 
-The workflow breaks the porting into dependency-ordered batches. Each batch goes through: **plan → implement → simplify → commit → test → parity scan → dual-judge review → fix loop**. Session continuity (fork/inherit) preserves KV cache across related phases. A human gate pauses for high-risk batches and auto-approves routine ones.
+### 🪝 Lifecycle hooks — 11 events, in-process or shell
 
-See the [full writeup](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.md) for details on convergence strategies, stagnation detection, and model allocation.
+Programmatic [`Runner`](internal/hooks/runner.go) with sequential dispatch and "first non-Continue wins" semantics:
 
-## Providers
+| Tool events | Session events | Plugin events |
+|---|---|---|
+| `PreToolUse` | `UserPromptSubmit` | `PrePluginInstall` |
+| `PostToolUse` | `PreCompact` | `PostPluginInstall` |
+| `PostToolUseFailure` | `PostCompact` | `PrePluginUninstall` |
+| | `Stop` | `PostPluginUninstall` |
 
-Five providers are wired through `pkg/api/providers/`:
+Subprocess shell-script hooks ([`hooks/runner.go`](hooks/runner.go)) cover the same lifecycle for ops who prefer scripts — Unix and Windows exec adapters, `exec.CommandContext` so cancelling the conversation kills any in-flight hook script.
 
-| Provider | Status | Path |
-|----------|--------|------|
-| Anthropic | validated end-to-end | `pkg/api/providers/anthropic` |
-| OpenAI    | validated end-to-end (`/v1/chat/completions` and `/v1/responses`) | `pkg/api/providers/openai` |
-| Bedrock   | available — built on `aws-sdk-go-v2`, untested in production | `pkg/api/providers/bedrock` |
-| Vertex AI | available — Google ADC + canonical `MapModelID`, untested in production | `pkg/api/providers/vertex` |
-| Azure Foundry | available — OpenAI-wire compatible, untested in production | `pkg/api/providers/foundry` |
+### 🔌 MCP — three transports + OAuth
 
-Models are addressed as `<provider>/<model-id>`, e.g. `openai/gpt-5.4-mini`, `anthropic/claude-sonnet-4-6`, `bedrock/anthropic.claude-sonnet-4-6`, `vertex/claude-sonnet-4-6`.
+Full Model Context Protocol support in [`internal/mcp/`](internal/mcp/):
 
-### Running live provider tests
+- 📡 **Transports** — stdio, SSE, WebSocket. RPC protocol layer is shared.
+- 🔑 **OAuth Authorization Code + PKCE broker** with atomic disk-backed token storage. RFC 6749 / 7636 compliant: loopback callback for browser flows, automatic refresh near expiry, typed `ErrReauthRequired` for headless contexts (where opening a browser is impossible). Bearer header injection via `TransportConfig.AuthFunc`.
+- Public façade: `pkg/api/mcp/oauth` re-exports `Broker`, `NewBroker`, `Token`, `Storage`, `ErrReauthRequired`.
 
-Each cloud provider ships a smoke test gated by the `live` Go build tag. The tests skip cleanly when the relevant credentials are not set, so the default `go test ./...` is unaffected. To run them you must opt in by passing `-tags live` and the documented env vars:
+### 📦 Plugin system + remote marketplace
 
-```bash
-# AWS Bedrock — uses the standard AWS SDK credentials chain.
-AWS_REGION=us-east-1 \
-AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-BEDROCK_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0 \
-go test -tags live -run TestLiveStreamSmokeBedrock -v ./internal/api/providers/bedrock/...
+Local plugin manager in [`plugin/`](plugin/) with install / uninstall / list / dispatch, plus a **remote marketplace** with end-to-end verification:
 
-# Google Vertex AI — uses Application Default Credentials.
-GOOGLE_CLOUD_PROJECT=my-project \
-GOOGLE_CLOUD_REGION=us-east5 \
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json \
-VERTEX_MODEL=claude-sonnet-4-20250514 \
-go test -tags live -run TestLiveStreamSmokeVertex -v ./internal/api/providers/vertex/...
+- 🗺️ **Two-tier layout** — `<base>/index.json` advertises plugins; `<base>/<name>/manifest.json` describes each.
+- 🔏 **SHA-256 + cosign** signature verification, delegated to a single path so the slash command and the public API agree.
+- 🛡️ HTTPS-only by default, opt-in `--insecure-marketplace` escape, 1 MiB metadata size cap.
+- 🪝 Lifecycle hooks fire around every install/uninstall (`Pre*` can block, `Post*` always fires with error info on failure).
+- 🧰 CLI: `claw-code-go plugin install --marketplace <url> [--require-signed] <name>`. Env vars: `CLAW_MARKETPLACE_URL`, `CLAW_PLUGIN_PUBLIC_KEY`, `CLAW_REQUIRE_SIGNED`.
 
-# Azure AI Foundry — api-key auth, or DefaultAzureCredential when key is unset.
-AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com \
-AZURE_OPENAI_API_KEY=... \
-FOUNDRY_MODEL=my-deployment \
-go test -tags live -run TestLiveStreamSmokeFoundry -v ./internal/api/providers/foundry/...
+### 🧱 Sandbox — Linux namespace isolation
+
+[`internal/runtime/sandbox/`](internal/runtime/sandbox/) provides per-session isolation with graceful fallback on non-Linux hosts or inside containers:
+
+- **Filesystem modes** — `Off`, `WorkspaceOnly`, `AllowList`.
+- **Namespaces** — PID, UTS, IPC, network restrictions on Linux.
+- **Auto-detection** — recognizes `/.dockerenv`, `/run/.containerenv`, and cgroup state to skip nesting.
+- Status reporting via the runtime so callers can observe whether isolation is active.
+
+### 💾 Session continuity
+
+[`internal/runtime/`](internal/runtime/) persists every turn as JSONL events (legacy single-JSON sessions auto-loaded via `LoadSessionAuto`):
+
+- 🔁 **Fork / inherit** sessions to preserve KV cache across related phases (this is what made the Iterion port converge fast).
+- ⏯️ **Resume** any session by ID, `latest`, or path.
+- 📜 **Timeline** subcommand renders chronological event view (`pretty` | `json` | `md`).
+- 🧹 **Compaction** with `Pre/PostCompact` hooks, summary compression, and recent-N-turns preservation.
+
+### ⚡ Prompt caching
+
+Anthropic-native [`cache_control` breakpoint manager](internal/apikit/prompt_cache.go) with session-scoped fingerprints, cache-break detection (unexpected drops in `cache_read_input_tokens`), and persistent stats (hits / misses / writes / unexpected breaks). Cache-aware retry logic in `internal/apikit/retry.go`.
+
+### 📡 Telemetry — OTLP/HTTP + OTLP/gRPC
+
+Two exporters built on the official OpenTelemetry SDKs:
+
+- 📨 `internal/apikit/telemetry/otlp` — OTLP/HTTP-JSON (`CLAWD_OTLP_HTTP_ENDPOINT`).
+- 📨 `internal/apikit/telemetry/otlpgrpc` — OTLP/gRPC via `otlploggrpc` (`CLAWD_OTLP_GRPC_ENDPOINT`, `CLAWD_OTLP_GRPC_INSECURE`, `CLAWD_OTLP_GRPC_HEADERS`).
+- 🏷️ Standard resource attributes: `service.name=claw-code-go` (override with `CLAWD_SERVICE_NAME`), `service.version` via `CLAWD_SERVICE_VERSION`.
+- ⚠️ The legacy `ITERION_*` env vars are **deprecated** — use `CLAWD_*`.
+
+### 🖥️ TUI
+
+[`internal/tui/`](internal/tui/) ships a [Bubble Tea](https://github.com/charmbracelet/bubbletea)-backed interface: markdown rendering, syntax-highlighted code blocks, themes, REPL history, logo. The same renderer powers the `timeline` subcommand.
+
+### 🧠 LSP integration
+
+A first-class LSP tool ([`internal/lsp/`](internal/lsp/) + [`pkg/api/lsp`](pkg/api/lsp/)) lets the model query language servers for diagnostics, hover, and definitions during a coding session.
+
+### 🤖 Multi-agent orchestration
+
+Beyond single-agent loops, runtime primitives in [`internal/runtime/`](internal/runtime/) support multi-agent fleets:
+
+- 👷 **Workers** — observable state machine (`Spawning` → `TrustRequired` → `ReadyForPrompt` → `Running` → `Finished`/`Failed`) with failure classification (TrustGate, PromptDelivery, Protocol, Provider).
+- 👥 **Teams** — sub-agent registry and coordination primitives.
+- 🗂️ **Tasks** — background task lifecycle (`create` / `get` / `list` / `update` / `output` / `stop`).
+- ⏰ **Cron** — scheduled recurring tasks.
+- 🚦 **Lanes / Policies / Recovery** — declarative rule engine for branch-locked workflows, freshness analysis, and 7 named failure-recovery scenarios.
+
+### 🧰 CLI
+
+```text
+claw-code-go [--prompt | --repl | --session ID] ...
+claw-code-go timeline --session <id> [--format pretty|json|md] [--limit n]
+claw-code-go plugin install --marketplace <url> [--require-signed] <name>
+claw-code-go dump-manifests [--json]
+claw-code-go bootstrap-plan
+claw-code-go print-system-prompt [--cwd ...] [--date ...]
+claw-code-go resume-session <file> [commands...]
 ```
 
-Each test asserts only that the stream produced at least one text delta and a `message_stop` event; it does not check the exact wording of the reply. That is enough to confirm authentication, request shape, and SSE decoding all work end-to-end. Test files: `internal/api/providers/{bedrock,vertex,foundry}/provider_live_test.go`.
+Main-mode flags include `--model`, `--permission-mode`, `--allowed-tools`, `--reasoning-effort`, `--output-format`, `--session-dir`, `--work-dir`, and `--dangerously-skip-permissions`.
 
-## Built-in tools
+---
 
-The `pkg/api/tools` package re-exports the built-in tools as a stable public API. Each tool is a pair of `XxxTool() api.Tool` (schema) + `ExecuteXxx(ctx, input)` (runtime).
+## 🔧 Quick start
 
 ```go
 import (
@@ -144,52 +193,106 @@ defs := []api.Tool{
 out, err := tools.ExecuteReadFile(ctx, map[string]any{"path": "README.md"})
 ```
 
-`ExecuteBash` additionally takes a `workspace string` for command validation (pass `""` to skip). The wrapper pins permissions to `ModeAllow`; gate invocations upstream (e.g. an iterion workflow's `allowed_tools` list).
+`ExecuteBash` additionally takes a `workspace string` for command validation (pass `""` to skip). The wrapper pins permissions to `ModeAllow`; gate invocations upstream (e.g. via an Iterion workflow's `allowed_tools` list).
 
-`ComputerUseTool` exposes the Anthropic computer-use action surface (`screenshot`, `left_click`, `right_click`, `middle_click`, `double_click`, `type`, `key`, `mouse_move`, `cursor_position`, `left_click_drag`) backed by `xdotool` and ImageMagick `import` on Linux/X11. Install both binaries on the host (Debian/Ubuntu: `apt install xdotool imagemagick`); when they are missing or no display is reachable, `ExecuteComputerUse` returns `tools.ErrComputerUseUnavailable` (use `errors.Is`). No cgo, no extra Go dependencies.
+---
 
-## Permission modes
+## 📚 Reference
 
-Defined in `internal/permissions/mode.go`, re-exported from `pkg/permissions`:
+### Providers
 
-| Mode | Behavior |
-|------|----------|
-| `ModeAllow` | Permits all operations without prompting. |
-| `ModePrompt` | Consults the ruleset; asks the prompter when no rule matches. |
-| `ModeReadOnly` | Allows read-only operations only; denies writes/exec. |
-| `ModeWorkspaceWrite` | Allows writes within the workspace directory; denies outside. |
-| `ModeDangerFullAccess` | Allows arbitrary command execution and system access. |
-| `ModeDontAsk` | Strict allow-list: denies anything not explicitly listed by `WithToolRequirement` or an allow rule. Never prompts. |
-| `ModeAuto` | Delegates to a `Classifier` (default safe-list permits read-only ops, prompts on writes); custom classifiers via `WithClassifier`. |
+| Provider | Status | Path |
+|----------|--------|------|
+| Anthropic | 🟢 validated end-to-end | `pkg/api/providers/anthropic` |
+| OpenAI | 🟢 validated end-to-end (`/v1/chat/completions` + `/v1/responses`) | `pkg/api/providers/openai` |
+| Bedrock | 🟡 available, untested in production (built on `aws-sdk-go-v2`) | `pkg/api/providers/bedrock` |
+| Vertex AI | 🟡 available, untested in production (Google ADC + canonical `MapModelID`) | `pkg/api/providers/vertex` |
+| Azure Foundry | 🟡 available, untested in production (OpenAI-wire compatible) | `pkg/api/providers/foundry` |
 
-CLI aliases (`default`, `accept-edits`, `bypass`, `plan`) resolve to the modes above — see `ParsePermissionMode`.
+#### Running live provider tests
 
-## Lifecycle hooks (in-process)
+Each cloud provider ships a smoke test gated by the `live` Go build tag. The tests skip cleanly when the relevant credentials are not set, so the default `go test ./...` is unaffected.
 
-`internal/hooks/runner.go` provides a programmatic `Runner` for `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `PreCompact`, `PostCompact`, and `Stop`. First non-`Continue` decision wins; panics and errors are logged and treated as `Continue`.
+```bash
+# AWS Bedrock — uses the standard AWS SDK credentials chain.
+AWS_REGION=us-east-1 \
+AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+BEDROCK_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0 \
+go test -tags live -run TestLiveStreamSmokeBedrock -v ./internal/api/providers/bedrock/...
+
+# Google Vertex AI — uses Application Default Credentials.
+GOOGLE_CLOUD_PROJECT=my-project \
+GOOGLE_CLOUD_REGION=us-east5 \
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json \
+VERTEX_MODEL=claude-sonnet-4-20250514 \
+go test -tags live -run TestLiveStreamSmokeVertex -v ./internal/api/providers/vertex/...
+
+# Azure AI Foundry — api-key auth, or DefaultAzureCredential when key is unset.
+AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com \
+AZURE_OPENAI_API_KEY=... \
+FOUNDRY_MODEL=my-deployment \
+go test -tags live -run TestLiveStreamSmokeFoundry -v ./internal/api/providers/foundry/...
+```
+
+Each test asserts only that the stream produced at least one text delta and a `message_stop` event — enough to confirm authentication, request shape, and SSE decoding work end-to-end.
+
+### Lifecycle hooks example
 
 ```go
 runner := hooks.NewRunner()
 runner.Register(hooks.PreToolUse, func(ctx context.Context, hctx hooks.Context) (hooks.Decision, error) {
-    if hctx.ToolName == "bash" { return hooks.Decision{Action: hooks.ActionBlock, Reason: "no shell"}, nil }
+    if hctx.ToolName == "bash" {
+        return hooks.Decision{Action: hooks.ActionBlock, Reason: "no shell"}, nil
+    }
     return hooks.Decision{Action: hooks.ActionContinue}, nil
 })
 decision, _ := runner.Fire(ctx, hooks.Context{Event: hooks.PreToolUse, ToolName: "bash"})
 ```
 
-The Runner is wired into `internal/runtime/conversation.go`; nil runners are a no-op.
+The runner is wired into `internal/runtime/conversation.go`; nil runners are a documented no-op.
+
+---
+
+## 🏗️ How this was built
+
+The Rust-to-Go feature porting was orchestrated by [**Iterion**](https://github.com/SocialGouv/iterion) — a workflow engine for complex multi-agent LLM pipelines, using Claude Code, Codex, and other backends. This repo is the real-world example that drove Iterion's development:
+
+- 📜 [**rust_to_go_port.iter**](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.iter) — the Iterion workflow definition (DSL).
+- 📝 [**rust_to_go_port.md**](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.md) — design decisions, lessons learned, empirical data.
+
+### Run stats
+
+| Metric | Value |
+|--------|-------|
+| Refinement runs | 4 (workflow iterated alongside the engine) |
+| Outer loop iterations | 25+ batches across all runs |
+| Commits added | 48 (47 by Iterion, 1 by Claude Code) |
+| Go code generated | 37,995 lines across 173 files + 96 test files |
+| New Go packages | 30+ (hooks, plugin, apikit, worker, lane, policy, recovery, sandbox, lsp, task, team, …) |
+| Feature parity | 100% (37/37 features) |
+| Final run | 100% parity in 41 min, single batch, zero fix loops, zero interventions |
+| Longest autonomous stretch | 2h25m without human intervention |
+| Dual-judge verdicts | 30+ across all runs (Claude + Codex) |
+
+### How the workflow operates
+
+The workflow breaks the porting into dependency-ordered batches. Each batch goes through: **plan → implement → simplify → commit → test → parity scan → dual-judge review → fix loop**. Session continuity (fork/inherit) preserves KV cache across related phases. A human gate pauses for high-risk batches and auto-approves routine ones. See the [full writeup](https://github.com/SocialGouv/iterion/blob/main/examples/rust_to_go_port.md) for details on convergence strategies, stagnation detection, and model allocation.
+
+---
 
 ## Status
 
-**Experimental.** The code compiles and passes `go vet`, but has not been manually tested. The latest commit (Anthropic prompt caching with `cache_control` breakpoints) was done directly with Claude Code outside the Iterion workflow.
+**Experimental.** The code compiles and passes `go vet`, but most of it has not been manually tested. The latest commit (Anthropic prompt caching with `cache_control` breakpoints) was done directly with Claude Code outside the Iterion workflow.
 
 Contributions, testing, and feedback are welcome.
 
+For the running list of changes, see [**CHANGELOG.md**](./CHANGELOG.md). For the parity matrix versus upstream Claude Code, see [**docs/parity.md**](./docs/parity.md).
+
 ## Credits
 
-- [**daolmedo/claw-code-go**](https://github.com/daolmedo/claw-code-go) — the original Go port of Claude Code (upstream)
-- [**ultraworkers/claw-code**](https://github.com/ultraworkers/claw-code) — the Rust port of Claude Code (feature source)
-- [**Iterion**](https://github.com/SocialGouv/iterion) — the workflow orchestration engine that performed the porting
+- [**daolmedo/claw-code-go**](https://github.com/daolmedo/claw-code-go) — the original Go port of Claude Code (upstream).
+- [**ultraworkers/claw-code**](https://github.com/ultraworkers/claw-code) — the Rust port of Claude Code (feature source).
+- [**Iterion**](https://github.com/SocialGouv/iterion) — the workflow orchestration engine that performed the porting.
 
 ## License
 
