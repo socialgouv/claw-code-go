@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ func TestExecuteBashWithEnvAppendsEntries(t *testing.T) {
 
 	// Without extraEnv the var is unset.
 	out, err := ExecuteBashWithEnv(
+		context.Background(),
 		map[string]any{"command": "echo \"${" + probe + ":-UNSET}\""},
 		permissions.ModeAllow, "", nil,
 	)
@@ -28,6 +30,7 @@ func TestExecuteBashWithEnvAppendsEntries(t *testing.T) {
 
 	// With extraEnv the var resolves.
 	out, err = ExecuteBashWithEnv(
+		context.Background(),
 		map[string]any{"command": "echo \"${" + probe + ":-UNSET}\""},
 		permissions.ModeAllow, "", []string{probe + "=hello"},
 	)
@@ -47,6 +50,7 @@ func TestExecuteBashWithEnvOverridesParentValue(t *testing.T) {
 	t.Setenv("ITERION_BASH_ENV_OVERRIDE", "from-parent")
 
 	out, err := ExecuteBashWithEnv(
+		context.Background(),
 		map[string]any{"command": "echo \"$ITERION_BASH_ENV_OVERRIDE\""},
 		permissions.ModeAllow, "", []string{"ITERION_BASH_ENV_OVERRIDE=from-extra"},
 	)
@@ -65,6 +69,7 @@ func TestExecuteBashWithEnvOverridesParentValue(t *testing.T) {
 func TestExecuteBashLegacyEntryStillNoExtraEnv(t *testing.T) {
 	const probe = "ITERION_BASH_ENV_LEGACY"
 	out, err := ExecuteBash(
+		context.Background(),
 		map[string]any{"command": "echo \"${" + probe + ":-UNSET}\""},
 		permissions.ModeAllow, "",
 	)
