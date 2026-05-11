@@ -208,6 +208,16 @@ var ForeignProviderEnvVars = []ForeignProviderEnvVar{
 		ProviderName: "Alibaba DashScope",
 		Hint:         "prefix your model name with `qwen/` or `qwen-` (e.g. `--model qwen-plus`) so prefix routing selects the DashScope backend",
 	},
+	{
+		// z.ai's Coding Plan exposes an Anthropic-compatible endpoint; the
+		// preferred wiring is to point Claude Code at it via ANTHROPIC_BASE_URL +
+		// ANTHROPIC_AUTH_TOKEN rather than a separate provider, so the hint
+		// steers users toward the env-passthrough pattern documented in
+		// iterion's docs/backends.md and .plans/zai-glm-oauth.md.
+		EnvVar:       "ZAI_API_KEY",
+		ProviderName: "z.ai (GLM, Anthropic-compatible)",
+		Hint:         "z.ai's API is reached through the Anthropic wire format — set `ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic` and `ANTHROPIC_AUTH_TOKEN=$ZAI_API_KEY`, then leave `ANTHROPIC_API_KEY` UNSET so Claude Code routes to z.ai instead of Anthropic",
+	},
 }
 
 // SuggestForeignProvider checks whether a foreign provider's API key is set
