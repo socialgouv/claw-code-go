@@ -33,6 +33,21 @@ func TodoWriteTool() api.Tool {
 				"todos": {
 					Type:        "array",
 					Description: `Array of todo items (required for action=write). Each item: {id, content, status: "pending"|"in_progress"|"done", priority: "high"|"medium"|"low"}`,
+					// Items is mandatory for OpenAI's strict function-calling
+					// schema validator — an "array" property without "items"
+					// produces a 400 "array schema missing items" at request
+					// time. Anthropic accepts both shapes; spelling out the
+					// item schema doesn't penalise Claude.
+					Items: &api.Property{
+						Type: "object",
+						Properties: map[string]api.Property{
+							"id":       {Type: "string", Description: "Stable identifier for the todo item."},
+							"content":  {Type: "string", Description: "Human-readable task description."},
+							"status":   {Type: "string", Enum: []any{"pending", "in_progress", "done"}, Description: "Current state of the item."},
+							"priority": {Type: "string", Enum: []any{"high", "medium", "low"}, Description: "Priority tier."},
+						},
+						Required: []string{"content", "status"},
+					},
 				},
 			},
 			Required: []string{"action"},
