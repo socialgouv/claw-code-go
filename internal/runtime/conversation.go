@@ -64,6 +64,10 @@ type ConversationLoop struct {
 	// PlanModeActive tracks whether plan mode is currently engaged.
 	PlanModeActive bool
 
+	// SkillState tracks the currently active skill (if any) so that
+	// allowed-tools restrictions can be enforced at tool dispatch time.
+	SkillState SkillStateLock
+
 	// Asker is consulted by the non-streaming ExecuteTool path for ask_user.
 	// May be nil (legacy fallback prints to stdout). The streaming path uses
 	// the TurnEventAskUser channel and is unaffected by this field.
@@ -345,6 +349,9 @@ func (loop *ConversationLoop) EmitStop(ctx context.Context) {
 
 // SendMessage sends a user message and runs the full agentic loop.
 func (loop *ConversationLoop) SendMessage(ctx context.Context, userText string) error {
+	// New user turn: drop any skill-scoped tool restriction.
+	loop.SkillState.Clear()
+
 	// Lifecycle: UserPromptSubmit may rewrite or block the prompt.
 	rewritten, blocked, reason := loop.fireUserPromptSubmit(ctx, userText)
 	if blocked {
@@ -541,6 +548,9 @@ func (loop *ConversationLoop) runOneTurn(ctx context.Context) (string, error) {
 // TurnEvents to the provided channel. The channel is NOT closed by this function;
 // callers should close it after this returns.
 func (loop *ConversationLoop) SendMessageStreaming(ctx context.Context, userText string, events chan<- TurnEvent) error {
+	// New user turn: drop any skill-scoped tool restriction.
+	loop.SkillState.Clear()
+
 	// Lifecycle: UserPromptSubmit may rewrite or block the prompt.
 	rewritten, blocked, reason := loop.fireUserPromptSubmit(ctx, userText)
 	if blocked {
@@ -961,7 +971,11 @@ func (loop *ConversationLoop) ExecuteToolQuiet(ctx context.Context, name string,
 	case "agent":
 		result, err = tools.ExecuteAgent(input)
 	case "skill":
-		result, err = tools.ExecuteSkill(input, loop.workspaceRoot())
+		var inv *tools.SkillInvocation
+		result, inv, err = tools.ExecuteSkillEx(input, loop.workspaceRoot(), false)
+		if err == nil {
+			loop.applySkillSideEffects(inv)
+		}
 	case "tool_search":
 		result, err = tools.ExecuteToolSearch(input, loop.allTools())
 	// --- Batch 3: worker tools ---
@@ -1104,6 +1118,15 @@ func (loop *ConversationLoop) ExecuteTool(ctx context.Context, name string, inpu
 		return api.ContentBlock{
 			Type:    "tool_result",
 			Content: []api.ContentBlock{{Type: "text", Text: fmt.Sprintf("Permission denied for tool: %s", name)}},
+			IsError: true,
+		}
+	}
+
+	// Enforce active-skill allowed-tools restrictions, if any.
+	if err := loop.SkillState.CheckAllowed(name); err != nil {
+		return api.ContentBlock{
+			Type:    "tool_result",
+			Content: []api.ContentBlock{{Type: "text", Text: err.Error()}},
 			IsError: true,
 		}
 	}
@@ -1323,7 +1346,11 @@ func (loop *ConversationLoop) ExecuteTool(ctx context.Context, name string, inpu
 	case "agent":
 		result, err = tools.ExecuteAgent(input)
 	case "skill":
-		result, err = tools.ExecuteSkill(input, loop.workspaceRoot())
+		var inv *tools.SkillInvocation
+		result, inv, err = tools.ExecuteSkillEx(input, loop.workspaceRoot(), false)
+		if err == nil {
+			loop.applySkillSideEffects(inv)
+		}
 	case "tool_search":
 		result, err = tools.ExecuteToolSearch(input, loop.allTools())
 	// --- Batch 3: worker tools ---
