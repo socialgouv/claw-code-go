@@ -114,11 +114,34 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 
 		resp, lastErr = c.HTTPClient.Do(httpReq)
 		if lastErr != nil {
+			// Transport errors (DNS flutter, dropped TCP, TLS handshake
+			// flap, captive-portal handoff, etc.) are surprisingly
+			// retryable: in practice they recover within seconds-to-
+			// minutes when the local network blip clears. The previous
+			// "transport errors are not retryable" assumption made
+			// long-running unattended pipelines fragile to occasional
+			// network outages — a 5-second ISP hiccup mid-request
+			// would surface as a hard run failure even though a single
+			// retry would have succeeded. Now we treat them like a 5xx
+			// and ride the same exponential-backoff loop, capped at
+			// defaultMaxRetries so we never block forever on a real
+			// outage. The iterion runtime layer adds another 6-attempt
+			// network-transient recipe on top of this for true multi-
+			// minute outages (see pkg/runtime/recovery).
+			retryable := true
 			if c.Tracer != nil {
-				c.Tracer.RecordHTTPRequestFailed(attempt, "POST", "/v1/messages", lastErr.Error(), false, nil)
+				c.Tracer.RecordHTTPRequestFailed(attempt, "POST", "/v1/messages", lastErr.Error(), retryable, nil)
 			}
-			// Transport errors are not retryable.
-			return nil, fmt.Errorf("do request: %w", lastErr)
+			if attempt == defaultMaxRetries {
+				return nil, fmt.Errorf("do request: %w", lastErr)
+			}
+			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			continue
 		}
 
 		if resp.StatusCode == http.StatusOK {
