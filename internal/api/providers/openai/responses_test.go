@@ -927,3 +927,141 @@ func TestConvertMessagesToResponsesInput_NoSpuriousOutputField(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamResponses_SurfacesSSEErrorFrame validates that a top-level
+// SSE `error` event (emitted by OpenAI for account-level failures
+// like insufficient_quota) is surfaced as a typed StreamEvent error
+// rather than being silently dropped. Without this handling, claw
+// saw a successful response with zero content and reported the
+// downstream symptom "model did not produce a structured_output
+// tool_use block" — making OpenAI-side billing/quota issues
+// indistinguishable from genuine model failures.
+func TestStreamResponses_SurfacesSSEErrorFrame(t *testing.T) {
+	frames := []string{
+		`{"type":"response.created","response":{"id":"resp_x","status":"in_progress"}}`,
+		`{"type":"error","error":{"type":"insufficient_quota","code":"insufficient_quota","message":"You exceeded your current quota, please check your plan and billing details."},"sequence_number":2}`,
+		`{"type":"response.failed","response":{"id":"resp_x","status":"failed","error":{"code":"insufficient_quota","message":"You exceeded your current quota, please check your plan and billing details."}}}`,
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{APIKey: "k", BaseURL: srv.URL, Model: "gpt-5.5", MaxTokens: 256, HTTPClient: srv.Client()}
+	req := api.CreateMessageRequest{
+		Model: "gpt-5.5", MaxTokens: 256, ReasoningEffort: "high",
+		Messages: []api.Message{{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "hi"}}}},
+		Tools:    []api.Tool{{Name: "noop", InputSchema: api.InputSchema{Type: "object"}}},
+	}
+	ch, err := client.StreamResponse(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+	var sawError bool
+	var errMsg string
+	for ev := range ch {
+		if ev.Type == api.EventError {
+			sawError = true
+			errMsg = ev.ErrorMessage
+			break
+		}
+	}
+	if !sawError {
+		t.Fatalf("expected EventError surfacing the SSE error frame, got none")
+	}
+	if !strings.Contains(errMsg, "insufficient_quota") {
+		t.Errorf("EventError message should contain the OpenAI error code; got %q", errMsg)
+	}
+}
+
+// TestStreamResponses_SurfacesResponseFailed validates that a
+// `response.failed` terminal frame (no preceding top-level error
+// event) is also surfaced as EventError. OpenAI sometimes emits
+// response.failed without a separate `type=error` frame, depending
+// on the failure class.
+func TestStreamResponses_SurfacesResponseFailed(t *testing.T) {
+	frames := []string{
+		`{"type":"response.created","response":{"id":"r","status":"in_progress"}}`,
+		`{"type":"response.failed","response":{"id":"r","status":"failed","error":{"code":"server_error","message":"upstream model unavailable"}}}`,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+	client := &Client{APIKey: "k", BaseURL: srv.URL, Model: "gpt-5.5", MaxTokens: 256, HTTPClient: srv.Client()}
+	req := api.CreateMessageRequest{
+		Model: "gpt-5.5", MaxTokens: 256, ReasoningEffort: "high",
+		Messages: []api.Message{{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "hi"}}}},
+		Tools:    []api.Tool{{Name: "noop", InputSchema: api.InputSchema{Type: "object"}}},
+	}
+	ch, _ := client.StreamResponse(context.Background(), req)
+	var msg string
+	for ev := range ch {
+		if ev.Type == api.EventError {
+			msg = ev.ErrorMessage
+			break
+		}
+	}
+	if !strings.Contains(msg, "server_error") {
+		t.Errorf("expected response.failed to surface the error code; got %q", msg)
+	}
+}
+
+// TestStreamResponses_SurfacesResponseIncomplete validates that a
+// `response.incomplete` frame (typically max_output_tokens reached
+// mid-reasoning) is surfaced as EventError so the caller can
+// distinguish "model decided not to respond" from "model was cut
+// off". Previously this was silently treated as a successful empty
+// turn.
+func TestStreamResponses_SurfacesResponseIncomplete(t *testing.T) {
+	frames := []string{
+		`{"type":"response.created","response":{"id":"r","status":"in_progress"}}`,
+		`{"type":"response.incomplete","response":{"id":"r","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":50,"output_tokens":1024,"total_tokens":1074}}}`,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+	client := &Client{APIKey: "k", BaseURL: srv.URL, Model: "gpt-5.5", MaxTokens: 256, HTTPClient: srv.Client()}
+	req := api.CreateMessageRequest{
+		Model: "gpt-5.5", MaxTokens: 256, ReasoningEffort: "high",
+		Messages: []api.Message{{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "hi"}}}},
+		Tools:    []api.Tool{{Name: "noop", InputSchema: api.InputSchema{Type: "object"}}},
+	}
+	ch, _ := client.StreamResponse(context.Background(), req)
+	var msg string
+	for ev := range ch {
+		if ev.Type == api.EventError {
+			msg = ev.ErrorMessage
+			break
+		}
+	}
+	if !strings.Contains(msg, "max_output_tokens") {
+		t.Errorf("expected incomplete event to carry the truncation reason; got %q", msg)
+	}
+}

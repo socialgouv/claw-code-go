@@ -111,8 +111,12 @@ type oaiResponsesEvent struct {
 	ItemID    string `json:"item_id,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
 
-	// response.completed
+	// response.completed / response.failed
 	Response *oaiResponsesFinal `json:"response,omitempty"`
+
+	// type:"error" top-level SSE error frame (account/quota failures,
+	// model unavailable, etc.)
+	Error *oaiResponsesError `json:"error,omitempty"`
 }
 
 type oaiResponsesOutputItem struct {
@@ -125,10 +129,19 @@ type oaiResponsesOutputItem struct {
 }
 
 type oaiResponsesFinal struct {
-	ID     string                   `json:"id"`
-	Status string                   `json:"status"`
-	Usage  *oaiResponsesUsage       `json:"usage,omitempty"`
-	Output []oaiResponsesOutputItem `json:"output,omitempty"`
+	ID                string                   `json:"id"`
+	Status            string                   `json:"status"`
+	Usage             *oaiResponsesUsage       `json:"usage,omitempty"`
+	Output            []oaiResponsesOutputItem `json:"output,omitempty"`
+	IncompleteDetails *oaiResponsesError       `json:"incomplete_details,omitempty"`
+	Error             *oaiResponsesError       `json:"error,omitempty"`
+}
+
+type oaiResponsesError struct {
+	Reason  string `json:"reason,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+	Type    string `json:"type,omitempty"`
 }
 
 type oaiResponsesUsage struct {
@@ -459,6 +472,45 @@ func (c *Client) streamResponsesEvents(ctx context.Context, resp *http.Response,
 		}
 
 		switch ev.Type {
+		case "error":
+			// Top-level SSE error frame. OpenAI emits this for
+			// account-level failures (insufficient_quota, rate limit
+			// exceeded, model unavailable, etc.) with HTTP 200 + a
+			// terminal `response.failed` follow-up. Without explicit
+			// handling claw saw an empty response and reported
+			// "model did not produce a structured_output tool_use
+			// block" — a downstream symptom that hid the real cause.
+			// Surface as EventError so the agent loop fails fast
+			// with an actionable message.
+			msg := "openai stream error"
+			if ev.Error != nil {
+				if ev.Error.Code != "" {
+					msg = fmt.Sprintf("openai stream error: %s: %s", ev.Error.Code, ev.Error.Message)
+				} else if ev.Error.Message != "" {
+					msg = fmt.Sprintf("openai stream error: %s", ev.Error.Message)
+				}
+			}
+			send(api.StreamEvent{Type: api.EventError, ErrorMessage: msg})
+			return
+
+		case "response.failed":
+			// Terminal failure frame. ev.Response.Error carries the
+			// reason (e.g. insufficient_quota, rate_limit_exceeded,
+			// server_error). Surface so the caller can distinguish
+			// "model produced nothing useful" (legitimate empty turn
+			// from reasoning-only models) from "OpenAI refused the
+			// request entirely".
+			msg := "openai response failed"
+			if ev.Response != nil && ev.Response.Error != nil {
+				if ev.Response.Error.Code != "" {
+					msg = fmt.Sprintf("openai response failed: %s: %s", ev.Response.Error.Code, ev.Response.Error.Message)
+				} else if ev.Response.Error.Message != "" {
+					msg = fmt.Sprintf("openai response failed: %s", ev.Response.Error.Message)
+				}
+			}
+			send(api.StreamEvent{Type: api.EventError, ErrorMessage: msg})
+			return
+
 		case "response.created":
 			// Nothing to forward; message_start already emitted.
 
@@ -563,6 +615,23 @@ func (c *Client) streamResponsesEvents(ctx context.Context, resp *http.Response,
 			// stopReason is the source-of-truth set when each output_item
 			// was observed: "tool_use" the moment a function_call item
 			// landed, otherwise the initial "end_turn". No recompute here.
+
+		case "response.incomplete":
+			// The model stopped before producing its terminal output
+			// (typically max_output_tokens hit while reasoning).
+			// Capture usage so the caller sees a non-zero token cost
+			// and surface as EventError so the agent loop reports a
+			// truncation failure rather than silently treating it as
+			// a successful empty turn.
+			if ev.Response != nil && ev.Response.Usage != nil {
+				outputTokens = ev.Response.Usage.OutputTokens
+			}
+			reason := "unknown"
+			if ev.Response != nil && ev.Response.IncompleteDetails != nil && ev.Response.IncompleteDetails.Reason != "" {
+				reason = ev.Response.IncompleteDetails.Reason
+			}
+			send(api.StreamEvent{Type: api.EventError, ErrorMessage: fmt.Sprintf("openai response incomplete: %s", reason)})
+			return
 		}
 	}
 
