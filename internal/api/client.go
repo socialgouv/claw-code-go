@@ -173,7 +173,18 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 		if !retryable || attempt == defaultMaxRetries {
 			// Enrich 401 errors when sk-ant-* is used as Bearer token.
 			enriched := EnrichBearerAuthError(errMsg, resp.StatusCode, c.Auth)
-			return nil, fmt.Errorf("%s", enriched)
+			// Return a typed APIError so callers' errors.As checks pick
+			// up StatusCode + Retryable instead of having to parse the
+			// free-form message. Without this, iterion's retry
+			// classification falls through to the generic "unknown"
+			// path on every non-retryable upstream failure.
+			return nil, &APIError{
+				Provider:   "anthropic",
+				StatusCode: resp.StatusCode,
+				Message:    enriched,
+				Body:       string(errBody),
+				Retryable:  false,
+			}
 		}
 
 		// Exponential backoff before next attempt.
@@ -183,7 +194,15 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		lastErr = fmt.Errorf("%s", errMsg)
+		// Preserve typed retryable shape on the loop carry so the final
+		// "all retries exhausted" return surfaces an APIError too.
+		lastErr = &APIError{
+			Provider:   "anthropic",
+			StatusCode: resp.StatusCode,
+			Message:    errMsg,
+			Body:       string(errBody),
+			Retryable:  true,
+		}
 	}
 
 	ch := make(chan StreamEvent, 64)
