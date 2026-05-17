@@ -110,7 +110,19 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 			httpReq.Header.Set("x-api-key", c.APIKey)
 		}
 		httpReq.Header.Set(anthropicVersionHeader, anthropicVersion)
-		httpReq.Header.Set(anthropicBetaHeader, anthropicBetaValue)
+		// Only send the comma-joined anthropic-beta header on direct
+		// API-key sessions. OAuth-authenticated sessions (Claude Code
+		// subscription path) historically reject newer / unrecognised
+		// beta tokens with 400, and a single rejected token causes
+		// the whole header to fail — every request 400s instead of
+		// degrading gracefully to no caching. The features the betas
+		// gate (prompt-caching) are still available via the
+		// `cache_control` block on individual content items; turning
+		// off the global opt-in just disables the new caching scope
+		// the more-recent beta enables.
+		if c.Auth.Kind != AuthSourceBearer && c.OAuthToken == "" {
+			httpReq.Header.Set(anthropicBetaHeader, anthropicBetaValue)
+		}
 		httpReq.Header.Set("content-type", "application/json")
 		httpReq.Header.Set("accept", "text/event-stream")
 
