@@ -15,8 +15,15 @@ import (
 const (
 	defaultBaseURL         = "https://api.anthropic.com"
 	anthropicVersion       = "2023-06-01"
-	anthropicBetaHeader    = "anthropic-beta"
-	anthropicBetaValue     = "prompt-caching-2024-07-31"
+	anthropicBetaHeader = "anthropic-beta"
+	// Comma-separated beta flags. The prompt-caching-2024-07-31 token
+	// enables the per-block cache_control marker; pinning the
+	// caching-scope token additionally lets the API recognise scope
+	// directives on individual system blocks instead of treating
+	// system as a monolithic cache zone. Without scope, long-lived
+	// iterion server prompts miss the cache after the smallest
+	// rotating field flips and pay full input-token cost every call.
+	anthropicBetaValue     = "prompt-caching-2024-07-31,prompt-caching-scope-2026-01-05"
 	anthropicVersionHeader = "anthropic-version"
 
 	// defaultMaxRetries is the maximum number of retry attempts for retryable
