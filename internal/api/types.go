@@ -155,8 +155,16 @@ type InputSchema struct {
 // survive a JSON round-trip without losing fields. OpenAI's function-calling
 // validator rejects array properties whose `items` is missing, so dropping
 // those fields silently produces 400 errors at request time.
+//
+// Type is `omitempty` so an "any-value" property (JSON Schema `{}` — a
+// permissive shape callers use when the value can be any JSON primitive
+// or composite) round-trips as `{}` rather than `{"type":""}`. Empty
+// string for `type` is not a valid JSON Schema value, and OpenAI's
+// function-schema validator rejects it with HTTP 400 — `'' is not valid
+// under any of the given schemas`. Anthropic's validator accepted the
+// malformed shape, which is why this only surfaced on OpenAI calls.
 type Property struct {
-	Type        string              `json:"type"`
+	Type        string              `json:"type,omitempty"`
 	Description string              `json:"description,omitempty"`
 	Items       *Property           `json:"items,omitempty"`
 	Enum        []any               `json:"enum,omitempty"`
