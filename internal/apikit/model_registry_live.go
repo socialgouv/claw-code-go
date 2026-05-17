@@ -46,15 +46,26 @@ type LiveCache struct {
 }
 
 var (
-	liveFetchOnce sync.Once
-	liveHTTP      = &http.Client{Timeout: 5 * time.Second}
+	// liveFetch state. A sync.Once would only let the refresh fire once
+	// per process lifetime — long-lived iterion daemons (editor,
+	// conductor, runner) would then ship permanently stale pricing
+	// past the documented LiveCacheTTL. Replace with a TTL gate +
+	// inflight marker so each gap of >LiveCacheTTL triggers exactly
+	// one refresh and concurrent callers coalesce onto it.
+	liveFetchMu       sync.Mutex
+	liveFetchInFlight bool
+	liveFetchLast     time.Time
+	liveHTTP          = &http.Client{Timeout: 5 * time.Second}
 )
 
-// resetLiveFetchOnce is a test hook that resets the once-guard so the
+// resetLiveFetchOnce is a test hook that resets the refresh gate so the
 // MaybeRefreshLive path can be exercised multiple times in unit tests.
 // Not exported.
 func resetLiveFetchOnce() {
-	liveFetchOnce = sync.Once{}
+	liveFetchMu.Lock()
+	liveFetchInFlight = false
+	liveFetchLast = time.Time{}
+	liveFetchMu.Unlock()
 }
 
 // liveCachePath returns the absolute path to the live cache file. It honours
@@ -234,24 +245,40 @@ func MaybeRefreshLive(reg *ModelRegistry) {
 	if os.Getenv("CLAW_DISABLE_LIVE_REGISTRY") == "1" {
 		return
 	}
-	liveFetchOnce.Do(func() {
-		go func() {
-			cache, _ := LoadLiveCache()
-			fresh := cache != nil && time.Since(cache.FetchedAt) < LiveCacheTTL
-			if cache != nil {
-				mergeLiveIntoRegistry(reg, cache)
-			}
-			if fresh {
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			if newCache, err := fetchLive(ctx); err == nil && newCache != nil {
-				_ = saveLiveCache(newCache)
-				mergeLiveIntoRegistry(reg, newCache)
-			}
+	liveFetchMu.Lock()
+	if liveFetchInFlight {
+		liveFetchMu.Unlock()
+		return
+	}
+	if !liveFetchLast.IsZero() && time.Since(liveFetchLast) < LiveCacheTTL {
+		liveFetchMu.Unlock()
+		return
+	}
+	liveFetchInFlight = true
+	liveFetchMu.Unlock()
+
+	go func() {
+		defer func() {
+			liveFetchMu.Lock()
+			liveFetchInFlight = false
+			liveFetchLast = time.Now()
+			liveFetchMu.Unlock()
 		}()
-	})
+		cache, _ := LoadLiveCache()
+		fresh := cache != nil && time.Since(cache.FetchedAt) < LiveCacheTTL
+		if cache != nil {
+			mergeLiveIntoRegistry(reg, cache)
+		}
+		if fresh {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if newCache, err := fetchLive(ctx); err == nil && newCache != nil {
+			_ = saveLiveCache(newCache)
+			mergeLiveIntoRegistry(reg, newCache)
+		}
+	}()
 }
 
 // fetchLive hits OpenRouter and models.dev, normalises the responses, merges

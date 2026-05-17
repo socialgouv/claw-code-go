@@ -42,10 +42,12 @@ func LookupModelPricing(model string) (ModelPricing, bool) {
 
 	// MaybeRefreshLive is async and best-effort; the call returns
 	// immediately, populating the cache in a background goroutine if
-	// stale. We read whatever is currently on disk. nil reg is fine —
-	// mergeLiveIntoRegistry no-ops on it, so the side effect we want
-	// (cache populated on disk) still happens.
-	apikit.MaybeRefreshLive(nil)
+	// stale. We read whatever is currently on disk. Pass the default
+	// registry (instead of nil) so the in-memory model table gets
+	// merged with the freshly-fetched data too — without it, only the
+	// disk cache benefits this process lifetime and the registry stays
+	// stale until next boot.
+	apikit.MaybeRefreshLive(apikit.DefaultModelRegistry())
 
 	cache, err := apikit.LoadLiveCache()
 	if err != nil || cache == nil {
