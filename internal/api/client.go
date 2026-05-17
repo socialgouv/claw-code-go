@@ -140,7 +140,21 @@ func (c *Client) StreamResponse(ctx context.Context, req CreateMessageRequest) (
 				c.Tracer.RecordHTTPRequestFailed(attempt, "POST", "/v1/messages", lastErr.Error(), retryable, nil)
 			}
 			if attempt == defaultMaxRetries {
-				return nil, fmt.Errorf("do request: %w", lastErr)
+				// Wrap as a typed *APIError so callers using
+				// errors.As(*APIError) can classify (Retryable=true,
+				// StatusCode=0 to signal "no HTTP response"). The
+				// non-OK-status branch below already returns a typed
+				// APIError; the transport-error branch had been
+				// returning a plain fmt.Errorf, breaking iterion's
+				// runtime recovery classifier (commit c1cdea5
+				// motivated typed APIError exactly for this kind of
+				// downstream classification).
+				return nil, &APIError{
+					Provider:   "anthropic",
+					StatusCode: 0,
+					Message:    lastErr.Error(),
+					Retryable:  true,
+				}
 			}
 			delay := retryBaseDelay * time.Duration(1<<(attempt-1))
 			select {
