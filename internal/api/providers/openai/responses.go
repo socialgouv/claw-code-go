@@ -51,6 +51,14 @@ type oaiResponsesRequest struct {
 	Reasoning       *oaiReasoningConfig   `json:"reasoning,omitempty"`
 	Stream          bool                  `json:"stream"`
 	MaxOutputTokens *int                  `json:"max_output_tokens,omitempty"`
+
+	// Store is sent as a pointer so we can distinguish "omit" from
+	// explicit false. The ChatGPT-Codex backend rejects any request with
+	// `store: true` ({"detail":"Store must be set to false"}), so the
+	// OAuth path always sets this to false. api.openai.com tolerates
+	// either, and prior callers didn't set it — keeping it omitted there
+	// preserves the previous behaviour.
+	Store *bool `json:"store,omitempty"`
 }
 
 type oaiReasoningConfig struct {
@@ -243,8 +251,16 @@ func (c *Client) buildResponsesRequest(req api.CreateMessageRequest) (*oaiRespon
 		Tools:        tools,
 		Stream:       true,
 	}
+	if c.AuthMode == AuthModeChatGPTOAuth {
+		// ChatGPT-Codex backend mandates store=false.
+		falsePtr := false
+		r.Store = &falsePtr
+	}
 
-	if maxTokens > 0 {
+	// max_output_tokens is rejected by the ChatGPT-Codex backend; that
+	// backend manages output length internally via the subscription's
+	// reasoning/output caps. Only set it on the API-key path.
+	if maxTokens > 0 && c.AuthMode != AuthModeChatGPTOAuth {
 		r.MaxOutputTokens = &maxTokens
 	}
 
