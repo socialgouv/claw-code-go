@@ -1065,3 +1065,101 @@ func TestStreamResponses_SurfacesResponseIncomplete(t *testing.T) {
 		t.Errorf("expected incomplete event to carry the truncation reason; got %q", msg)
 	}
 }
+
+// TestStreamResponses_PreservesArgsAcrossCompletedReconciliation guards
+// against a regression where response.completed unconditionally
+// re-invoked MarkStarted for every function_call in Response.Output —
+// even those that had already received CallID+Name on
+// output_item.added and a full sequence of input_json_delta fragments.
+//
+// The duplicate ContentBlockStart event on the same block index caused
+// the downstream aggregator (iterion's generation.aggregateStream) to
+// overwrite the in-flight blockState with a fresh one, dropping the
+// accumulated PartialJSON. The tool call then surfaced with an empty
+// `input`, producing a "malformed tool input: unexpected end of JSON
+// input" tool_error every step and trapping the agent in a sterile
+// loop.
+//
+// Real-world repro: claw-code-go + openai/gpt-5.5 driving an iterion
+// `explore`-shaped node against the ChatGPT-Codex backend. Every
+// upstream variant emits a final response.completed frame echoing the
+// function_call items in Output[], so the reconciliation must be
+// idempotent (gated on acc.Started()) rather than blanket-applied.
+func TestStreamResponses_PreservesArgsAcrossCompletedReconciliation(t *testing.T) {
+	frames := []string{
+		`{"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}`,
+		`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"read_file","status":"in_progress","arguments":""}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"path\":"}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"\"/etc/hosts\"}"}`,
+		`{"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\"path\":\"/etc/hosts\"}"}`,
+		`{"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"read_file","status":"completed","arguments":"{\"path\":\"/etc/hosts\"}"}}`,
+		`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"reasoning","id":"rs_1","summary":[]},{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"read_file","status":"completed","arguments":"{\"path\":\"/etc/hosts\"}"}],"usage":{"input_tokens":4,"output_tokens":12,"total_tokens":16}}}`,
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		APIKey:     "test-key",
+		BaseURL:    srv.URL,
+		Model:      "gpt-5.5",
+		MaxTokens:  256,
+		HTTPClient: srv.Client(),
+	}
+	req := api.CreateMessageRequest{
+		Model:           "gpt-5.5",
+		MaxTokens:       256,
+		ReasoningEffort: "high",
+		Messages: []api.Message{
+			{Role: "user", Content: []api.ContentBlock{{Type: "text", Text: "read /etc/hosts"}}},
+		},
+		Tools: []api.Tool{
+			{Name: "read_file", InputSchema: api.InputSchema{Type: "object"}},
+		},
+	}
+
+	ch, err := client.StreamResponse(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+
+	var (
+		toolStartCount  int
+		toolStartIndex  = -1
+		accumulatedArgs string
+	)
+	for ev := range ch {
+		switch ev.Type {
+		case api.EventContentBlockStart:
+			if ev.ContentBlock.Type == "tool_use" {
+				if toolStartIndex == -1 {
+					toolStartIndex = ev.Index
+				}
+				toolStartCount++
+			}
+		case api.EventContentBlockDelta:
+			if ev.Delta.Type == "input_json_delta" && ev.Index == toolStartIndex {
+				accumulatedArgs += ev.Delta.PartialJSON
+			}
+		}
+	}
+
+	if toolStartCount != 1 {
+		t.Errorf("expected exactly 1 ContentBlockStart for the function_call, got %d (regression: response.completed reconciliation re-emitted a start event on the same index, prompting the downstream aggregator to wipe the in-flight PartialJSON)", toolStartCount)
+	}
+	if want := `{"path":"/etc/hosts"}`; accumulatedArgs != want {
+		t.Errorf("input_json_delta accumulated args = %q, want %q (regression: a duplicate ContentBlockStart at the same index drops the args collected before it)", accumulatedArgs, want)
+	}
+}
