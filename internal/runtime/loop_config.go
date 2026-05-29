@@ -155,9 +155,12 @@ func (a *LoopAdapter) SetReasoningMode(mode string) error {
 	}
 }
 
-// SetReasoningEffort sets the reasoning effort level (alias for SetReasoningMode for /ultraplan).
+// SetReasoningEffort sets the reasoning effort level (low/medium/high/xhigh/max),
+// validated against the active model. This is distinct from SetReasoningMode,
+// which toggles thinking on/off/stream; effort is the depth dial used by
+// /ultraplan and friends.
 func (a *LoopAdapter) SetReasoningEffort(level string) error {
-	return a.SetReasoningMode(level)
+	return a.SetEffort(level)
 }
 
 // --- budgetController interface (config_cmds.go) ---

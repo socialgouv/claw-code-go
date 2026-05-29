@@ -29,7 +29,7 @@ type modelEntry struct {
 }
 
 var anthropicModels = []modelEntry{
-	{"claude-opus-4-6", "Most capable — complex reasoning and analysis"},
+	{"claude-opus-4-8", "Most capable — complex reasoning, long-horizon agentic coding"},
 	{"claude-sonnet-4-6", "Balanced — great performance at speed"},
 	{"claude-haiku-4-5-20251001", "Fast and lightweight — quick tasks"},
 }

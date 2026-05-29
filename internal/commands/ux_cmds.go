@@ -3,6 +3,8 @@ package commands
 import (
 	"fmt"
 	"strings"
+
+	"github.com/SocialGouv/claw-code-go/internal/apikit"
 )
 
 // toggleLoop is the interface for commands that toggle boolean settings.
@@ -78,7 +80,7 @@ func RegisterUXCommands(r *Registry) {
 	r.Register(Command{
 		Name:         "effort",
 		Description:  "Set effort level",
-		ArgumentHint: "[low|medium|high]",
+		ArgumentHint: "[low|medium|high|xhigh|max]",
 		Category:     CategoryUX,
 		Handler: func(args string, loop interface{}) error {
 			el, ok := loop.(effortLoop)
@@ -91,11 +93,11 @@ func RegisterUXCommands(r *Registry) {
 				fmt.Printf("Current effort: %s\n", el.GetEffort())
 				return nil
 			}
-			switch level {
-			case "low", "medium", "high":
-				// valid
-			default:
-				return fmt.Errorf("effort: invalid level %q (use low, medium, or high)", level)
+			// Syntactic guard: reject tokens that aren't reasoning-effort
+			// levels at all. SetEffort then applies the model-aware matrix
+			// check (xhigh/max are Opus-4.x-only).
+			if !apikit.IsKnownEffort(level) {
+				return fmt.Errorf("effort: invalid level %q (use low, medium, high, xhigh, or max)", level)
 			}
 			if err := el.SetEffort(level); err != nil {
 				return fmt.Errorf("effort: %w", err)

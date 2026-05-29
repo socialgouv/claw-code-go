@@ -396,12 +396,13 @@ func (loop *ConversationLoop) SendMessage(ctx context.Context, userText string) 
 // Returns the stop_reason.
 func (loop *ConversationLoop) runOneTurn(ctx context.Context) (string, error) {
 	req := api.CreateMessageRequest{
-		Model:     loop.Config.Model,
-		MaxTokens: loop.Config.MaxTokens,
-		System:    loop.systemPrompt(),
-		Messages:  loop.Session.Messages,
-		Tools:     loop.allTools(),
-		Stream:    true,
+		Model:           loop.Config.Model,
+		MaxTokens:       loop.Config.MaxTokens,
+		System:          loop.systemPrompt(),
+		Messages:        loop.Session.Messages,
+		Tools:           loop.allTools(),
+		Stream:          true,
+		ReasoningEffort: loop.Config.ReasoningEffort,
 	}
 	loop.injectCacheControl(&req)
 
@@ -618,12 +619,13 @@ func (loop *ConversationLoop) SendMessageStreaming(ctx context.Context, userText
 // Returns stop_reason, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, error.
 func (loop *ConversationLoop) runOneTurnStreaming(ctx context.Context, events chan<- TurnEvent) (string, int, int, int, int, error) {
 	req := api.CreateMessageRequest{
-		Model:     loop.Config.Model,
-		MaxTokens: loop.Config.MaxTokens,
-		System:    loop.systemPrompt(),
-		Messages:  loop.Session.Messages,
-		Tools:     loop.allTools(),
-		Stream:    true,
+		Model:           loop.Config.Model,
+		MaxTokens:       loop.Config.MaxTokens,
+		System:          loop.systemPrompt(),
+		Messages:        loop.Session.Messages,
+		Tools:           loop.allTools(),
+		Stream:          true,
+		ReasoningEffort: loop.Config.ReasoningEffort,
 	}
 	loop.injectCacheControl(&req)
 

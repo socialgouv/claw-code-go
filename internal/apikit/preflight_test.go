@@ -13,6 +13,7 @@ func TestModelTokenLimitsKnownModels(t *testing.T) {
 		maxOutput     uint32
 		contextWindow uint32
 	}{
+		{"claude-opus-4-8", 128_000, 1_000_000},
 		{"claude-opus-4-7", 128_000, 1_000_000},
 		{"claude-opus-4-6", 128_000, 1_000_000},
 		{"claude-sonnet-4-7", 128_000, 1_000_000},
@@ -109,7 +110,7 @@ func TestResolveModelAlias(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"opus", "claude-opus-4-7"},
+		{"opus", "claude-opus-4-8"},
 		{"Sonnet", "claude-sonnet-4-7"},
 		{"HAIKU", "claude-haiku-4-5"},
 		{"grok", "grok-3"},
@@ -118,7 +119,7 @@ func TestResolveModelAlias(t *testing.T) {
 		{"grok-3-mini", "grok-3-mini"},
 		{"grok-2", "grok-2"},
 		{"unknown-model", "unknown-model"},
-		{"  opus  ", "claude-opus-4-7"},
+		{"  opus  ", "claude-opus-4-8"},
 		{"claude-opus-4-6", "claude-opus-4-6"},
 	}
 	for _, tt := range tests {
@@ -132,7 +133,7 @@ func TestResolveModelAlias(t *testing.T) {
 }
 
 func TestPreflightCheckWithAlias(t *testing.T) {
-	// "opus" resolves to claude-opus-4-7 (1M context window)
+	// "opus" resolves to claude-opus-4-8 (1M context window)
 	// 900k input + 128k output = 1_028k > 1M → should fail
 	err := PreflightCheck("opus", 900_000, 128_000)
 	if err == nil {
@@ -145,8 +146,8 @@ func TestPreflightCheckWithAlias(t *testing.T) {
 	if apiErr.Kind != ErrContextWindowExceeded {
 		t.Errorf("expected ErrContextWindowExceeded, got %d", apiErr.Kind)
 	}
-	if apiErr.Model != "claude-opus-4-7" {
-		t.Errorf("expected resolved model 'claude-opus-4-7', got %q", apiErr.Model)
+	if apiErr.Model != "claude-opus-4-8" {
+		t.Errorf("expected resolved model 'claude-opus-4-8', got %q", apiErr.Model)
 	}
 }
 
@@ -170,7 +171,7 @@ func TestPreflightSaturatingOverflow(t *testing.T) {
 }
 
 func TestMaxTokensForModelWithOverride(t *testing.T) {
-	// Without override: uses model default (opus → claude-opus-4-7, 128k output).
+	// Without override: uses model default (opus → claude-opus-4-8, 128k output).
 	got := MaxTokensForModelWithOverride("opus", nil)
 	if got != 128_000 {
 		t.Errorf("without override: got %d, want 128000", got)

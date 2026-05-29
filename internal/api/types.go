@@ -160,7 +160,7 @@ type InputSchema struct {
 // permissive shape callers use when the value can be any JSON primitive
 // or composite) round-trips as `{}` rather than `{"type":""}`. Empty
 // string for `type` is not a valid JSON Schema value, and OpenAI's
-// function-schema validator rejects it with HTTP 400 — `'' is not valid
+// function-schema validator rejects it with HTTP 400 — `” is not valid
 // under any of the given schemas`. Anthropic's validator accepted the
 // malformed shape, which is why this only surfaced on OpenAI calls.
 type Property struct {
@@ -200,6 +200,35 @@ type CreateMessageRequest struct {
 	PresencePenalty  *float64       `json:"presence_penalty,omitempty"`
 	Stop             []string       `json:"stop,omitempty"`
 	ReasoningEffort  string         `json:"reasoning_effort,omitempty"`
+
+	// Thinking opts into extended thinking. nil means "use the model's
+	// default" (adaptive for Opus 4.8/4.7/4.6 and Sonnet 4.6, none
+	// otherwise). Set Type:"off" to force thinking off on a model that
+	// would otherwise default to adaptive. The Anthropic marshaler shapes
+	// this per the model's ThinkingMode (e.g. coercing "enabled" to
+	// "adaptive" on adaptive-only models to avoid a 400).
+	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+}
+
+// OutputConfig carries Anthropic's output_config object. Currently only the
+// effort level. Anthropic reads effort from output_config.effort; the OpenAI
+// and Foundry providers use the top-level reasoning_effort field instead.
+// Source: platform.claude.com/docs/en/build-with-claude/effort
+type OutputConfig struct {
+	Effort string `json:"effort,omitempty"`
+}
+
+// ThinkingConfig configures extended thinking.
+//   - Type "adaptive": the model decides per-turn whether to think; effort
+//     controls depth. Manual budget_tokens is rejected (400) on these models.
+//   - Type "enabled": manual thinking with BudgetTokens (Opus 4.5 and earlier).
+//   - Type "off": sentinel used by callers to suppress the model default; the
+//     marshaler omits the thinking field entirely (never sent on the wire).
+//
+// Source: platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+type ThinkingConfig struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 // --- SSE Event Types ---

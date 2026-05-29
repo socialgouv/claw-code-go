@@ -83,7 +83,7 @@ func main() {
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	workDirFlag := flag.String("work-dir", "", "Set working directory")
 	baseCommitFlag := flag.String("base-commit", "", "Base commit for diff context")
-	reasoningEffortFlag := flag.String("reasoning-effort", "", "Reasoning effort level (low, medium, high)")
+	reasoningEffortFlag := flag.String("reasoning-effort", "", "Reasoning effort level (low, medium, high, xhigh, max; xhigh/max are model-dependent)")
 	outputFormatFlag := flag.String("output-format", "", "Output format: text (default), json, stream-json")
 
 	flag.Usage = func() {

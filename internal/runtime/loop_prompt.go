@@ -3,10 +3,12 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"github.com/SocialGouv/claw-code-go/internal/api"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/SocialGouv/claw-code-go/internal/api"
+	"github.com/SocialGouv/claw-code-go/internal/apikit"
 )
 
 // --- promptInjector interface (code_cmds.go) ---
@@ -83,18 +85,21 @@ func (a *LoopAdapter) WebFetch(url string) (string, error) {
 
 // --- effortLoop interface (ux_cmds.go) ---
 
-// SetEffort sets the effort level (low, medium, high).
+// SetEffort sets the reasoning effort level, validated against the active
+// model's matrix (low/medium/high/xhigh/max; xhigh is Opus 4.8/4.7 only).
 func (a *LoopAdapter) SetEffort(level string) error {
 	level = strings.ToLower(strings.TrimSpace(level))
-	switch level {
-	case "low", "medium", "high":
-		if a.loop != nil && a.loop.Config != nil {
-			a.loop.Config.ReasoningEffort = level
-		}
-		return nil
-	default:
-		return NewLoopError(LoopErrInvalidArgs, "config", fmt.Sprintf("unknown effort level %q (use low, medium, high)", level))
+	model := ""
+	if a.loop != nil && a.loop.Config != nil {
+		model = a.loop.Config.Model
 	}
+	if err := apikit.ValidateEffortForModel(level, model); err != nil {
+		return NewLoopError(LoopErrInvalidArgs, "config", err.Error())
+	}
+	if a.loop != nil && a.loop.Config != nil {
+		a.loop.Config.ReasoningEffort = level
+	}
+	return nil
 }
 
 // GetEffort returns the current effort level.

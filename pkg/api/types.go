@@ -39,6 +39,12 @@ type ToolChoice = api.ToolChoice
 // CreateMessageRequest is the request body for /v1/messages.
 type CreateMessageRequest = api.CreateMessageRequest
 
+// OutputConfig carries Anthropic's output_config object (currently effort).
+type OutputConfig = api.OutputConfig
+
+// ThinkingConfig configures extended thinking (adaptive / enabled / off).
+type ThinkingConfig = api.ThinkingConfig
+
 // StreamEventType enumerates the SSE event types.
 type StreamEventType = api.StreamEventType
 

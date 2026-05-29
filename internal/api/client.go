@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	defaultBaseURL         = "https://api.anthropic.com"
-	anthropicVersion       = "2023-06-01"
+	defaultBaseURL      = "https://api.anthropic.com"
+	anthropicVersion    = "2023-06-01"
 	anthropicBetaHeader = "anthropic-beta"
 	// Comma-separated beta flags. The prompt-caching-2024-07-31 token
 	// enables the per-block cache_control marker; pinning the
@@ -411,52 +411,98 @@ func parseSSEData(data string) (StreamEvent, error) {
 // it to Anthropic risks future strict-mode rejection of unknown fields
 // (F-CC-7). Persistence still keeps the field since on-disk Session
 // blobs are serialised separately by callers.
+// marshalAnthropicRequest serializes a CreateMessageRequest into the Anthropic
+// Messages API wire body, shaping it per the model's capabilities (registry-
+// driven, see apikit.AnthropicProfile):
+//   - effort is sent as output_config.effort — Anthropic does not read the
+//     top-level reasoning_effort field (that is for OpenAI/Foundry);
+//   - extended thinking follows the model's ThinkingMode (adaptive by default
+//     on Opus 4.8/4.7/4.6 and Sonnet 4.6), with manual budgets coerced to
+//     adaptive where required and an "off" sentinel suppressing the default;
+//   - temperature/top_p are omitted on models that reject them (400), and
+//     frequency/presence penalties are never forwarded (not Messages API params).
 func marshalAnthropicRequest(req CreateMessageRequest) ([]byte, error) {
 	wireMessages := stripInternalFields(req.Messages)
-	if len(req.SystemBlocks) == 0 {
-		// Re-shape to swap in the cleaned messages without
-		// mutating the caller's slice.
-		req.Messages = wireMessages
-		return json.Marshal(req)
+
+	// System: array form when SystemBlocks carry cache markers, else the
+	// plain string. Empty when neither is set (omitted by omitempty).
+	var systemJSON json.RawMessage
+	if len(req.SystemBlocks) > 0 {
+		b, err := json.Marshal(req.SystemBlocks)
+		if err != nil {
+			return nil, fmt.Errorf("marshal system blocks: %w", err)
+		}
+		systemJSON = b
+	} else if req.System != "" {
+		b, err := json.Marshal(req.System)
+		if err != nil {
+			return nil, fmt.Errorf("marshal system: %w", err)
+		}
+		systemJSON = b
 	}
 
-	// Wire type with System as json.RawMessage for the array form.
-	// SYNC: fields must match CreateMessageRequest (except System type).
+	profile := apikit.AnthropicProfile(req.Model)
+
+	// Effort → output_config.effort, only when the model accepts this exact
+	// level. AcceptsEffort checks the model's matrix (resolved in the single
+	// AnthropicProfile lookup above), so a non-effort token — e.g. an
+	// on/off/stream reasoning *mode* that shares the ReasoningEffort field in
+	// the interactive loop — never reaches the wire.
+	var outputConfig *OutputConfig
+	if req.ReasoningEffort != "" && profile.AcceptsEffort(req.ReasoningEffort) {
+		outputConfig = &OutputConfig{Effort: req.ReasoningEffort}
+	}
+
+	// Thinking: explicit request wins; otherwise apply the model default.
+	thinking := req.Thinking
+	if thinking == nil && profile.ThinkingMode == "adaptive" {
+		thinking = &ThinkingConfig{Type: "adaptive"}
+	}
+	if thinking != nil {
+		switch {
+		case thinking.Type == "off":
+			thinking = nil // sentinel: suppress the model default
+		case profile.ThinkingMode == "adaptive" && thinking.Type == "enabled":
+			thinking = &ThinkingConfig{Type: "adaptive"} // manual budgets 400 here
+		}
+	}
+
+	// Sampling params the model rejects must be omitted.
+	temperature := req.Temperature
+	topP := req.TopP
+	if profile.RejectsSampling {
+		temperature = nil
+		topP = nil
+	}
+
 	type wireRequest struct {
-		Model            string          `json:"model"`
-		MaxTokens        int             `json:"max_tokens"`
-		System           json.RawMessage `json:"system,omitempty"`
-		Messages         []Message       `json:"messages"`
-		Tools            []Tool          `json:"tools,omitempty"`
-		ToolChoice       *ToolChoice     `json:"tool_choice,omitempty"`
-		Stream           bool            `json:"stream"`
-		Temperature      *float64        `json:"temperature,omitempty"`
-		TopP             *float64        `json:"top_p,omitempty"`
-		FrequencyPenalty *float64        `json:"frequency_penalty,omitempty"`
-		PresencePenalty  *float64        `json:"presence_penalty,omitempty"`
-		Stop             []string        `json:"stop,omitempty"`
-		ReasoningEffort  string          `json:"reasoning_effort,omitempty"`
-	}
-
-	systemJSON, err := json.Marshal(req.SystemBlocks)
-	if err != nil {
-		return nil, fmt.Errorf("marshal system blocks: %w", err)
+		Model        string          `json:"model"`
+		MaxTokens    int             `json:"max_tokens"`
+		System       json.RawMessage `json:"system,omitempty"`
+		Messages     []Message       `json:"messages"`
+		Tools        []Tool          `json:"tools,omitempty"`
+		ToolChoice   *ToolChoice     `json:"tool_choice,omitempty"`
+		Stream       bool            `json:"stream"`
+		Temperature  *float64        `json:"temperature,omitempty"`
+		TopP         *float64        `json:"top_p,omitempty"`
+		Stop         []string        `json:"stop,omitempty"`
+		OutputConfig *OutputConfig   `json:"output_config,omitempty"`
+		Thinking     *ThinkingConfig `json:"thinking,omitempty"`
 	}
 
 	wire := wireRequest{
-		Model:            req.Model,
-		MaxTokens:        req.MaxTokens,
-		System:           systemJSON,
-		Messages:         wireMessages,
-		Tools:            req.Tools,
-		ToolChoice:       req.ToolChoice,
-		Stream:           req.Stream,
-		Temperature:      req.Temperature,
-		TopP:             req.TopP,
-		FrequencyPenalty: req.FrequencyPenalty,
-		PresencePenalty:  req.PresencePenalty,
-		Stop:             req.Stop,
-		ReasoningEffort:  req.ReasoningEffort,
+		Model:        req.Model,
+		MaxTokens:    req.MaxTokens,
+		System:       systemJSON,
+		Messages:     wireMessages,
+		Tools:        req.Tools,
+		ToolChoice:   req.ToolChoice,
+		Stream:       req.Stream,
+		Temperature:  temperature,
+		TopP:         topP,
+		Stop:         req.Stop,
+		OutputConfig: outputConfig,
+		Thinking:     thinking,
 	}
 	return json.Marshal(wire)
 }

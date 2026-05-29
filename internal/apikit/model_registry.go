@@ -26,6 +26,22 @@ type ModelEntry struct {
 	// is omitted. Empty string means "no API default" (the provider
 	// behaves as if reasoning is off).
 	DefaultReasoningEffort string
+
+	// ThinkingMode describes how the model accepts extended thinking on the
+	// Anthropic Messages API:
+	//   - "adaptive": send thinking:{type:"adaptive"}; the model decides
+	//     per-turn whether to think and effort controls depth. Manual
+	//     budget_tokens returns a 400. (Opus 4.8/4.7/4.6, Sonnet 4.6.)
+	//   - "manual":   send thinking:{type:"enabled",budget_tokens:N}. (Opus 4.5.)
+	//   - "":         no extended-thinking control wired for this model.
+	// Source: platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+	ThinkingMode string
+
+	// RejectsSampling is true when setting temperature/top_p/top_k to a
+	// non-default value returns a 400 on this model — they must be omitted
+	// from the wire. (Opus 4.8/4.7.) Source:
+	// platform.claude.com/docs/en/about-claude/models/whats-new-claude-4-8
+	RejectsSampling bool
 }
 
 // ModelRegistry is a dynamic registry of known models.
@@ -97,6 +113,7 @@ func (r *ModelRegistry) ensureInit() {
 	// Effort level matrices, curated from provider docs (May 2026).
 	// Anthropic source: platform.claude.com/docs/en/build-with-claude/effort
 	// OpenAI source:    platform.openai.com/docs/guides/reasoning
+	anthropicOpus48Effort := []string{"low", "medium", "high", "xhigh", "max"}
 	anthropicOpus47Effort := []string{"low", "medium", "high", "xhigh", "max"}
 	anthropicOpus46Effort := []string{"low", "medium", "high", "max"}
 	anthropicSonnet46Effort := []string{"low", "medium", "high", "max"}
@@ -104,16 +121,22 @@ func (r *ModelRegistry) ensureInit() {
 
 	entries := []ModelEntry{
 		// Anthropic — context windows from models.dev / OpenRouter (1M for current SDKs).
-		{Canonical: "claude-opus-4-7", Provider: ProviderAnthropic, MaxOutput: 128_000, ContextWindow: 1_000_000, Aliases: []string{"opus", "opus-4-7"}, Metadata: anthropicMeta,
-			SupportedReasoningEfforts: anthropicOpus47Effort, DefaultReasoningEffort: "xhigh"},
+		// Opus 4.8: 1M context by default (no beta header), 128k output, adaptive
+		// thinking only; temperature/top_p/top_k and manual budget_tokens 400.
+		// The API effort default is "high" (start at "xhigh" for coding/agentic).
+		// platform.claude.com/docs/en/about-claude/models/whats-new-claude-4-8
+		{Canonical: "claude-opus-4-8", Provider: ProviderAnthropic, MaxOutput: 128_000, ContextWindow: 1_000_000, Aliases: []string{"opus", "opus-4-8"}, Metadata: anthropicMeta,
+			SupportedReasoningEfforts: anthropicOpus48Effort, DefaultReasoningEffort: "high", ThinkingMode: "adaptive", RejectsSampling: true},
+		{Canonical: "claude-opus-4-7", Provider: ProviderAnthropic, MaxOutput: 128_000, ContextWindow: 1_000_000, Aliases: []string{"opus-4-7"}, Metadata: anthropicMeta,
+			SupportedReasoningEfforts: anthropicOpus47Effort, DefaultReasoningEffort: "xhigh", ThinkingMode: "adaptive", RejectsSampling: true},
 		{Canonical: "claude-opus-4-6", Provider: ProviderAnthropic, MaxOutput: 128_000, ContextWindow: 1_000_000, Aliases: []string{"opus-4-6"}, Metadata: anthropicMeta,
-			SupportedReasoningEfforts: anthropicOpus46Effort, DefaultReasoningEffort: "high"},
+			SupportedReasoningEfforts: anthropicOpus46Effort, DefaultReasoningEffort: "high", ThinkingMode: "adaptive"},
 		// Sonnet 4.7 effort matrix not yet documented by Anthropic — leaving nil
 		// rather than guessing. Update once code.claude.com/docs/en/model-config
 		// publishes the table.
 		{Canonical: "claude-sonnet-4-7", Provider: ProviderAnthropic, MaxOutput: 128_000, ContextWindow: 1_000_000, Aliases: []string{"sonnet", "sonnet-4-7"}, Metadata: anthropicMeta},
 		{Canonical: "claude-sonnet-4-6", Provider: ProviderAnthropic, MaxOutput: 64_000, ContextWindow: 1_000_000, Aliases: []string{"sonnet-4-6"}, Metadata: anthropicMeta,
-			SupportedReasoningEfforts: anthropicSonnet46Effort, DefaultReasoningEffort: "high"},
+			SupportedReasoningEfforts: anthropicSonnet46Effort, DefaultReasoningEffort: "high", ThinkingMode: "adaptive"},
 		// Haiku does not support effort — the docs only list Opus and Sonnet.
 		{Canonical: "claude-haiku-4-5", Provider: ProviderAnthropic, MaxOutput: 64_000, ContextWindow: 200_000, Aliases: []string{"haiku", "claude-haiku-4-5-20251213"}, Metadata: anthropicMeta},
 		// OpenAI — gpt-5.x family (1M+ context). Reasoning effort is

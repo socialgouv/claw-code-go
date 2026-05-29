@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const defaultAgentModel = "claude-opus-4-6"
+const defaultAgentModel = "claude-opus-4-8"
 
 func AgentTool() api.Tool {
 	return api.Tool{
