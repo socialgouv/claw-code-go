@@ -249,9 +249,11 @@ const (
 
 // Delta represents the delta portion of a content_block_delta event.
 type Delta struct {
-	Type        string `json:"type"`         // "text_delta" or "input_json_delta"
+	Type        string `json:"type"`         // "text_delta", "input_json_delta", "thinking_delta", "signature_delta"
 	Text        string `json:"text"`         // for text_delta
 	PartialJSON string `json:"partial_json"` // for input_json_delta
+	Thinking    string `json:"thinking"`     // for thinking_delta (extended-thinking content)
+	Signature   string `json:"signature"`    // for signature_delta (signs the preceding thinking block)
 }
 
 // MessageDelta is the delta in a message_delta event.

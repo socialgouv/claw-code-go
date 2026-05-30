@@ -105,6 +105,39 @@ func TestSseParser(t *testing.T) {
 	}
 }
 
+// TestSseParserThinkingDelta verifies that thinking_delta and signature_delta
+// content is decoded into the Delta struct (extended-thinking support).
+func TestSseParserThinkingDelta(t *testing.T) {
+	parser := api.NewSseParser()
+
+	chunk := []byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"let me reason\"}}\n\n")
+	events, err := parser.Push(chunk)
+	if err != nil {
+		t.Fatalf("Push error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Delta.Type != "thinking_delta" {
+		t.Errorf("expected delta type 'thinking_delta', got %q", events[0].Delta.Type)
+	}
+	if events[0].Delta.Thinking != "let me reason" {
+		t.Errorf("expected thinking 'let me reason', got %q", events[0].Delta.Thinking)
+	}
+
+	sigChunk := []byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"abc123\"}}\n\n")
+	sigEvents, err := parser.Push(sigChunk)
+	if err != nil {
+		t.Fatalf("Push error: %v", err)
+	}
+	if len(sigEvents) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(sigEvents))
+	}
+	if sigEvents[0].Delta.Signature != "abc123" {
+		t.Errorf("expected signature 'abc123', got %q", sigEvents[0].Delta.Signature)
+	}
+}
+
 // TestNewClient verifies that NewClient works through the shim.
 func TestNewClient(t *testing.T) {
 	client := api.NewClient("test-key", "claude-sonnet-4-20250514")

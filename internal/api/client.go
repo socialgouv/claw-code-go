@@ -336,6 +336,12 @@ func parseSSEData(data string) (StreamEvent, error) {
 			if partialRaw, ok := deltaMap["partial_json"]; ok {
 				json.Unmarshal(partialRaw, &event.Delta.PartialJSON) //nolint:errcheck
 			}
+			if thinkingRaw, ok := deltaMap["thinking"]; ok {
+				json.Unmarshal(thinkingRaw, &event.Delta.Thinking) //nolint:errcheck
+			}
+			if sigRaw, ok := deltaMap["signature"]; ok {
+				json.Unmarshal(sigRaw, &event.Delta.Signature) //nolint:errcheck
+			}
 			// For message_delta, delta contains stop_reason
 			if stopRaw, ok := deltaMap["stop_reason"]; ok {
 				var stopReason string
