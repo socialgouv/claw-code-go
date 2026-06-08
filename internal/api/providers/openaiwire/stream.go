@@ -68,6 +68,7 @@ func StreamEvents(ctx context.Context, resp *http.Response, ch chan<- api.Stream
 		toolCalls    = make(map[int]*sseutil.ToolCallAccumulator)
 		finishReason string
 		outputTokens int
+		sawDone      bool
 	)
 
 	for scanner.Scan() {
@@ -84,6 +85,7 @@ func StreamEvents(ctx context.Context, resp *http.Response, ch chan<- api.Stream
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			sawDone = true
 			break
 		}
 
@@ -154,6 +156,21 @@ func StreamEvents(ctx context.Context, resp *http.Response, ch chan<- api.Stream
 		send(api.StreamEvent{
 			Type:         api.EventError,
 			ErrorMessage: fmt.Sprintf("openai stream read: %v", err),
+		})
+		return
+	}
+
+	// A complete OpenAI stream ends with a finish_reason and/or the [DONE]
+	// sentinel. If the scanner stopped cleanly (no read error above) yet we
+	// saw NEITHER, the connection closed mid-response — surface a retryable
+	// EventError instead of synthesizing the misleading "end_turn" stop
+	// below, which would let the caller commit a truncated response as if
+	// it were complete. (Providers that send [DONE] without a finish_reason,
+	// or vice-versa, are NOT flagged — only the both-absent truncation is.)
+	if !sawDone && finishReason == "" {
+		send(api.StreamEvent{
+			Type:         api.EventError,
+			ErrorMessage: "openai stream truncated: closed without finish_reason or [DONE]",
 		})
 		return
 	}
