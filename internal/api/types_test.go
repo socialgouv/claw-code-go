@@ -89,3 +89,41 @@ func TestContentBlockMarshalJSON_ToolUseWithNonEmptyInputUnchanged(t *testing.T)
 		t.Errorf("expected path in serialised input, got: %s", string(out))
 	}
 }
+
+// TestContentBlockMarshalJSON_TextAlwaysPresent guards the Anthropic
+// protocol invariant for text blocks: the `text` field must be present
+// even when empty. An empty tool result (a grep with no matches, a
+// silent git add) is spliced into a tool_result as a nested
+// {type:"text", text:""} block; without forcing the field present the
+// omitempty rule drops it and Anthropic rejects the next turn with
+//
+//	messages.N.content.M.tool_result.content.0.text.text: Field required (400).
+func TestContentBlockMarshalJSON_TextAlwaysPresent(t *testing.T) {
+	t.Run("empty text block", func(t *testing.T) {
+		out, err := json.Marshal(ContentBlock{Type: "text", Text: ""})
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if !strings.Contains(string(out), `"text":""`) {
+			t.Errorf("expected `\"text\":\"\"` in output, got: %s", string(out))
+		}
+	})
+	t.Run("tool_result with empty nested text", func(t *testing.T) {
+		out, err := json.Marshal(ToolResult{ToolUseID: "toolu_9", Content: ""}.ToContentBlock())
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if !strings.Contains(string(out), `"text":""`) {
+			t.Errorf("expected nested `\"text\":\"\"` in tool_result, got: %s", string(out))
+		}
+	})
+	t.Run("non-empty text unchanged", func(t *testing.T) {
+		out, err := json.Marshal(ContentBlock{Type: "text", Text: "hello"})
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if !strings.Contains(string(out), `"text":"hello"`) {
+			t.Errorf("expected text preserved, got: %s", string(out))
+		}
+	})
+}
