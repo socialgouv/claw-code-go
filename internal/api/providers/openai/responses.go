@@ -423,6 +423,16 @@ func (c *Client) streamResponsesEvents(ctx context.Context, resp *http.Response,
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 
+	// Guard against a stalled stream: gpt-5 / forfait Responses streams have
+	// been observed hanging mid-response with no error and no further bytes,
+	// which parks scanner.Scan() indefinitely. The watchdog closes resp.Body
+	// after `idle` of total silence (any line below resets it via Touch), so
+	// the read unblocks and we surface a clear, retryable error instead of
+	// hanging until an outer deadline. Disabled when idle <= 0.
+	idle := sseutil.StreamIdleTimeout()
+	wd := sseutil.NewIdleWatchdog(ctx, resp.Body, idle)
+	defer wd.Stop()
+
 	sendAll := func(events []api.StreamEvent) bool {
 		for _, ev := range events {
 			if !send(ev) {
@@ -474,6 +484,7 @@ func (c *Client) streamResponsesEvents(ctx context.Context, resp *http.Response,
 	}
 
 	for scanner.Scan() {
+		wd.Touch() // any received line (incl. comments/keepalives) = stream alive
 		line := scanner.Text()
 		if line == "" || strings.HasPrefix(line, "event:") || strings.HasPrefix(line, ":") {
 			continue
@@ -719,6 +730,19 @@ func (c *Client) streamResponsesEvents(ctx context.Context, resp *http.Response,
 			send(api.StreamEvent{Type: api.EventError, ErrorMessage: fmt.Sprintf("openai response incomplete: %s", reason)})
 			return
 		}
+	}
+
+	// A tripped idle watchdog closed resp.Body, which surfaces below as a
+	// generic read error — replace it with a clear, actionable message so the
+	// caller (and its retry logic) sees a stalled stream rather than a vague
+	// "read on closed body". Checked before scanner.Err() since the watchdog
+	// is the cause of that error here.
+	if wd.Fired() {
+		send(api.StreamEvent{
+			Type:         api.EventError,
+			ErrorMessage: fmt.Sprintf("openai responses stream stalled: no data for %s — aborting (retryable; tune via CLAW_STREAM_IDLE_TIMEOUT)", idle),
+		})
+		return
 	}
 
 	// Surface scanner errors (bufio.ErrTooLong on oversize SSE lines, read

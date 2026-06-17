@@ -63,6 +63,15 @@ func StreamEvents(ctx context.Context, resp *http.Response, ch chan<- api.Stream
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 
+	// Guard against a stalled stream that delivers no bytes and no error,
+	// parking scanner.Scan() until an outer deadline. The watchdog closes
+	// resp.Body after idle silence (any line resets it via Touch); Fired()
+	// below turns the resulting read error into a clear stalled-stream
+	// message. See sseutil.IdleWatchdog.
+	idle := sseutil.StreamIdleTimeout()
+	wd := sseutil.NewIdleWatchdog(ctx, resp.Body, idle)
+	defer wd.Stop()
+
 	var (
 		textStarted  bool
 		toolCalls    = make(map[int]*sseutil.ToolCallAccumulator)
@@ -72,6 +81,7 @@ func StreamEvents(ctx context.Context, resp *http.Response, ch chan<- api.Stream
 	)
 
 	for scanner.Scan() {
+		wd.Touch() // any received line (incl. comments/keepalives) = stream alive
 		line := scanner.Text()
 		if line == "" || strings.HasPrefix(line, "event:") {
 			continue
@@ -146,6 +156,18 @@ func StreamEvents(ctx context.Context, resp *http.Response, ch chan<- api.Stream
 				finishReason = *choice.FinishReason
 			}
 		}
+	}
+
+	// A tripped idle watchdog closed resp.Body; surface it as a clear,
+	// retryable stalled-stream error instead of the generic read error the
+	// forced Close() produces. Checked before scanner.Err() since the
+	// watchdog is the cause of that error here.
+	if wd.Fired() {
+		send(api.StreamEvent{
+			Type:         api.EventError,
+			ErrorMessage: fmt.Sprintf("openai stream stalled: no data for %s — aborting (retryable; tune via CLAW_STREAM_IDLE_TIMEOUT)", idle),
+		})
+		return
 	}
 
 	// Surface scanner errors (bufio.ErrTooLong on oversize SSE lines, read
