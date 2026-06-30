@@ -380,6 +380,9 @@ func runTUI(cfg *runtime.Config, loop *runtime.ConversationLoop) {
 	// shouldn't block the TUI from booting.
 	if cwd, err := os.Getwd(); err == nil {
 		_ = commands.LoadClaudeMdCommands(registry, cwd)
+		// Also load project slash commands from .claude/commands/*.md (the
+		// Claude Code project-commands convention). Non-fatal like the above.
+		_ = commands.LoadDirCommands(registry, cwd)
 	}
 	loop.CommandRegistry = registry
 
